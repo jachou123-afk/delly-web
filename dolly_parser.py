@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V34")
-st.info("✅ 規格：新增支援極簡標籤(箱數/箱重/外箱/產品)、雷射標識別、名稱橘底、重量運費進位、包材緩衝。")
+st.title("🪐 半自動 - 採購報價彙整表 V35")
+st.info("✅ 規格：修復【貨號誤抓單位】漏洞、支援極簡標籤(箱數/箱重/外箱/產品)、雷射標識別、名稱橘底、重量運費進位。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -35,7 +35,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V34) ---
+# --- 4. 解析引擎 (V35) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "box_size": "", "extra_tags": ""}
     if not text: return data
@@ -43,16 +43,17 @@ def parse_text(text):
     text_norm = text.replace('：', ':')
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     
-    # 1. 貨號
+    # 💡 1. 貨號 (V35 強化防呆：過濾 pcs/kg/g/cm 等單位)
     m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9-]+)', text_norm)
     if m_code:
         data["code"] = m_code.group(1)
     else:
-        m_code_start = re.match(r'^([A-Za-z0-9]{4,})', lines[0] if lines else "")
-        if m_code_start: data["code"] = m_code_start.group(1)
-        else:
-            m_code_fallback = re.search(r'([A-Za-z0-9]{4,})', text_norm)
-            if m_code_fallback: data["code"] = m_code_fallback.group(1)
+        # 如果沒寫標籤，盲找連續英數字，但排除帶有數量的單位
+        candidates = re.findall(r'([A-Za-z0-9-]{4,})', text_norm)
+        for cand in candidates:
+            if not re.match(r'^\d+(?:\.\d+)?(?:pcs|kg|g|cm|mm|rmb)$', cand, re.IGNORECASE):
+                data["code"] = cand
+                break
 
     # 2. 價格
     text_for_price = re.sub(r'(?:控價|控价|售价|售價|台幣|臺幣).*?(?:\n|$)', '', text_norm)
@@ -60,12 +61,12 @@ def parse_text(text):
     if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
     if m_price: data["price"] = float(m_price.group(1))
 
-    # 3. 數量 (💡 新增「箱數」)
+    # 3. 數量 
     m_qty = re.search(r'(?:每箱數量|每箱数量|裝箱數|装箱数|箱數|箱数|數量|数量|裝箱量|装箱量)\s*:?\s*(\d+)', text_norm)
     if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*(\d+)', text_norm)
     if m_qty: data["qty"] = int(m_qty.group(1))
 
-    # 4. 重量 (💡 新增「箱重」)
+    # 4. 重量 
     m_total_weight = re.search(r'(?:毛重|整箱重量|箱重)\s*:?\s*([0-9.]+)', text_norm)
     if not m_total_weight: m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
     m_single_weight = re.search(r'(?:單個重量|单个重量|克重)\s*:?\s*([0-9.]+)\s*[Gg克]', text_norm)
@@ -76,7 +77,7 @@ def parse_text(text):
         single_g = float(m_single_weight.group(1))
         data["weight"] = (single_g * data["qty"]) / 1000.0 
 
-    # 5. 尺寸 (💡 支援「外箱」當作彩盒尺寸，支援「產品」當作產品尺寸)
+    # 5. 尺寸 
     m_box = re.search(r'(?:彩盒尺寸|外箱尺寸|外箱)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_box: data["box_size"] = m_box.group(1).strip()
     
@@ -91,7 +92,7 @@ def parse_text(text):
     if m_pkg: extra_items.append(f"包裝:{m_pkg.group(1).strip()}")
     data["extra_tags"] = "\n".join(extra_items)
 
-    # 7. 名稱防呆 (💡 將箱數、箱重、外箱、產品 加入黑名單過濾)
+    # 7. 名稱防呆 
     segments = re.split(r'[\n,，]+', text_norm)
     name_segments = []
     for seg in segments:
@@ -113,6 +114,7 @@ def parse_text(text):
     return data
 
 # --- 5. 主畫面流程 ---
+# 我把這款零錢包設為預設測試文字了！
 default_text = "新款运动系列硅胶零钱包\n4个颜色混装\n箱数：600pcs\n单价：3.3元\n产品：7.7*7.5cm\n外箱：60*41*41cm\n箱重：38kg\n包装：50个/中包"
 user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=180)
 
@@ -168,16 +170,4 @@ if qty > 0:
                 rows = [
                     [next_no, name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
                     [today_str, info_display, f10, f13, f15, f20, price, f_single_weight, f_dom, f_intl, f_cost],
-                    ["", f"裝箱 {qty}個/箱", "", "", "", "", "", "", "", "", ""],
-                    ["", f"毛重 {weight}KG", "", "", "", "", "", "", "", "", ""],
-                    ["", f"貨號 {code}", "", "", "", "", "", "", "", "", ""]
-                ]
-                
-                sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
-                sheet.format(f"B{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
-                sheet.format(f"C{st_r}:F{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
-                sheet.format(f"G{st_r}:K{st_r}", {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}})
-
-                st.success(f"✅ 儲存成功！編號【{next_no}】。")
-            except Exception as e:
-                st.error(f"儲存失敗：{e}")
+                    ["", f"裝箱 {qty}個/箱", "", "",
