@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V27")
-st.info("✅ 規格：新增【包材重量 3% 緩衝】、單行逗號解析、自動過濾表情符號、日期自動記錄。")
+st.title("🪐 半自動 - 採購報價彙整表 V28")
+st.info("✅ 規格：重量計算改為【雲端透明公式】方便人工微調、單行逗號解析、包材緩衝、日期自動記錄。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -35,7 +35,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V27) ---
+# --- 4. 解析引擎 (V28) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "size": ""}
     if not text: return data
@@ -143,14 +143,14 @@ if qty > 0:
                 f_dom = f"=(H{v_r}/1000)*{dom_rate}"
                 f_intl = f"=(H{v_r}/1000)*{intl_rate}"
                 
-                # 💡 核心修改區：計算重量時，無條件乘上 1.03 (加入 3% 包材防呆)
-                single_weight_raw = (weight/qty) * 1000 * 1.03
+                # 💡 核心修改區：把重量計算變成「活公式」寫入 Google 表格
+                f_single_weight = f"=({weight}/{qty})*1000*1.03"
                 
                 today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
                 
                 rows = [
                     [next_no, name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
-                    [today_str, f"尺寸 {p['size']}", f10, f13, f15, f20, price, single_weight_raw, f_dom, f_intl, f_cost],
+                    [today_str, f"尺寸 {p['size']}", f10, f13, f15, f20, price, f_single_weight, f_dom, f_intl, f_cost],
                     ["", f"裝箱 {qty}個/箱", "", "", "", "", "", "", "", "", ""],
                     ["", f"毛重 {weight}KG", "", "", "", "", "", "", "", "", ""],
                     ["", f"貨號 {code}", "", "", "", "", "", "", "", "", ""]
