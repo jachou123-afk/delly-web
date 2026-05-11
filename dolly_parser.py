@@ -4,12 +4,12 @@ import re
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import zhconv
-import datetime # 💡 匯入日期模組
+import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V25")
-st.info("✅ 規格：新增【日期自動記錄】功能、純淨輸入版、防呆過濾陷阱、自動簡轉繁。")
+st.title("🪐 半自動 - 採購報價彙整表 V26")
+st.info("✅ 規格：新增支援【單行逗號排版】解析、自動過濾表情符號代碼、日期自動記錄。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -35,7 +35,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V25) ---
+# --- 4. 解析引擎 (V26) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "size": ""}
     if not text: return data
@@ -43,6 +43,7 @@ def parse_text(text):
     text_norm = text.replace('：', ':')
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     
+    # 1. 貨號
     m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9-]+)', text_norm)
     if m_code:
         data["code"] = m_code.group(1)
@@ -53,19 +54,20 @@ def parse_text(text):
             m_code_fallback = re.search(r'([A-Za-z0-9]{4,})', text_norm)
             if m_code_fallback: data["code"] = m_code_fallback.group(1)
 
+    # 2. 價格
     text_for_price = re.sub(r'(?:控價|控价|售价|售價|台幣|臺幣).*?(?:\n|$)', '', text_norm)
-    
     m_price = re.search(r'(?:單價|单价|價格|价格|價錢)\s*:?\s*(?:rmb|RMB|¥)?\s*([0-9.]+)', text_for_price)
     if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
     if m_price: data["price"] = float(m_price.group(1))
 
+    # 3. 裝箱量
     m_qty = re.search(r'(?:每箱數量|每箱数量|裝箱數|装箱数|數量|数量|裝箱量|装箱量)\s*:?\s*(\d+)', text_norm)
     if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*(\d+)', text_norm)
     if m_qty: data["qty"] = int(m_qty.group(1))
 
+    # 4. 重量
     m_total_weight = re.search(r'(?:毛重|整箱重量)\s*:?\s*([0-9.]+)', text_norm)
     if not m_total_weight: m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
-    
     m_single_weight = re.search(r'(?:單個重量|单个重量|克重)\s*:?\s*([0-9.]+)\s*[Gg克]', text_norm)
     
     if m_total_weight and float(m_total_weight.group(1)) > 0:
@@ -74,20 +76,36 @@ def parse_text(text):
         single_g = float(m_single_weight.group(1))
         data["weight"] = (single_g * data["qty"]) / 1000.0 
 
+    # 5. 尺寸
     m_size = re.search(r'(?:尺寸|帽圍|帽围)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if not m_size: m_size = re.search(r'尺寸\s*:?\s*([0-9.*xX×\s]+(?:[cC][mM]|公分)?)', text_norm)
     if m_size: data["size"] = m_size.group(1).strip()
 
-    name_lines = []
-    for line in lines:
-        if re.search(r'(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|價格|价格|單價|单价|重量|尺寸|帽圍|帽围|包裝|包装|毛重|體積|体积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣)\s*:?', line.replace('：', ':')):
-            continue
-        if re.match(r'^[A-Za-z0-9-]+\s*$', line):
-            continue
-        name_lines.append(line)
+    # 6. 名稱 (V26：解決單行連字與表情符號干擾)
+    # 💡 這次不僅用換行切，還用「逗號(,)」和「全形逗號(，)」切開每一句話
+    segments = re.split(r'[\n,，]+', text_norm)
+    name_segments = []
+    for seg in segments:
+        seg = seg.strip()
+        # 清除像 [Fireworks] 這種干擾符號，以及黏在一起的 "是23.2元"
+        seg = re.sub(r'\[.*?\]', '', seg)
+        seg = re.sub(r'是?\s*[0-9.]+\s*元', '', seg)
+        seg = seg.strip()
         
-    if name_lines:
-        raw_name = " ".join(name_lines[:2]).strip()
+        if len(seg) < 2: continue # 太短的廢字直接跳過
+        
+        # 標籤防呆
+        if re.search(r'(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|一箱|價格|价格|單價|单价|重量|尺寸|帽圍|帽围|包裝|包装|毛重|體積|体积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣)\s*:?', seg):
+            continue
+            
+        # 排除純英文數字(如貨號單獨切出來)、純數字加KG
+        if re.match(r'^[A-Za-z0-9-\s]+$', seg) or re.match(r'^[0-9.]+\s*[Kk][Gg克]$', seg):
+            continue
+            
+        name_segments.append(seg)
+        
+    if name_segments:
+        raw_name = " ".join(name_segments[:2]).strip()
         if data["code"] and data["code"] in raw_name:
             raw_name = raw_name.replace(data["code"], "").strip()
         data["name"] = raw_name
@@ -95,8 +113,8 @@ def parse_text(text):
     return data
 
 # --- 5. 主畫面流程 ---
-default_text = ""
-user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=250)
+default_text = "FF716566，四通遥控挖掘机绿色款是[Fireworks]23.2元，一箱27只，21KG，彩盒尺寸39*11*30CM"
+user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=150)
 
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 p = parse_text(user_input_tw)
@@ -136,7 +154,6 @@ if qty > 0:
                 f_intl = f"=(H{v_r}/1000)*{intl_rate}"
                 single_weight_raw = (weight/qty)*1000
                 
-                # 💡 產出今天的日期格式 (2026/5/11)
                 today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
                 
                 rows = [
