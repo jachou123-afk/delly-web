@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V26")
-st.info("✅ 規格：新增支援【單行逗號排版】解析、自動過濾表情符號代碼、日期自動記錄。")
+st.title("🪐 半自動 - 採購報價彙整表 V27")
+st.info("✅ 規格：新增【包材重量 3% 緩衝】、單行逗號解析、自動過濾表情符號、日期自動記錄。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -35,7 +35,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V26) ---
+# --- 4. 解析引擎 (V27) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "size": ""}
     if not text: return data
@@ -43,7 +43,6 @@ def parse_text(text):
     text_norm = text.replace('：', ':')
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     
-    # 1. 貨號
     m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9-]+)', text_norm)
     if m_code:
         data["code"] = m_code.group(1)
@@ -54,18 +53,15 @@ def parse_text(text):
             m_code_fallback = re.search(r'([A-Za-z0-9]{4,})', text_norm)
             if m_code_fallback: data["code"] = m_code_fallback.group(1)
 
-    # 2. 價格
     text_for_price = re.sub(r'(?:控價|控价|售价|售價|台幣|臺幣).*?(?:\n|$)', '', text_norm)
     m_price = re.search(r'(?:單價|单价|價格|价格|價錢)\s*:?\s*(?:rmb|RMB|¥)?\s*([0-9.]+)', text_for_price)
     if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
     if m_price: data["price"] = float(m_price.group(1))
 
-    # 3. 裝箱量
     m_qty = re.search(r'(?:每箱數量|每箱数量|裝箱數|装箱数|數量|数量|裝箱量|装箱量)\s*:?\s*(\d+)', text_norm)
     if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*(\d+)', text_norm)
     if m_qty: data["qty"] = int(m_qty.group(1))
 
-    # 4. 重量
     m_total_weight = re.search(r'(?:毛重|整箱重量)\s*:?\s*([0-9.]+)', text_norm)
     if not m_total_weight: m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
     m_single_weight = re.search(r'(?:單個重量|单个重量|克重)\s*:?\s*([0-9.]+)\s*[Gg克]', text_norm)
@@ -76,29 +72,23 @@ def parse_text(text):
         single_g = float(m_single_weight.group(1))
         data["weight"] = (single_g * data["qty"]) / 1000.0 
 
-    # 5. 尺寸
     m_size = re.search(r'(?:尺寸|帽圍|帽围)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if not m_size: m_size = re.search(r'尺寸\s*:?\s*([0-9.*xX×\s]+(?:[cC][mM]|公分)?)', text_norm)
     if m_size: data["size"] = m_size.group(1).strip()
 
-    # 6. 名稱 (V26：解決單行連字與表情符號干擾)
-    # 💡 這次不僅用換行切，還用「逗號(,)」和「全形逗號(，)」切開每一句話
     segments = re.split(r'[\n,，]+', text_norm)
     name_segments = []
     for seg in segments:
         seg = seg.strip()
-        # 清除像 [Fireworks] 這種干擾符號，以及黏在一起的 "是23.2元"
         seg = re.sub(r'\[.*?\]', '', seg)
         seg = re.sub(r'是?\s*[0-9.]+\s*元', '', seg)
         seg = seg.strip()
         
-        if len(seg) < 2: continue # 太短的廢字直接跳過
+        if len(seg) < 2: continue 
         
-        # 標籤防呆
         if re.search(r'(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|一箱|價格|价格|單價|单价|重量|尺寸|帽圍|帽围|包裝|包装|毛重|體積|体积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣)\s*:?', seg):
             continue
             
-        # 排除純英文數字(如貨號單獨切出來)、純數字加KG
         if re.match(r'^[A-Za-z0-9-\s]+$', seg) or re.match(r'^[0-9.]+\s*[Kk][Gg克]$', seg):
             continue
             
@@ -113,7 +103,7 @@ def parse_text(text):
     return data
 
 # --- 5. 主畫面流程 ---
-default_text = "FF716566，四通遥控挖掘机绿色款是[Fireworks]23.2元，一箱27只，21KG，彩盒尺寸39*11*30CM"
+default_text = ""
 user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=150)
 
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
@@ -152,7 +142,9 @@ if qty > 0:
                 f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
                 f_dom = f"=(H{v_r}/1000)*{dom_rate}"
                 f_intl = f"=(H{v_r}/1000)*{intl_rate}"
-                single_weight_raw = (weight/qty)*1000
+                
+                # 💡 核心修改區：計算重量時，無條件乘上 1.03 (加入 3% 包材防呆)
+                single_weight_raw = (weight/qty) * 1000 * 1.03
                 
                 today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
                 
