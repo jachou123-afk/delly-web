@@ -170,4 +170,16 @@ if qty > 0:
                 rows = [
                     [next_no, name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
                     [today_str, info_display, f10, f13, f15, f20, price, f_single_weight, f_dom, f_intl, f_cost],
-                    ["", f"裝箱 {qty}個/箱", "", "",
+                    ["", f"裝箱 {qty}個/箱", "", "", "", "", "", "", "", "", ""],
+                    ["", f"毛重 {weight}KG", "", "", "", "", "", "", "", "", ""],
+                    ["", f"貨號 {code}", "", "", "", "", "", "", "", "", ""]
+                ]
+                
+                sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
+                sheet.format(f"B{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
+                sheet.format(f"C{st_r}:F{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
+                sheet.format(f"G{st_r}:K{st_r}", {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}})
+
+                st.success(f"✅ 儲存成功！編號【{next_no}】。")
+            except Exception as e:
+                st.error(f"儲存失敗：{e}")
