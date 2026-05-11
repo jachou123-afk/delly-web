@@ -11,7 +11,7 @@ st.title("🪐 朵麗星球 - 採購報價彙整系統 V22")
 st.info("✅ 規格：新增防呆過濾(無視控價/台幣陷阱)、支援產品編號與無冒號標籤、自動簡轉繁。")
 
 # --- 2. Google Sheets 連線功能 ---
-SHEET_NAME = "朵麗星球 - 採購報價彙整表"
+SHEET_NAME = "半自動 - 採購報價彙整表"
 
 def get_sheet():
     try:
