@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V33")
-st.info("✅ 規格：新增【雷射標/包裝細節】識別、名稱一般體橘底、彩盒尺寸識別、重量運費進位。")
+st.title("🪐 半自動 - 採購報價彙整表 V34")
+st.info("✅ 規格：新增支援極簡標籤(箱數/箱重/外箱/產品)、雷射標識別、名稱橘底、重量運費進位、包材緩衝。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -35,7 +35,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V33) ---
+# --- 4. 解析引擎 (V34) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "box_size": "", "extra_tags": ""}
     if not text: return data
@@ -60,13 +60,13 @@ def parse_text(text):
     if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
     if m_price: data["price"] = float(m_price.group(1))
 
-    # 3. 數量
-    m_qty = re.search(r'(?:每箱數量|每箱数量|裝箱數|装箱数|數量|数量|裝箱量|装箱量)\s*:?\s*(\d+)', text_norm)
+    # 3. 數量 (💡 新增「箱數」)
+    m_qty = re.search(r'(?:每箱數量|每箱数量|裝箱數|装箱数|箱數|箱数|數量|数量|裝箱量|装箱量)\s*:?\s*(\d+)', text_norm)
     if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*(\d+)', text_norm)
     if m_qty: data["qty"] = int(m_qty.group(1))
 
-    # 4. 重量
-    m_total_weight = re.search(r'(?:毛重|整箱重量)\s*:?\s*([0-9.]+)', text_norm)
+    # 4. 重量 (💡 新增「箱重」)
+    m_total_weight = re.search(r'(?:毛重|整箱重量|箱重)\s*:?\s*([0-9.]+)', text_norm)
     if not m_total_weight: m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
     m_single_weight = re.search(r'(?:單個重量|单个重量|克重)\s*:?\s*([0-9.]+)\s*[Gg克]', text_norm)
     
@@ -76,21 +76,22 @@ def parse_text(text):
         single_g = float(m_single_weight.group(1))
         data["weight"] = (single_g * data["qty"]) / 1000.0 
 
-    # 5. 尺寸
-    m_box = re.search(r'彩盒尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    # 5. 尺寸 (💡 支援「外箱」當作彩盒尺寸，支援「產品」當作產品尺寸)
+    m_box = re.search(r'(?:彩盒尺寸|外箱尺寸|外箱)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_box: data["box_size"] = m_box.group(1).strip()
-    m_prod = re.search(r'(?<!彩盒)尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    
+    m_prod = re.search(r'(?<!(?:彩盒|外箱))(?:尺寸|產品|产品)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if not m_prod: m_prod = re.search(r'帽圍\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_prod: data["prod_size"] = m_prod.group(1).strip()
 
-    # 💡 6. 捕捉雷射標與包裝細節
+    # 6. 包裝與特殊標籤
     extra_items = []
     if re.search(r'帶[鐳雷]射標', text_norm): extra_items.append("帶雷射標")
     m_pkg = re.search(r'(?:包裝|包装)\s*:?\s*([^\n,，]+)', text_norm)
     if m_pkg: extra_items.append(f"包裝:{m_pkg.group(1).strip()}")
     data["extra_tags"] = "\n".join(extra_items)
 
-    # 7. 名稱
+    # 7. 名稱防呆 (💡 將箱數、箱重、外箱、產品 加入黑名單過濾)
     segments = re.split(r'[\n,，]+', text_norm)
     name_segments = []
     for seg in segments:
@@ -98,7 +99,7 @@ def parse_text(text):
         seg = re.sub(r'\[.*?\]', '', seg)
         seg = re.sub(r'是?\s*[0-9.]+\s*元', '', seg)
         if len(seg) < 2: continue 
-        if re.search(r'(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|一箱|價格|价格|單價|单价|重量|尺寸|帽圍|帽围|包裝|包装|毛重|體積|体积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣|帶[鐳雷]射標)\s*:?', seg):
+        if re.search(r'(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|箱數|箱数|一箱|價格|价格|單價|单价|重量|箱重|尺寸|帽圍|帽围|包裝|包装|毛重|外箱|體積|体积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣|帶[鐳雷]射標)\s*:?', seg):
             continue
         if re.match(r'^[A-Za-z0-9-\s]+$', seg) or re.match(r'^[0-9.]+\s*[Kk][Gg克]$', seg):
             continue
@@ -112,8 +113,8 @@ def parse_text(text):
     return data
 
 # --- 5. 主畫面流程 ---
-default_text = ""
-user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=150)
+default_text = "新款运动系列硅胶零钱包\n4个颜色混装\n箱数：600pcs\n单价：3.3元\n产品：7.7*7.5cm\n外箱：60*41*41cm\n箱重：38kg\n包装：50个/中包"
+user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=180)
 
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 p = parse_text(user_input_tw)
@@ -152,12 +153,11 @@ if qty > 0:
                 f_intl = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
                 f_single_weight = f"=ROUNDUP(({weight}/{qty})*1000*1.03, 2)"
                 
-                # 💡 組合尺寸、標籤、包裝等資訊
                 info_display = ""
                 if p["prod_size"]: info_display += f"尺寸 {p['prod_size']}"
                 if p["box_size"]: 
                     if info_display: info_display += "\n"
-                    info_display += f"彩盒尺寸 {p['box_size']}"
+                    info_display += f"外箱尺寸 {p['box_size']}"
                 if p["extra_tags"]:
                     if info_display: info_display += "\n"
                     info_display += p["extra_tags"]
