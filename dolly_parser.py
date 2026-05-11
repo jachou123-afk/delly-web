@@ -3,12 +3,12 @@ import pandas as pd
 import re
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import zhconv
+import zhconv  # 載入繁簡轉換套件
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="朵麗星球 - 採購雲端同步系統", layout="wide")
-st.title("🪐 朵麗星球 - 採購報價彙整系統 V20")
-st.info("✅ 規格：新增一鍵複製客戶文案、自選利潤區間、自動簡轉繁、三引擎解析。")
+st.title("🪐 朵麗星球 - 採購報價彙整系統 V19")
+st.info("✅ 規格：全自動簡轉繁、三引擎解析、運費與單個重量保留原始精度。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "朵麗星球 - 採購報價彙整表"
@@ -34,7 +34,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 ---
+# --- 4. 解析引擎 (V19 自動轉繁體版) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "size": ""}
     if not text: return data
@@ -91,8 +91,9 @@ def parse_text(text):
 
 # --- 5. 主畫面流程 ---
 default_text = "新款#正版授权\nHellokitty粉棕撞色棒球帽(成人)\n带镭射标\n型号:KL-52004\n条码:6927155124396\n每箱数量:160pcs\n单个价格:25.2元\n单个帽围:56-58cm\n单个重量:100g\n包装:吊牌+opp袋"
-user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=150)
+user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=250)
 
+# 💡 魔法發生在這裡：把使用者貼上的內容，全部瞬間轉成台灣繁體！
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 p = parse_text(user_input_tw)
 
@@ -106,43 +107,8 @@ weight = c5.number_input("毛重(kg)", value=p["weight"], format="%.2f")
 dom_rate = c6.number_input("內陸運費(R/kg)", value=dom_rate_def)
 
 if qty > 0:
-    # 即時計算成本與四階報價
-    single_weight_g = (weight / qty) * 1000 if qty > 0 else 0
-    dom_fee_rmb = (single_weight_g / 1000) * dom_rate
-    intl_fee_rmb = (single_weight_g / 1000) * intl_rate
-    cost_ntd = (price + dom_fee_rmb + intl_fee_rmb) * ex_rate
-    
-    q10 = round(cost_ntd / 0.9, 1)
-    q13 = round(cost_ntd / 0.87, 1)
-    q15 = round(cost_ntd / 0.85, 1)
-    q20 = round(cost_ntd / 0.8, 1)
-
-    st.markdown("---")
-    st.subheader("📝 第三步：一鍵生成客戶文案")
-    
-    # 讓使用者點選想要的利潤區間
-    margin_choice = st.radio(
-        "請選擇要報給客人的利潤單價：",
-        options=[f"10% (單價: {q10}元)", f"13% (單價: {q13}元)", f"15% (單價: {q15}元)", f"20% (單價: {q20}元)"],
-        horizontal=True
-    )
-    
-    # 根據選擇抓取對應的價格
-    if "10%" in margin_choice: final_p = q10
-    elif "13%" in margin_choice: final_p = q13
-    elif "15%" in margin_choice: final_p = q15
-    else: final_p = q20
-
-    # 組合排版給客人的文案
-    size_text = f"尺寸 {p['size']}" if p['size'] else ""
-    copy_text = f"{name}\n{size_text}\n裝箱 {qty}個/箱\n單價 {final_p}元"
-    
-    # 顯示帶有複製按鈕的程式碼區塊
-    st.code(copy_text, language="text")
-
-    st.markdown("---")
-    st.subheader("📊 第四步：儲存至雲端表格")
-    if st.button("💾 儲存並產出進位公式", type="primary"):
+    st.subheader("📊 第三步：儲存預覽")
+    if st.button("💾 儲存並產出進位公式到雲端", type="primary"):
         sheet = get_sheet()
         if sheet:
             try:
