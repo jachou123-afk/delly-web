@@ -6,8 +6,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="朵麗星球 - 採購雲端同步系統", layout="wide")
-st.title("🪐 朵麗星球 - 採購報價彙整系統 V16")
-st.info("✅ 規格：雙引擎解析(支援條列式與段落式文案)、全繁體優化、活公式。")
+st.title("🪐 朵麗星球 - 採購報價彙整系統 V17")
+st.info("✅ 規格：三引擎解析(新增標籤格式)、自動換算單個重量為總毛重、全繁體優化。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "朵麗星球 - 採購報價彙整表"
@@ -33,60 +33,71 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V16 雙引擎版) ---
+# --- 4. 解析引擎 (V17 三引擎版) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "size": ""}
     if not text: return data
     
-    # 統一將全形冒號轉為半形，方便程式辨識
+    # 將全形冒號轉半形，方便辨識
     text_norm = text.replace('：', ':')
-    lines = [line.strip() for line in text_norm.split('\n') if line.strip()]
-    first_line = lines[0] if lines else ""
-
-    # 1. 提取貨號與名稱 (支援放開頭的新格式)
-    m_code_start = re.match(r'^([A-Za-z0-9]{4,})', first_line)
-    if m_code_start:
-        data["code"] = m_code_start.group(1)
-        data["name"] = first_line[m_code_start.end():].strip()
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    
+    # 1. 提取貨號 (支援「型號:」標籤)
+    m_code = re.search(r'(?:型號|型号|貨號|货号)\s*:\s*([A-Za-z0-9-]+)', text_norm)
+    if m_code:
+        data["code"] = m_code.group(1)
     else:
-        # 舊版搜尋邏輯
-        m_code = re.search(r'([A-Za-z0-9]{4,})', text_norm)
-        if m_code: data["code"] = m_code.group(1)
-        
-        name_raw = text_norm
-        if data["code"]: name_raw = name_raw.replace(data["code"], "", 1)
-        m_name = re.search(r'^[，\s,]*([^，,\n\r是\[價]+)', name_raw)
-        if m_name:
-            nc = m_name.group(1).strip()
-            for w in ["尺寸", "裝箱", "KG", "kg", "重量", "價格", "單價", "毛重"]:
-                if w in nc: nc = nc.split(w)[0].strip()
-            data["name"] = nc
+        m_code_start = re.match(r'^([A-Za-z0-9]{4,})', lines[0] if lines else "")
+        if m_code_start: data["code"] = m_code_start.group(1)
+        else:
+            m_code_fallback = re.search(r'([A-Za-z0-9]{4,})', text_norm)
+            if m_code_fallback: data["code"] = m_code_fallback.group(1)
 
-    # 2. 提取進價 (支援「單價：」標籤)
-    m_price = re.search(r'(?:單價|價格|價錢)\s*:\s*([0-9.]+)', text_norm)
+    # 2. 提取進價 (支援「價格:」標籤)
+    m_price = re.search(r'(?:單價|单价|價格|价格|價錢)\s*:\s*([0-9.]+)', text_norm)
     if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_norm)
-    if not m_price: m_price = re.search(r'是\s*(?:\[.*?\])?\s*(\d+(?:\.\d+)?)', text_norm)
     if m_price: data["price"] = float(m_price.group(1))
 
-    # 3. 提取裝箱量 (支援「裝箱量：」標籤)
-    m_qty = re.search(r'裝箱(?:量)?\s*:\s*(\d+)', text_norm)
+    # 3. 提取裝箱量 (支援「數量:」標籤)
+    m_qty = re.search(r'(?:每箱數量|每箱数量|數量|数量|裝箱量|装箱量)\s*:\s*(\d+)', text_norm)
     if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*(\d+)', text_norm)
     if m_qty: data["qty"] = int(m_qty.group(1))
 
-    # 4. 提取毛重 (支援「毛重：」標籤)
-    m_weight = re.search(r'毛重\s*:\s*([0-9.]+)', text_norm)
-    if not m_weight: m_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
-    if m_weight: data["weight"] = float(m_weight.group(1))
+    # 4. 提取毛重 (超強防呆：支援「單個重量」自動換算總毛重)
+    m_single_weight = re.search(r'(?:單個重量|单个重量|克重)\s*:\s*([0-9.]+)\s*[Gg克]', text_norm)
+    if m_single_weight and data["qty"] > 0:
+        single_g = float(m_single_weight.group(1))
+        data["weight"] = (single_g * data["qty"]) / 1000.0 # 自動換算成整箱公斤(KG)
+    else:
+        m_weight = re.search(r'毛重\s*:\s*([0-9.]+)', text_norm)
+        if not m_weight: m_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
+        if m_weight: data["weight"] = float(m_weight.group(1))
 
-    # 5. 提取尺寸 (支援乘號 × 和 x)
-    m_size = re.search(r'尺寸\s*:?\s*([0-9.*xX×\s]+(?:[cC][mM]|公分)?)', text_norm)
+    # 5. 提取尺寸 (支援「帽圍」)
+    m_size = re.search(r'(?:尺寸|帽圍|帽围)\s*:\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    if not m_size: m_size = re.search(r'尺寸\s*:?\s*([0-9.*xX×\s]+(?:[cC][mM]|公分)?)', text_norm)
     if m_size: data["size"] = m_size.group(1).strip()
 
+    # 6. 提取名稱 (自動過濾掉所有規格標籤，留下乾淨的品名)
+    name_lines = []
+    for line in lines:
+        if re.search(r'(?:型號|型号|貨號|货号|條碼|条码|數量|数量|價格|价格|單價|单价|重量|尺寸|帽圍|帽围|包裝|包装|毛重|體積|体积)\s*:', line.replace('：', ':')):
+            continue
+        if re.match(r'^[A-Za-z0-9-]+\s*$', line):
+            continue
+        name_lines.append(line)
+        
+    if name_lines:
+        raw_name = " ".join(name_lines[:2]).strip()
+        if data["code"] and data["code"] in raw_name:
+            raw_name = raw_name.replace(data["code"], "").strip()
+        data["name"] = raw_name
+        
     return data
 
 # --- 5. 主畫面流程 ---
-default_text = "L919A 庫洛米泡中泡電動泡泡槍🫧\n超萌庫洛米聯名泡泡槍顏值拉滿✨一鍵自動出泡 泡中泡\n💰單價：13.5元\n📦裝箱量：36pcs\n彩盒尺寸：16×8×16cm\n外箱規格：80×30×91cm\n外箱體積 / 材積：0.218cbm /7.71cuft\n毛重：15kg"
-user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=150)
+default_text = "新款#正版授权\nHellokitty粉棕撞色棒球帽(成人)\n带镭射标\n型号:KL-52004\n条码:6927155124396\n每箱数量:160pcs\n单个价格:25.2元\n单个帽围:56-58cm\n单个重量:100g\n包装:吊牌+opp袋"
+user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=250)
 p = parse_text(user_input)
 
 st.subheader("🔍 第二步：確認數據")
