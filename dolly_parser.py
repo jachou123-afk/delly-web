@@ -6,13 +6,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 import zhconv
 
 # --- 1. 網頁基本設定 ---
-# 💡 網頁標籤和標題也一起幫您改成新名字了！
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V23")
-st.info("✅ 規格：已同步最新雲端表格名稱、防呆過濾陷阱、自動簡轉繁。")
+st.title("🪐 半自動 - 採購報價彙整表 V24")
+st.info("✅ 規格：純淨輸入版 (報價與文案生成已移交至雲端表格)、防呆過濾陷阱、自動簡轉繁。")
 
 # --- 2. Google Sheets 連線功能 ---
-# 💡 這裡是系統找檔案的關鍵！已經幫您換成新名字了
 SHEET_NAME = "半自動 - 採購報價彙整表"
 
 def get_sheet():
@@ -36,7 +34,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V23) ---
+# --- 4. 解析引擎 (V24) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "size": ""}
     if not text: return data
@@ -112,37 +110,8 @@ weight = c5.number_input("毛重(kg)", value=p["weight"], format="%.2f")
 dom_rate = c6.number_input("內陸運費(R/kg)", value=dom_rate_def)
 
 if qty > 0:
-    single_weight_g = (weight / qty) * 1000 if qty > 0 else 0
-    dom_fee_rmb = (single_weight_g / 1000) * dom_rate
-    intl_fee_rmb = (single_weight_g / 1000) * intl_rate
-    cost_ntd = (price + dom_fee_rmb + intl_fee_rmb) * ex_rate
-    
-    q10 = round(cost_ntd / 0.9, 1)
-    q13 = round(cost_ntd / 0.87, 1)
-    q15 = round(cost_ntd / 0.85, 1)
-    q20 = round(cost_ntd / 0.8, 1)
-
     st.markdown("---")
-    st.subheader("📝 第三步：一鍵生成客戶文案")
-    
-    margin_choice = st.radio(
-        "請選擇要報給客人的利潤單價：",
-        options=[f"10% (單價: {q10}元)", f"13% (單價: {q13}元)", f"15% (單價: {q15}元)", f"20% (單價: {q20}元)"],
-        horizontal=True
-    )
-    
-    if "10%" in margin_choice: final_p = q10
-    elif "13%" in margin_choice: final_p = q13
-    elif "15%" in margin_choice: final_p = q15
-    else: final_p = q20
-
-    size_text = f"尺寸 {p['size']}" if p['size'] else ""
-    copy_text = f"{name}\n{size_text}\n裝箱 {qty}個/箱\n單價 {final_p}元"
-    
-    st.code(copy_text, language="text")
-
-    st.markdown("---")
-    st.subheader("📊 第四步：儲存至雲端表格")
+    st.subheader("📊 第三步：儲存至雲端表格")
     if st.button("💾 儲存並產出進位公式", type="primary"):
         sheet = get_sheet()
         if sheet:
