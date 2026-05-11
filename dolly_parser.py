@@ -4,11 +4,12 @@ import re
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import zhconv
+import datetime # 💡 匯入日期模組
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V24")
-st.info("✅ 規格：純淨輸入版 (報價與文案生成已移交至雲端表格)、防呆過濾陷阱、自動簡轉繁。")
+st.title("🪐 半自動 - 採購報價彙整表 V25")
+st.info("✅ 規格：新增【日期自動記錄】功能、純淨輸入版、防呆過濾陷阱、自動簡轉繁。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -34,7 +35,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V24) ---
+# --- 4. 解析引擎 (V25) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "size": ""}
     if not text: return data
@@ -94,7 +95,7 @@ def parse_text(text):
     return data
 
 # --- 5. 主畫面流程 ---
-default_text = "產品編號YZ018\n獨家定制款，手提行李箱，\n14寸手提式條紋包角化妝箱\n皮克敏卡通手提行李箱\n化妝裝，手袋便攜箱包\n超萌卡通圖案➕配色\n尺寸:31x22x15CM\n單個重量：650g\n整箱重量：17kg\n裝箱數：20pcs\n價格24.8\n\n海快運費7.7\n\n控價：不得低於臺幣190元銷售"
+default_text = ""
 user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=250)
 
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
@@ -135,9 +136,12 @@ if qty > 0:
                 f_intl = f"=(H{v_r}/1000)*{intl_rate}"
                 single_weight_raw = (weight/qty)*1000
                 
+                # 💡 產出今天的日期格式 (2026/5/11)
+                today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
+                
                 rows = [
                     [next_no, name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
-                    ["", f"尺寸 {p['size']}", f10, f13, f15, f20, price, single_weight_raw, f_dom, f_intl, f_cost],
+                    [today_str, f"尺寸 {p['size']}", f10, f13, f15, f20, price, single_weight_raw, f_dom, f_intl, f_cost],
                     ["", f"裝箱 {qty}個/箱", "", "", "", "", "", "", "", "", ""],
                     ["", f"毛重 {weight}KG", "", "", "", "", "", "", "", "", ""],
                     ["", f"貨號 {code}", "", "", "", "", "", "", "", "", ""]
