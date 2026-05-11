@@ -3,11 +3,12 @@ import pandas as pd
 import re
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import zhconv  # 載入繁簡轉換套件
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="朵麗星球 - 採購雲端同步系統", layout="wide")
-st.title("🪐 朵麗星球 - 採購報價彙整系統 V18")
-st.info("✅ 規格：三引擎解析、運費與單個重量【不四捨五入】保留原始精度。")
+st.title("🪐 朵麗星球 - 採購報價彙整系統 V19")
+st.info("✅ 規格：全自動簡轉繁、三引擎解析、運費與單個重量保留原始精度。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "朵麗星球 - 採購報價彙整表"
@@ -33,7 +34,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V18 三引擎版) ---
+# --- 4. 解析引擎 (V19 自動轉繁體版) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "size": ""}
     if not text: return data
@@ -91,7 +92,10 @@ def parse_text(text):
 # --- 5. 主畫面流程 ---
 default_text = "新款#正版授权\nHellokitty粉棕撞色棒球帽(成人)\n带镭射标\n型号:KL-52004\n条码:6927155124396\n每箱数量:160pcs\n单个价格:25.2元\n单个帽围:56-58cm\n单个重量:100g\n包装:吊牌+opp袋"
 user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=250)
-p = parse_text(user_input)
+
+# 💡 魔法發生在這裡：把使用者貼上的內容，全部瞬間轉成台灣繁體！
+user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
+p = parse_text(user_input_tw)
 
 st.subheader("🔍 第二步：確認數據")
 c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -121,15 +125,10 @@ if qty > 0:
                 st_r = true_last_row + 2 if true_last_row > 0 else 1
                 v_r = st_r + 1
                 
-                # 最終報價保留進位
                 f10, f13, f15, f20 = f"=ROUND(K{v_r}/0.9,1)", f"=ROUND(K{v_r}/0.87,1)", f"=ROUND(K{v_r}/0.85,1)", f"=ROUND(K{v_r}/0.8,1)"
                 f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
-                
-                # 運費拔除 ROUND，保留原始精確度
                 f_dom = f"=(H{v_r}/1000)*{dom_rate}"
                 f_intl = f"=(H{v_r}/1000)*{intl_rate}"
-                
-                # 重量 (g/pcs) 也拔除 round()，直接算原始數字
                 single_weight_raw = (weight/qty)*1000
                 
                 rows = [
