@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V30")
-st.info("✅ 規格：新增【彩盒尺寸】精確識別、重量與運費無條件進位至小數第2位、包材緩衝、日期記錄。")
+st.title("🪐 半自動 - 採購報價彙整表 V31")
+st.info("✅ 規格：新增【名稱欄位橘色背景】、彩盒尺寸識別、重量運費進位至小數2位、包材緩衝。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -35,16 +35,14 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V30) ---
+# --- 4. 解析引擎 (V31) ---
 def parse_text(text):
-    # 💡 擴充資料結構，分開記錄兩種尺寸
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "box_size": ""}
     if not text: return data
     
     text_norm = text.replace('：', ':')
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     
-    # 1. 貨號
     m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9-]+)', text_norm)
     if m_code:
         data["code"] = m_code.group(1)
@@ -55,18 +53,15 @@ def parse_text(text):
             m_code_fallback = re.search(r'([A-Za-z0-9]{4,})', text_norm)
             if m_code_fallback: data["code"] = m_code_fallback.group(1)
 
-    # 2. 價格 (排除控價干擾)
     text_for_price = re.sub(r'(?:控價|控价|售价|售價|台幣|臺幣).*?(?:\n|$)', '', text_norm)
     m_price = re.search(r'(?:單價|单价|價格|价格|價錢)\s*:?\s*(?:rmb|RMB|¥)?\s*([0-9.]+)', text_for_price)
     if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
     if m_price: data["price"] = float(m_price.group(1))
 
-    # 3. 裝箱量
     m_qty = re.search(r'(?:每箱數量|每箱数量|裝箱數|装箱数|數量|数量|裝箱量|装箱量)\s*:?\s*(\d+)', text_norm)
     if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*(\d+)', text_norm)
     if m_qty: data["qty"] = int(m_qty.group(1))
 
-    # 4. 重量
     m_total_weight = re.search(r'(?:毛重|整箱重量)\s*:?\s*([0-9.]+)', text_norm)
     if not m_total_weight: m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
     m_single_weight = re.search(r'(?:單個重量|单个重量|克重)\s*:?\s*([0-9.]+)\s*[Gg克]', text_norm)
@@ -77,17 +72,13 @@ def parse_text(text):
         single_g = float(m_single_weight.group(1))
         data["weight"] = (single_g * data["qty"]) / 1000.0 
 
-    # 5. 尺寸解析 (💡 V30 強化版)
-    # 優先找彩盒尺寸
     m_box = re.search(r'彩盒尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_box: data["box_size"] = m_box.group(1).strip()
     
-    # 尋找非彩盒的產品尺寸 (排除彩盒兩個字)
     m_prod = re.search(r'(?<!彩盒)尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if not m_prod: m_prod = re.search(r'帽圍\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_prod: data["prod_size"] = m_prod.group(1).strip()
 
-    # 6. 名稱解析
     segments = re.split(r'[\n,，]+', text_norm)
     name_segments = []
     for seg in segments:
@@ -151,7 +142,6 @@ if qty > 0:
                 f_intl = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
                 f_single_weight = f"=ROUNDUP(({weight}/{qty})*1000*1.03, 2)"
                 
-                # 💡 尺寸顯示邏輯：如果都有，就換行顯示；如果只有其中一個，就顯示該標籤
                 size_display = ""
                 if p["prod_size"]: size_display += f"尺寸 {p['prod_size']}"
                 if p["box_size"]: 
@@ -170,6 +160,11 @@ if qty > 0:
                 ]
                 
                 sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
+                
+                # 💡 核心修改區：名稱欄位 (B欄) 設為橘色背景
+                sheet.format(f"B{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}, "textFormat": {"bold": True}})
+                
+                # 其他欄位保持原本配色
                 sheet.format(f"C{st_r}:F{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
                 sheet.format(f"G{st_r}:K{st_r}", {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}})
 
