@@ -127,4 +127,57 @@ if qty > 0:
     
     margin_choice = st.radio(
         "請選擇要報給客人的利潤單價：",
-        options=[f"10% (單價: {q10}元)", f"13% (單
+        options=[f"10% (單價: {q10}元)", f"13% (單價: {q13}元)", f"15% (單價: {q15}元)", f"20% (單價: {q20}元)"],
+        horizontal=True
+    )
+    
+    if "10%" in margin_choice: final_p = q10
+    elif "13%" in margin_choice: final_p = q13
+    elif "15%" in margin_choice: final_p = q15
+    else: final_p = q20
+
+    size_text = f"尺寸 {p['size']}" if p['size'] else ""
+    copy_text = f"{name}\n{size_text}\n裝箱 {qty}個/箱\n單價 {final_p}元"
+    
+    st.code(copy_text, language="text")
+
+    st.markdown("---")
+    st.subheader("📊 第四步：儲存至雲端表格")
+    if st.button("💾 儲存並產出進位公式", type="primary"):
+        sheet = get_sheet()
+        if sheet:
+            try:
+                all_data = sheet.get_all_values()
+                true_last_row = len(all_data)
+                
+                max_no = 0
+                for r in all_data:
+                    if r and r[0]:
+                        m = re.search(r'no(\d+)', str(r[0]), re.IGNORECASE)
+                        if m: max_no = max(max_no, int(m.group(1)))
+                next_no = f"no{max_no + 1}"
+                
+                st_r = true_last_row + 2 if true_last_row > 0 else 1
+                v_r = st_r + 1
+                
+                f10, f13, f15, f20 = f"=ROUND(K{v_r}/0.9,1)", f"=ROUND(K{v_r}/0.87,1)", f"=ROUND(K{v_r}/0.85,1)", f"=ROUND(K{v_r}/0.8,1)"
+                f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
+                f_dom = f"=(H{v_r}/1000)*{dom_rate}"
+                f_intl = f"=(H{v_r}/1000)*{intl_rate}"
+                single_weight_raw = (weight/qty)*1000
+                
+                rows = [
+                    [next_no, name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
+                    ["", f"尺寸 {p['size']}", f10, f13, f15, f20, price, single_weight_raw, f_dom, f_intl, f_cost],
+                    ["", f"裝箱 {qty}個/箱", "", "", "", "", "", "", "", "", ""],
+                    ["", f"毛重 {weight}KG", "", "", "", "", "", "", "", "", ""],
+                    ["", f"貨號 {code}", "", "", "", "", "", "", "", "", ""]
+                ]
+                
+                sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
+                sheet.format(f"C{st_r}:F{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
+                sheet.format(f"G{st_r}:K{st_r}", {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}})
+
+                st.success(f"✅ 儲存成功！編號【{next_no}】。")
+            except Exception as e:
+                st.error(f"儲存失敗：{e}")
