@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V28")
-st.info("✅ 規格：重量計算改為【雲端透明公式】方便人工微調、單行逗號解析、包材緩衝、日期自動記錄。")
+st.title("🪐 半自動 - 採購報價彙整表 V29")
+st.info("✅ 規格：重量與運費【無條件進位至小數第2位】、透明活公式、包材緩衝、日期記錄。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -35,7 +35,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V28) ---
+# --- 4. 解析引擎 (V29) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "size": ""}
     if not text: return data
@@ -140,11 +140,11 @@ if qty > 0:
                 
                 f10, f13, f15, f20 = f"=ROUND(K{v_r}/0.9,1)", f"=ROUND(K{v_r}/0.87,1)", f"=ROUND(K{v_r}/0.85,1)", f"=ROUND(K{v_r}/0.8,1)"
                 f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
-                f_dom = f"=(H{v_r}/1000)*{dom_rate}"
-                f_intl = f"=(H{v_r}/1000)*{intl_rate}"
                 
-                # 💡 核心修改區：把重量計算變成「活公式」寫入 Google 表格
-                f_single_weight = f"=({weight}/{qty})*1000*1.03"
+                # 💡 核心修改區：重量與運費全部加上 ROUNDUP(..., 2) 無條件進位到小數第 2 位
+                f_dom = f"=ROUNDUP((H{v_r}/1000)*{dom_rate}, 2)"
+                f_intl = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
+                f_single_weight = f"=ROUNDUP(({weight}/{qty})*1000*1.03, 2)"
                 
                 today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
                 
