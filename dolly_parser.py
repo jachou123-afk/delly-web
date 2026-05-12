@@ -213,4 +213,6 @@ if final_qty > 0:
             ""                 # L: 留空給 AppSheet 傳圖片
         ]
         
-        if save_to_worksheet(final_category
+        if save_to_worksheet(final_category, row_data):
+            get_all_sheets_data.clear()
+            st.success(f"✅ 已成功存入【{SHEET_NAME}】的 {final_category} 分頁！編號：{next_no}")
