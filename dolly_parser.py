@@ -8,13 +8,15 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V39")
-st.info("✅ 規格：加回【團隊防撞單雷達】、分類手動更正、全欄位二次編輯、分頁自動分流。")
+st.title("🪐 半自動 - 採購報價彙整表 V40")
+st.info("✅ 規格：升級【全分頁防撞單全局雷達】、分類手動更正、全欄位二次編輯、分頁自動分流。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
 
-def get_worksheet(category_name):
+# 💡 V40 核心升級：一次抓取整份試算表「所有分頁」的資料
+@st.cache_data(ttl=15)
+def get_all_sheets_data():
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         if st.secrets.get("gcp_service_account"):
@@ -23,24 +25,37 @@ def get_worksheet(category_name):
             creds = ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
         client = gspread.authorize(creds)
         spreadsheet = client.open(SHEET_NAME)
-        try:
-            return spreadsheet.worksheet(category_name)
-        except gspread.exceptions.WorksheetNotFound:
-            return spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
+        
+        all_data = {}
+        for ws in spreadsheet.worksheets():
+            all_data[ws.title] = ws.get_all_values()
+        return all_data
     except Exception as e:
-        st.error(f"連線錯誤: {e}")
-        return None
+        return {}
 
-# 💡 建立快取機制，避免檢查重複時過度消耗 Google API 額度 (每15秒更新一次)
-@st.cache_data(ttl=15)
-def get_cached_data(category_name):
-    sheet = get_worksheet(category_name)
-    if sheet:
+def save_to_worksheet(category_name, rows, st_r):
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        if st.secrets.get("gcp_service_account"):
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
+        else:
+            creds = ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
+        client = gspread.authorize(creds)
+        spreadsheet = client.open(SHEET_NAME)
+        
         try:
-            return sheet.get_all_values()
-        except:
-            return []
-    return []
+            sheet = spreadsheet.worksheet(category_name)
+        except gspread.exceptions.WorksheetNotFound:
+            sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
+        
+        sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
+        sheet.format(f"B{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
+        sheet.format(f"C{st_r}:F{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
+        sheet.format(f"G{st_r}:K{st_r}", {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}})
+        return True
+    except Exception as e:
+        st.error(f"寫入雲端失敗：{e}")
+        return False
 
 # --- 3. 側邊欄設定 ---
 st.sidebar.header("⚙️ 成本參數設定")
@@ -117,82 +132,77 @@ if final_qty > 0:
     st.markdown("---")
     st.subheader("📊 第三步：選擇分頁與最終確認")
     
-    # 分類選擇
     final_category = st.selectbox("📂 確定存入的分頁：", ["正版", "玩具", "生活用品"], index=0)
     
-    # 💡 重新加回：自動檢查重複邏輯 (會根據選擇的分類去查)
-    all_data = get_cached_data(final_category)
+    # 💡 終極修復：全域防撞單雷達 (掃描所有分頁)
+    all_sheets_data = get_all_sheets_data()
     duplicate_no = None
     duplicate_reason = ""
+    duplicate_sheet = ""
 
-    if all_data and (final_code or final_name):
+    if all_sheets_data and (final_code or final_name):
         check_code = f"貨號 {final_code}".strip() if final_code and len(final_code) > 2 else None
         check_name = final_name.strip() if final_name and len(final_name) > 2 else None
         
-        for i, row in enumerate(all_data):
-            if len(row) > 1:
-                cell_val = str(row[1]).strip()
-                if check_code and check_code in cell_val:
-                    duplicate_reason = f"貨號：{final_code}"
-                    for j in range(i, -1, -1):
-                        if len(all_data[j]) > 0 and str(all_data[j][0]).lower().startswith('no'):
-                            duplicate_no = all_data[j][0]
-                            break
-                    break
-                elif check_name and check_name == cell_val:
-                    duplicate_reason = f"名稱：{final_name}"
-                    for j in range(i, -1, -1):
-                        if len(all_data[j]) > 0 and str(all_data[j][0]).lower().startswith('no'):
-                            duplicate_no = all_data[j][0]
-                            break
-                    break
+        for sheet_title, sheet_rows in all_sheets_data.items():
+            for i, row in enumerate(sheet_rows):
+                if len(row) > 1:
+                    cell_val = str(row[1]).strip()
+                    if check_code and check_code in cell_val:
+                        duplicate_reason = f"貨號：{final_code}"
+                        duplicate_sheet = sheet_title
+                        for j in range(i, -1, -1):
+                            if len(sheet_rows[j]) > 0 and str(sheet_rows[j][0]).lower().startswith('no'):
+                                duplicate_no = sheet_rows[j][0]
+                                break
+                        break
+                    elif check_name and check_name == cell_val:
+                        duplicate_reason = f"名稱：{final_name}"
+                        duplicate_sheet = sheet_title
+                        for j in range(i, -1, -1):
+                            if len(sheet_rows[j]) > 0 and str(sheet_rows[j][0]).lower().startswith('no'):
+                                duplicate_no = sheet_rows[j][0]
+                                break
+                        break
+            if duplicate_no:
+                break
 
-    # 💡 顯示防撞警告
     if duplicate_no:
-        st.error(f"🚨 **防撞單提醒**：您輸入的商品（**{duplicate_reason}**）已經在【{final_category}】建檔過了！目前記錄在 **{duplicate_no}**。請確認是否仍要重複存入。")
+        st.error(f"🚨 **防撞單雷達警告**：您輸入的商品（**{duplicate_reason}**）已經在【{duplicate_sheet}】分頁建檔過了！目前記錄在該分頁的 **{duplicate_no}**。請確認是否要重複存檔。")
 
     st.warning(f"即將存入【{final_category}】分頁。請確認以上貨號、名稱、價格皆正確無誤。")
     final_confirm = st.checkbox(f"我已手動校對完成，確認資料正確")
     
     if st.button("💾 執行存檔", type="primary", disabled=not final_confirm):
-        sheet = get_worksheet(final_category)
-        if sheet:
-            try:
-                fresh_data = sheet.get_all_values()
-                true_last_row = len(fresh_data)
-                max_no = 0
-                for r in fresh_data:
-                    if r and r[0]:
-                        m = re.search(r'no(\d+)', str(r[0]), re.IGNORECASE)
-                        if m: max_no = max(max_no, int(m.group(1)))
-                next_no = f"no{max_no + 1}"
-                
-                st_r = true_last_row + 2 if true_last_row > 0 else 1
-                v_r = st_r + 1
-                
-                f10, f13, f15, f20 = f"=ROUND(K{v_r}/0.9,1)", f"=ROUND(K{v_r}/0.87,1)", f"=ROUND(K{v_r}/0.85,1)", f"=ROUND(K{v_r}/0.8,1)"
-                f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
-                f_dom_formula = f"=ROUNDUP((H{v_r}/1000)*{final_dom}, 2)"
-                f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
-                f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
-                
-                info_display = f"尺寸 {p['prod_size']}\n外箱尺寸 {p['box_size']}\n{p['extra_tags']}".strip()
-                today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
-                
-                rows = [
-                    [next_no, final_name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
-                    [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost],
-                    ["", f"裝箱 {final_qty}個/箱", "", "", "", "", "", "", "", "", ""],
-                    ["", f"毛重 {final_weight}KG", "", "", "", "", "", "", "", "", ""],
-                    ["", f"貨號 {final_code}", "", "", "", "", "", "", "", "", ""]
-                ]
-                
-                sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
-                sheet.format(f"B{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
-                
-                # 💡 存檔成功後立刻清除快取，保證下次防撞雷達能抓到最新進度
-                get_cached_data.clear()
-                
-                st.success(f"✅ 儲存成功！已存入【{final_category}】。編號：{next_no}")
-            except Exception as e:
-                st.error(f"儲存失敗：{e}")
+        target_data = all_sheets_data.get(final_category, [])
+        true_last_row = len(target_data)
+        max_no = 0
+        for r in target_data:
+            if r and r[0]:
+                m = re.search(r'no(\d+)', str(r[0]), re.IGNORECASE)
+                if m: max_no = max(max_no, int(m.group(1)))
+        next_no = f"no{max_no + 1}"
+        
+        st_r = true_last_row + 2 if true_last_row > 0 else 1
+        v_r = st_r + 1
+        
+        f10, f13, f15, f20 = f"=ROUND(K{v_r}/0.9,1)", f"=ROUND(K{v_r}/0.87,1)", f"=ROUND(K{v_r}/0.85,1)", f"=ROUND(K{v_r}/0.8,1)"
+        f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
+        f_dom_formula = f"=ROUNDUP((H{v_r}/1000)*{final_dom}, 2)"
+        f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
+        f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
+        
+        info_display = f"尺寸 {p['prod_size']}\n外箱尺寸 {p['box_size']}\n{p['extra_tags']}".strip()
+        today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
+        
+        rows = [
+            [next_no, final_name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
+            [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost],
+            ["", f"裝箱 {final_qty}個/箱", "", "", "", "", "", "", "", "", ""],
+            ["", f"毛重 {final_weight}KG", "", "", "", "", "", "", "", "", ""],
+            ["", f"貨號 {final_code}", "", "", "", "", "", "", "", "", ""]
+        ]
+        
+        if save_to_worksheet(final_category, rows, st_r):
+            get_all_sheets_data.clear() # 💡 存檔成功後立刻清除快取，讓雷達抓取最新資料
+            st.success(f"✅ 儲存成功！已存入【{final_category}】。編號：{next_no}")
