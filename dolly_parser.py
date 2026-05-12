@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("📱 朵麗星球 - 透明資料庫 V49")
-st.info("✅ 規格：修復【存檔按鍵消失】體驗問題、寫入透明公式、單行資料庫格式、全局防撞。")
+st.title("📱 朵麗星球 - 完整標籤資料庫 V50")
+st.info("✅ 規格：同步【10%/13%/15%/20% 報價標籤】、全公式自動填充、單行資料庫格式、全局防撞。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "朵麗星球_App測試庫"
@@ -42,14 +42,15 @@ def save_to_worksheet(category_name, row_data):
         try:
             sheet = spreadsheet.worksheet(category_name)
         except gspread.exceptions.WorksheetNotFound:
-            sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
+            sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="25")
             
         existing_data = sheet.get_all_values()
+        # 💡 V50 標題完全同步您的需求
         if len(existing_data) == 0:
-            headers = ["編號", "日期", "分類", "貨號", "名稱", "規格包裝", "裝箱量(G)", "毛重KG(H)", "進價RMB(I)", "單個重量g(J)", "大陸運費(K)", "國際運費(L)", "預估成本(M)", "10%報價(N)", "商品圖片"]
+            headers = ["編號", "日期", "分類", "貨號", "名稱", "規格包裝", "裝箱量", "毛重KG", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本", "10%報價", "13%報價", "15%報價", "20%報價", "商品圖片"]
             sheet.append_row(headers, value_input_option="USER_ENTERED")
             try:
-                sheet.format("A1:O1", {"backgroundColor": {"red": 0.9, "green": 0.9, "blue": 1.0}, "textFormat": {"bold": True}})
+                sheet.format("A1:R1", {"backgroundColor": {"red": 0.9, "green": 0.9, "blue": 1.0}, "textFormat": {"bold": True}})
             except: pass
                 
         sheet.append_row(row_data, value_input_option="USER_ENTERED")
@@ -108,7 +109,6 @@ def parse_text(text):
         seg = re.sub(r'[📦💰✅🔥✨🎈🍦🔫]', '', seg).strip()
         if len(seg) < 2 or re.match(exclusion, seg): continue
         name_segments.append(seg)
-        
     if name_segments: data["name"] = " ".join(name_segments[:2]).strip()
     return data
 
@@ -128,7 +128,6 @@ final_dom = c6.number_input("內陸運費(R/kg)", value=dom_rate_def)
 
 st.markdown("---")
 st.subheader("📊 第三步：存入 App 專用資料庫")
-
 final_category = st.selectbox("📂 分類：", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
 
 all_sheets_data = get_all_sheets_data()
@@ -139,15 +138,12 @@ if all_sheets_data and (final_code or final_name):
             if len(row) > 4 and ((final_code and final_code in row[3]) or (final_name and final_name == row[4])):
                 duplicate_no = f"{row[0]} (位於 {s_title})"
                 break
-
 if duplicate_no: st.error(f"🚨 **防撞單雷達警告**：商品已建過！編號：{duplicate_no}")
 
-# 💡 V49 核心：永遠顯示第三步，但用友善的提示防呆
 if final_qty <= 0:
-    st.warning("⚠️ 系統發現「裝箱量」為 0 或未填寫。請在上方補上裝箱量，才能解鎖存檔按鍵喔！")
+    st.warning("⚠️ 請補上「裝箱量」，才能解鎖存檔按鍵。")
 else:
     final_confirm = st.checkbox(f"我已確認【{final_name}】資料正確無誤")
-    
     if st.button("執行存檔", type="primary", disabled=not final_confirm):
         target_ws_data = all_sheets_data.get(final_category, [])
         max_no = 0
@@ -159,11 +155,15 @@ else:
         
         r_idx = len(target_ws_data) + 1 if len(target_ws_data) > 0 else 2
         
-        f_weight = f"=ROUNDUP((H{r_idx}/G{r_idx})*1000*1.03, 2)"
-        f_dom_cost = f"=ROUNDUP((J{r_idx}/1000)*{final_dom}, 2)"
-        f_intl_cost = f"=ROUNDUP((J{r_idx}/1000)*{intl_rate}, 2)"
-        f_total_cost = f"=ROUND((I{r_idx}+K{r_idx}+L{r_idx})*{ex_rate}, 1)"
-        f_quote = f"=ROUND(M{r_idx}/0.9, 1)"
+        # 💡 V50 公式對應正確的欄位字母
+        f_weight = f"=ROUNDUP((H{r_idx}/G{r_idx})*1000*1.03, 2)" # J欄: 重量g/pcs
+        f_dom_cost = f"=ROUNDUP((J{r_idx}/1000)*{final_dom}, 2)" # K欄: 大陸運費
+        f_intl_cost = f"=ROUNDUP((J{r_idx}/1000)*{intl_rate}, 2)" # L欄: 國際運費
+        f_total_cost = f"=ROUND((I{r_idx}+K{r_idx}+L{r_idx})*{ex_rate}, 1)" # M欄: 預估到手成本
+        f_q10 = f"=ROUND(M{r_idx}/0.9, 1)" # N欄: 10%報價
+        f_q13 = f"=ROUND(M{r_idx}/0.87, 1)" # O欄: 13%報價
+        f_q15 = f"=ROUND(M{r_idx}/0.85, 1)" # P欄: 15%報價
+        f_q20 = f"=ROUND(M{r_idx}/0.8, 1)" # Q欄: 20%報價
         
         info_lines = []
         if p["prod_size"]: info_lines.append(f"尺寸 {p['prod_size']}")
@@ -172,23 +172,26 @@ else:
         info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
         
         row_data = [
-            next_no,
-            datetime.datetime.now().strftime("%Y/%-m/%-d"),
-            final_category,
-            final_code,
-            final_name,
-            info_display,
-            final_qty,
-            final_weight,
-            final_price,
-            f_weight,
-            f_dom_cost,
-            f_intl_cost,
-            f_total_cost,
-            f_quote,
-            ""
+            next_no,                       # A 編號
+            datetime.datetime.now().strftime("%Y/%-m/%-d"), # B 日期
+            final_category,                # C 分類
+            final_code,                    # D 貨號
+            final_name,                    # E 名稱
+            info_display,                  # F 規格包裝
+            final_qty,                     # G 裝箱量
+            final_weight,                  # H 毛重KG
+            final_price,                   # I 進價rmb
+            f_weight,                      # J 重量g/pcs
+            f_dom_cost,                    # K 大陸運費rmb
+            f_intl_cost,                   # L 國際運費
+            f_total_cost,                  # M 預估到手成本
+            f_q10,                         # N 10%報價
+            f_q13,                         # O 13%報價
+            f_q15,                         # P 15%報價
+            f_q20,                         # Q 20%報價
+            ""                             # R 圖片
         ]
         
         if save_to_worksheet(final_category, row_data):
             get_all_sheets_data.clear()
-            st.success(f"✅ 已存入【{final_category}】。您可以去表格檢查公式了！")
+            st.success(f"✅ 已存入【{final_category}】。您可以去表格檢查完整的報價欄位了！")
