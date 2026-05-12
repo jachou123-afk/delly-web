@@ -8,10 +8,10 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("📱 朵麗星球 - App 專用資料庫 V46")
-st.info("✅ 規格：轉為【單行資料庫格式】供 AppSheet 使用、直接計算數值、自動生成標題、分類分流。")
+st.title("📱 朵麗星球 - App 專用資料庫 V47")
+st.info("✅ 規格：修復【Response 200 寫入衝突】、採用最高相容 Append 模式、單行資料庫格式。")
 
-# --- 2. Google Sheets 連線功能 (💡 指向全新的測試表格) ---
+# --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "朵麗星球_App測試庫"
 
 @st.cache_data(ttl=15)
@@ -47,20 +47,22 @@ def save_to_worksheet(category_name, row_data):
         except gspread.exceptions.WorksheetNotFound:
             sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
             
-        # 💡 如果是全新的分頁，自動寫入 App 專用的標題列
         existing_data = sheet.get_all_values()
+        
+        # 💡 如果是全新的分頁，自動寫入 App 專用的標題列 (改用最穩定的 append_row)
         if len(existing_data) == 0:
-            headers = [["編號", "日期", "分類", "貨號", "名稱", "規格與包裝", "裝箱量", "毛重KG", "進價RMB", "成本NTD", "10%報價", "商品圖片"]]
-            sheet.update("A1:L1", headers, value_input_option="USER_ENTERED")
-            sheet.format("A1:L1", {"backgroundColor": {"red": 0.8, "green": 0.9, "blue": 1.0}, "textFormat": {"bold": True}})
-            next_row = 2
-        else:
-            next_row = len(existing_data) + 1
-            
-        sheet.update(f"A{next_row}:L{next_row}", [row_data], value_input_option="USER_ENTERED")
+            headers = ["編號", "日期", "分類", "貨號", "名稱", "規格與包裝", "裝箱量", "毛重KG", "進價RMB", "成本NTD", "10%報價", "商品圖片"]
+            sheet.append_row(headers, value_input_option="USER_ENTERED")
+            try:
+                sheet.format("A1:L1", {"backgroundColor": {"red": 0.8, "green": 0.9, "blue": 1.0}, "textFormat": {"bold": True}})
+            except:
+                pass # 就算格式化遇到舊版本問題，也不會中斷存檔
+                
+        # 💡 安全寫入資料 (自動尋找最下面的一行新增，無視套件版本差異)
+        sheet.append_row(row_data, value_input_option="USER_ENTERED")
         return True
     except Exception as e:
-        st.error(f"寫入雲端失敗：{e}")
+        st.error(f"寫入雲端失敗：{repr(e)}")
         return False
 
 # --- 3. 側邊欄設定 ---
@@ -175,9 +177,7 @@ if final_qty > 0:
     
     if st.button("執行存檔", type="primary", disabled=not final_confirm):
         target_data = all_sheets_data.get(final_category, [])
-        true_last_row = len(target_data) if len(target_data) > 0 else 1
         
-        # 計算下一個編號
         max_no = 0
         for r in target_data:
             if r and len(r) > 0:
@@ -185,7 +185,6 @@ if final_qty > 0:
                 if m: max_no = max(max_no, int(m.group(1)))
         next_no = f"no{max_no + 1}"
         
-        # 💡 在 Python 中直接算出絕對數值，讓 AppSheet 讀取更穩定
         f_single_weight = round((final_weight / final_qty) * 1000 * 1.03, 2)
         f_dom_cost = round((f_single_weight / 1000) * final_dom, 2)
         f_intl_cost = round((f_single_weight / 1000) * intl_rate, 2)
@@ -199,7 +198,6 @@ if final_qty > 0:
         info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
         today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
         
-        # 💡 單行資料庫格式！
         row_data = [
             next_no,           # A: 編號
             today_str,         # B: 日期
@@ -215,6 +213,4 @@ if final_qty > 0:
             ""                 # L: 留空給 AppSheet 傳圖片
         ]
         
-        if save_to_worksheet(final_category, row_data):
-            get_all_sheets_data.clear()
-            st.success(f"✅ 已存入【{SHEET_NAME}】的 {final_category} 分頁！編號：{next_no}")
+        if save_to_worksheet(final_category
