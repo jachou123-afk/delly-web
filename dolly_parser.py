@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V42")
-st.info("✅ 規格：新增【自動隱藏外箱尺寸 (不在報價單顯示)】、全局防撞單雷達、全欄位二次編輯、分流。")
+st.title("🪐 半自動 - 採購報價彙整表 V43")
+st.info("✅ 規格：新增【娃娃/吊飾】分類分流、自動隱藏外箱尺寸、全局防撞單雷達、全欄位二次編輯。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -45,6 +45,7 @@ def save_to_worksheet(category_name, rows, st_r):
         try:
             sheet = spreadsheet.worksheet(category_name)
         except gspread.exceptions.WorksheetNotFound:
+            # 💡 自動建立新分頁
             sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
         
         sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
@@ -62,7 +63,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V42) ---
+# --- 4. 解析引擎 (V43) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "outer_box_size": "", "extra_tags": ""}
     if not text: return data
@@ -92,11 +93,8 @@ def parse_text(text):
 
     m_color = re.search(r'彩盒尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_color: data["color_box_size"] = m_color.group(1).strip()
-    
-    # 💡 依然精準抓取外箱，確保它不會被誤認為產品尺寸，但後續存檔時我們不把它寫進去
     m_outer = re.search(r'(?:外箱規格|外箱尺寸|外箱)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_outer: data["outer_box_size"] = m_outer.group(1).strip()
-    
     m_prod = re.search(r'(?<!(?:彩盒|外箱))(?:尺寸|產品|產品)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if not m_prod: m_prod = re.search(r'帽圍\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_prod: data["prod_size"] = m_prod.group(1).strip()
@@ -136,7 +134,9 @@ final_dom = c6.number_input("內陸運費(R/kg)", value=dom_rate_def)
 if final_qty > 0:
     st.markdown("---")
     st.subheader("📊 第三步：選擇分頁與最終確認")
-    final_category = st.selectbox("📂 確定存入的分頁：", ["正版", "玩具", "生活用品"], index=0)
+    
+    # 💡 更新後的分類選項
+    final_category = st.selectbox("📂 確定存入的分頁：", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
     
     all_sheets_data = get_all_sheets_data()
     duplicate_no = None
@@ -150,16 +150,8 @@ if final_qty > 0:
             for i, row in enumerate(sheet_rows):
                 if len(row) > 1:
                     cell_val = str(row[1]).strip()
-                    if check_code and check_code in cell_val:
-                        duplicate_reason = f"貨號：{final_code}"
-                        duplicate_sheet = sheet_title
-                        for j in range(i, -1, -1):
-                            if len(sheet_rows[j]) > 0 and str(sheet_rows[j][0]).lower().startswith('no'):
-                                duplicate_no = sheet_rows[j][0]
-                                break
-                        break
-                    elif check_name and check_name == cell_val:
-                        duplicate_reason = f"名稱：{final_name}"
+                    if (check_code and check_code in cell_val) or (check_name and check_name == cell_val):
+                        duplicate_reason = f"貨號/名稱：{final_code or final_name}"
                         duplicate_sheet = sheet_title
                         for j in range(i, -1, -1):
                             if len(sheet_rows[j]) > 0 and str(sheet_rows[j][0]).lower().startswith('no'):
@@ -169,9 +161,9 @@ if final_qty > 0:
             if duplicate_no: break
 
     if duplicate_no:
-        st.error(f"🚨 **防撞單雷達警告**：您輸入的商品（**{duplicate_reason}**）已經在【{duplicate_sheet}】分頁建檔過了！目前記錄在該分頁的 **{duplicate_no}**。")
+        st.error(f"🚨 **防撞單雷達警告**：商品已經在【{duplicate_sheet}】分頁建檔過了！編號：{duplicate_no}。")
 
-    st.warning(f"即將存入【{final_category}】分頁。請確認以上資料正確無誤。")
+    st.warning(f"即將存入【{final_category}】分頁。")
     final_confirm = st.checkbox(f"我已手動校對完成，確認資料正確")
     
     if st.button("執行存檔", type="primary", disabled=not final_confirm):
@@ -193,7 +185,6 @@ if final_qty > 0:
         f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
         f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
         
-        # 💡 V42 核心邏輯：組裝要給客人的報價文案，直接排除外箱尺寸！
         info_lines = []
         if p["prod_size"]: info_lines.append(f"尺寸 {p['prod_size']}")
         if p["color_box_size"]: info_lines.append(f"彩盒尺寸 {p['color_box_size']}")
