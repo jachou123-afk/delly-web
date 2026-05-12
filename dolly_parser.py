@@ -8,13 +8,12 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V40")
-st.info("✅ 規格：升級【全分頁防撞單全局雷達】、分類手動更正、全欄位二次編輯、分頁自動分流。")
+st.title("🪐 半自動 - 採購報價彙整表 V41")
+st.info("✅ 規格：修復【尺寸標籤誤植】、全局防撞單雷達、全欄位二次編輯、分頁自動分流。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
 
-# 💡 V40 核心升級：一次抓取整份試算表「所有分頁」的資料
 @st.cache_data(ttl=15)
 def get_all_sheets_data():
     try:
@@ -63,12 +62,14 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 ---
+# --- 4. 解析引擎 (V41) ---
 def parse_text(text):
-    data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "box_size": "", "extra_tags": ""}
+    # 💡 增加三個分開的尺寸欄位
+    data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "outer_box_size": "", "extra_tags": ""}
     if not text: return data
     text_norm = text.replace('：', ':')
     
+    # 1. 貨號
     m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9-]+)', text_norm)
     if m_code: data["code"] = m_code.group(1)
     else:
@@ -78,24 +79,37 @@ def parse_text(text):
                 data["code"] = cand
                 break
 
+    # 2. 價格
     text_for_price = re.sub(r'(?:控價|控价|售价|售價|台幣|臺幣).*?(?:\n|$)', '', text_norm)
     m_price = re.search(r'(?:單價|单价|價格|价格|價錢)\s*:?\s*(?:rmb|RMB|¥)?\s*([0-9.]+)', text_for_price)
     if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
     if m_price: data["price"] = float(m_price.group(1))
 
+    # 3. 數量 
     m_qty = re.search(r'(?:每箱數量|每箱數量|裝箱數|裝箱數|箱數|箱數|數量|數量|裝箱量|裝箱量)\s*:?\s*(\d+)', text_norm)
     if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*(\d+)', text_norm)
     if m_qty: data["qty"] = int(m_qty.group(1))
 
+    # 4. 重量 
     m_total_weight = re.search(r'(?:毛重|整箱重量|箱重)\s*:?\s*([0-9.]+)', text_norm)
     if not m_total_weight: m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
     if m_total_weight: data["weight"] = float(m_total_weight.group(1)) 
 
-    m_box = re.search(r'(?:彩盒尺寸|外箱尺寸|外箱)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
-    if m_box: data["box_size"] = m_box.group(1).strip()
+    # 💡 5. 尺寸解析 (精確化標籤)
+    # 找彩盒尺寸
+    m_color = re.search(r'彩盒尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    if m_color: data["color_box_size"] = m_color.group(1).strip()
+    
+    # 找外箱規格/尺寸
+    m_outer = re.search(r'(?:外箱規格|外箱尺寸|外箱)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    if m_outer: data["outer_box_size"] = m_outer.group(1).strip()
+    
+    # 找產品尺寸 (排除彩盒與外箱關鍵字)
     m_prod = re.search(r'(?<!(?:彩盒|外箱))(?:尺寸|產品|產品)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    if not m_prod: m_prod = re.search(r'帽圍\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_prod: data["prod_size"] = m_prod.group(1).strip()
 
+    # 6. 包裝與特殊標籤
     extra_items = []
     if re.search(r'帶[鐳雷]射標', text_norm): extra_items.append("帶雷射標")
     m_pkg = re.search(r'(?:包裝|包裝)\s*:?\s*([^\n,，]+)', text_norm)
@@ -131,10 +145,8 @@ final_dom = c6.number_input("內陸運費(R/kg)", value=dom_rate_def)
 if final_qty > 0:
     st.markdown("---")
     st.subheader("📊 第三步：選擇分頁與最終確認")
-    
     final_category = st.selectbox("📂 確定存入的分頁：", ["正版", "玩具", "生活用品"], index=0)
     
-    # 💡 終極修復：全域防撞單雷達 (掃描所有分頁)
     all_sheets_data = get_all_sheets_data()
     duplicate_no = None
     duplicate_reason = ""
@@ -143,7 +155,6 @@ if final_qty > 0:
     if all_sheets_data and (final_code or final_name):
         check_code = f"貨號 {final_code}".strip() if final_code and len(final_code) > 2 else None
         check_name = final_name.strip() if final_name and len(final_name) > 2 else None
-        
         for sheet_title, sheet_rows in all_sheets_data.items():
             for i, row in enumerate(sheet_rows):
                 if len(row) > 1:
@@ -164,16 +175,15 @@ if final_qty > 0:
                                 duplicate_no = sheet_rows[j][0]
                                 break
                         break
-            if duplicate_no:
-                break
+            if duplicate_no: break
 
     if duplicate_no:
-        st.error(f"🚨 **防撞單雷達警告**：您輸入的商品（**{duplicate_reason}**）已經在【{duplicate_sheet}】分頁建檔過了！目前記錄在該分頁的 **{duplicate_no}**。請確認是否要重複存檔。")
+        st.error(f"🚨 **防撞單雷達警告**：您輸入的商品（**{duplicate_reason}**）已經在【{duplicate_sheet}】分頁建檔過了！目前記錄在該分頁的 **{duplicate_no}**。")
 
-    st.warning(f"即將存入【{final_category}】分頁。請確認以上貨號、名稱、價格皆正確無誤。")
+    st.warning(f"即將存入【{final_category}】分頁。請確認以上資料正確無誤。")
     final_confirm = st.checkbox(f"我已手動校對完成，確認資料正確")
     
-    if st.button("💾 執行存檔", type="primary", disabled=not final_confirm):
+    if st.button("執行存檔", type="primary", disabled=not final_confirm):
         target_data = all_sheets_data.get(final_category, [])
         true_last_row = len(target_data)
         max_no = 0
@@ -192,7 +202,14 @@ if final_qty > 0:
         f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
         f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
         
-        info_display = f"尺寸 {p['prod_size']}\n外箱尺寸 {p['box_size']}\n{p['extra_tags']}".strip()
+        # 💡 V41 核心邏輯：根據不同的尺寸來源顯示正確標籤
+        info_lines = []
+        if p["prod_size"]: info_lines.append(f"尺寸 {p['prod_size']}")
+        if p["color_box_size"]: info_lines.append(f"彩盒尺寸 {p['color_box_size']}")
+        if p["outer_box_size"]: info_lines.append(f"外箱尺寸 {p['outer_box_size']}")
+        if p["extra_tags"]: info_lines.append(p["extra_tags"])
+        
+        info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
         today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
         
         rows = [
@@ -204,5 +221,5 @@ if final_qty > 0:
         ]
         
         if save_to_worksheet(final_category, rows, st_r):
-            get_all_sheets_data.clear() # 💡 存檔成功後立刻清除快取，讓雷達抓取最新資料
+            get_all_sheets_data.clear()
             st.success(f"✅ 儲存成功！已存入【{final_category}】。編號：{next_no}")
