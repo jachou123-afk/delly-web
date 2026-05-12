@@ -94,3 +94,129 @@ def parse_text(text):
     m_color = re.search(r'彩盒尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_color: data["color_box_size"] = m_color.group(1).strip()
     m_outer = re.search(r'(?:外箱規格|外箱尺寸|外箱)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    if m_outer: data["outer_box_size"] = m_outer.group(1).strip()
+    m_prod = re.search(r'(?<!(?:彩盒|外箱))(?:尺寸|產品|產品)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    if not m_prod: m_prod = re.search(r'帽圍\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    if m_prod: data["prod_size"] = m_prod.group(1).strip()
+
+    extra_items = []
+    if re.search(r'帶[鐳雷]射標', text_norm): extra_items.append("帶雷射標")
+    m_pkg = re.search(r'(?:包裝|包裝)\s*:?\s*([^\n,，]+)', text_norm)
+    if m_pkg: extra_items.append(f"包裝:{m_pkg.group(1).strip()}")
+    data["extra_tags"] = "\n".join(extra_items)
+
+    segments = re.split(r'[\n,，]+', text_norm)
+    name_segments = []
+    
+    # 💡 核心修復：把所有會污染名稱的雜訊(包含毛重/材積/體積/條碼)全部加回黑名單
+    exclusion_pattern = r'(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|箱數|箱数|一箱|價格|价格|單價|单价|重量|箱重|尺寸|規格|规格|帽圍|帽围|包裝|包装|毛重|外箱|體積|体积|材積|材积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣|帶[鐳雷]射標)\s*:?'
+    
+    for seg in segments:
+        seg = seg.strip()
+        # 💡 清除廠商亂加的 Emoji (如 💰 📦 ✅ 🔥)
+        seg = re.sub(r'[📦💰✅🔥✨🎈🍦🔫]', '', seg).strip()
+        seg = re.sub(r'\[.*?\]', '', seg)
+        seg = re.sub(r'是?\s*[0-9.]+\s*元', '', seg)
+        
+        if len(seg) < 2: continue 
+        if re.search(exclusion_pattern, seg): continue
+        if re.match(r'^[A-Za-z0-9-\s]+$', seg) or re.match(r'^[0-9.]+\s*[Kk][Gg克]$', seg): continue
+        
+        name_segments.append(seg)
+        
+    if name_segments: 
+        raw_name = " ".join(name_segments[:2]).strip()
+        if data["code"] and data["code"] in raw_name:
+            raw_name = raw_name.replace(data["code"], "").strip()
+        data["name"] = raw_name
+        
+    return data
+
+# --- 5. 主畫面流程 ---
+# 以世界盃風扇作為預設文字
+default_text = "JFH006/7/8正版授權帶鐳射標籤JFH世界杯足球小風扇系列（三款混裝）黑白藍\n\n💰單價：26.8元\n📦裝箱量：100台/箱\n彩盒尺寸：5.3*4.5*13.3cm\n外箱規格：44×26.5×31.5CM\n外箱體積/材積：0.037 m³ / 1.31材\n毛重：15.5KG"
+user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=180)
+
+user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
+p = parse_text(user_input_tw)
+
+st.subheader("🔍 第二步：數據校正 (若解析有誤可直接修改)")
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+final_code = c1.text_input("貨號", value=p["code"])
+final_name = c2.text_input("名稱", value=p["name"])
+final_price = c3.number_input("進價(RMB)", value=p["price"], format="%.2f")
+final_qty = c4.number_input("裝箱量", value=p["qty"], step=1)
+final_weight = c5.number_input("毛重(kg)", value=p["weight"], format="%.2f")
+final_dom = c6.number_input("內陸運費(R/kg)", value=dom_rate_def)
+
+if final_qty > 0:
+    st.markdown("---")
+    st.subheader("📊 第三步：選擇分頁與最終確認")
+    final_category = st.selectbox("📂 確定存入的分頁：", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
+    
+    all_sheets_data = get_all_sheets_data()
+    duplicate_no = None
+    duplicate_reason = ""
+    duplicate_sheet = ""
+
+    if all_sheets_data and (final_code or final_name):
+        check_code = f"貨號 {final_code}".strip() if final_code and len(final_code) > 2 else None
+        check_name = final_name.strip() if final_name and len(final_name) > 2 else None
+        for sheet_title, sheet_rows in all_sheets_data.items():
+            for i, row in enumerate(sheet_rows):
+                if len(row) > 1:
+                    cell_val = str(row[1]).strip()
+                    if (check_code and check_code in cell_val) or (check_name and check_name == cell_val):
+                        duplicate_reason = f"貨號/名稱：{final_code or final_name}"
+                        duplicate_sheet = sheet_title
+                        for j in range(i, -1, -1):
+                            if len(sheet_rows[j]) > 0 and str(sheet_rows[j][0]).lower().startswith('no'):
+                                duplicate_no = sheet_rows[j][0]
+                                break
+                        break
+            if duplicate_no: break
+
+    if duplicate_no:
+        st.error(f"🚨 **防撞單雷達警告**：商品已經在【{duplicate_sheet}】分頁建檔過了！編號：{duplicate_no}。")
+
+    st.warning(f"即將存入【{final_category}】分頁。")
+    final_confirm = st.checkbox(f"我已手動校對完成，確認資料正確")
+    
+    if st.button("執行存檔", type="primary", disabled=not final_confirm):
+        target_data = all_sheets_data.get(final_category, [])
+        true_last_row = len(target_data)
+        max_no = 0
+        for r in target_data:
+            if r and r[0]:
+                m = re.search(r'no(\d+)', str(r[0]), re.IGNORECASE)
+                if m: max_no = max(max_no, int(m.group(1)))
+        next_no = f"no{max_no + 1}"
+        
+        st_r = true_last_row + 2 if true_last_row > 0 else 1
+        v_r = st_r + 1
+        
+        f10, f13, f15, f20 = f"=ROUND(K{v_r}/0.9,1)", f"=ROUND(K{v_r}/0.87,1)", f"=ROUND(K{v_r}/0.85,1)", f"=ROUND(K{v_r}/0.8,1)"
+        f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
+        f_dom_formula = f"=ROUNDUP((H{v_r}/1000)*{final_dom}, 2)"
+        f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
+        f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
+        
+        info_lines = []
+        if p["prod_size"]: info_lines.append(f"尺寸 {p['prod_size']}")
+        if p["color_box_size"]: info_lines.append(f"彩盒尺寸 {p['color_box_size']}")
+        if p["extra_tags"]: info_lines.append(p["extra_tags"])
+        
+        info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
+        today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
+        
+        rows = [
+            [next_no, final_name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
+            [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost],
+            ["", f"裝箱 {final_qty}個/箱", "", "", "", "", "", "", "", "", ""],
+            ["", f"毛重 {final_weight}KG", "", "", "", "", "", "", "", "", ""],
+            ["", f"貨號 {final_code}", "", "", "", "", "", "", "", "", ""]
+        ]
+        
+        if save_to_worksheet(final_category, rows, st_r):
+            get_all_sheets_data.clear()
+            st.success(f"✅ 儲存成功！已存入【{final_category}】。編號：{next_no}")
