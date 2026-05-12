@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("📱 朵麗星球 - 透明資料庫 V48")
-st.info("✅ 規格：寫入【透明 Google 公式】、詳細欄位拆解、單行資料庫格式、全局防撞。")
+st.title("📱 朵麗星球 - 透明資料庫 V49")
+st.info("✅ 規格：修復【存檔按鍵消失】體驗問題、寫入透明公式、單行資料庫格式、全局防撞。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "朵麗星球_App測試庫"
@@ -45,7 +45,6 @@ def save_to_worksheet(category_name, row_data):
             sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
             
         existing_data = sheet.get_all_values()
-        # 💡 V48 標題欄位擴充：拆解運費以便顯示公式
         if len(existing_data) == 0:
             headers = ["編號", "日期", "分類", "貨號", "名稱", "規格包裝", "裝箱量(G)", "毛重KG(H)", "進價RMB(I)", "單個重量g(J)", "大陸運費(K)", "國際運費(L)", "預估成本(M)", "10%報價(N)", "商品圖片"]
             sheet.append_row(headers, value_input_option="USER_ENTERED")
@@ -65,7 +64,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V48) ---
+# --- 4. 解析引擎 ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "outer_box_size": "", "extra_tags": ""}
     if not text: return data
@@ -91,7 +90,6 @@ def parse_text(text):
     if not m_weight: m_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
     if m_weight: data["weight"] = float(m_weight.group(1)) 
 
-    # 尺寸解析
     m_color = re.search(r'彩盒尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     data["color_box_size"] = m_color.group(1).strip() if m_color else ""
     m_prod = re.search(r'(?<!(?:彩盒|外箱))(?:尺寸|產品|產品)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
@@ -128,22 +126,26 @@ final_qty = c4.number_input("裝箱量", value=p["qty"], step=1)
 final_weight = c5.number_input("毛重(kg)", value=p["weight"], format="%.2f")
 final_dom = c6.number_input("內陸運費(R/kg)", value=dom_rate_def)
 
-if final_qty > 0:
-    st.markdown("---")
-    st.subheader("📊 第三步：存入 App 專用資料庫")
-    final_category = st.selectbox("📂 分類：", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
-    
-    all_sheets_data = get_all_sheets_data()
-    duplicate_no = None
-    if all_sheets_data and (final_code or final_name):
-        for s_title, s_rows in all_sheets_data.items():
-            for row in s_rows:
-                if len(row) > 4 and ((final_code and final_code in row[3]) or (final_name and final_name == row[4])):
-                    duplicate_no = f"{row[0]} (位於 {s_title})"
-                    break
+st.markdown("---")
+st.subheader("📊 第三步：存入 App 專用資料庫")
 
-    if duplicate_no: st.error(f"🚨 **防撞單雷達警告**：商品已建過！編號：{duplicate_no}")
+final_category = st.selectbox("📂 分類：", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
 
+all_sheets_data = get_all_sheets_data()
+duplicate_no = None
+if all_sheets_data and (final_code or final_name):
+    for s_title, s_rows in all_sheets_data.items():
+        for row in s_rows:
+            if len(row) > 4 and ((final_code and final_code in row[3]) or (final_name and final_name == row[4])):
+                duplicate_no = f"{row[0]} (位於 {s_title})"
+                break
+
+if duplicate_no: st.error(f"🚨 **防撞單雷達警告**：商品已建過！編號：{duplicate_no}")
+
+# 💡 V49 核心：永遠顯示第三步，但用友善的提示防呆
+if final_qty <= 0:
+    st.warning("⚠️ 系統發現「裝箱量」為 0 或未填寫。請在上方補上裝箱量，才能解鎖存檔按鍵喔！")
+else:
     final_confirm = st.checkbox(f"我已確認【{final_name}】資料正確無誤")
     
     if st.button("執行存檔", type="primary", disabled=not final_confirm):
@@ -155,19 +157,12 @@ if final_qty > 0:
                 if m: max_no = max(max_no, int(m.group(1)))
         next_no = f"no{max_no + 1}"
         
-        # 💡 V48 重點：產出 Google Sheets 公式字串
-        # 假設資料會寫入到 next_row (資料筆數+1)
         r_idx = len(target_ws_data) + 1 if len(target_ws_data) > 0 else 2
         
-        # 單個重量g (J欄) = (H欄毛重 / G欄裝箱量) * 1000 * 1.03
         f_weight = f"=ROUNDUP((H{r_idx}/G{r_idx})*1000*1.03, 2)"
-        # 大陸運費 (K欄) = (J欄重量 / 1000) * 參數
         f_dom_cost = f"=ROUNDUP((J{r_idx}/1000)*{final_dom}, 2)"
-        # 國際運費 (L欄) = (J欄重量 / 1000) * 參數
         f_intl_cost = f"=ROUNDUP((J{r_idx}/1000)*{intl_rate}, 2)"
-        # 預估成本 (M欄) = (I進價 + K大陸運費 + L國際運費) * 匯率
         f_total_cost = f"=ROUND((I{r_idx}+K{r_idx}+L{r_idx})*{ex_rate}, 1)"
-        # 10%報價 (N欄) = M成本 / 0.9
         f_quote = f"=ROUND(M{r_idx}/0.9, 1)"
         
         info_lines = []
@@ -177,21 +172,21 @@ if final_qty > 0:
         info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
         
         row_data = [
-            next_no,                       # A 編號
-            datetime.datetime.now().strftime("%Y/%-m/%-d"), # B 日期
-            final_category,                # C 分類
-            final_code,                    # D 貨號
-            final_name,                    # E 名稱
-            info_display,                  # F 規格包裝
-            final_qty,                     # G 裝箱量
-            final_weight,                  # H 毛重KG
-            final_price,                   # I 進價RMB
-            f_weight,                      # J 公式:單個重量g
-            f_dom_cost,                    # K 公式:大陸運費
-            f_intl_cost,                   # L 公式:國際運費
-            f_total_cost,                  # M 公式:預估成本
-            f_quote,                       # N 公式:10%報價
-            ""                             # O 圖片(留空)
+            next_no,
+            datetime.datetime.now().strftime("%Y/%-m/%-d"),
+            final_category,
+            final_code,
+            final_name,
+            info_display,
+            final_qty,
+            final_weight,
+            final_price,
+            f_weight,
+            f_dom_cost,
+            f_intl_cost,
+            f_total_cost,
+            f_quote,
+            ""
         ]
         
         if save_to_worksheet(final_category, row_data):
