@@ -8,11 +8,11 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V45")
-st.info("✅ 規格：修復【名稱誤刪漏洞】、支援斜線貨號、自動清除Emoji、分流與全局雷達。")
+st.title("📱 朵麗星球 - App 專用資料庫 V46")
+st.info("✅ 規格：轉為【單行資料庫格式】供 AppSheet 使用、直接計算數值、自動生成標題、分類分流。")
 
-# --- 2. Google Sheets 連線功能 ---
-SHEET_NAME = "半自動 - 採購報價彙整表"
+# --- 2. Google Sheets 連線功能 (💡 指向全新的測試表格) ---
+SHEET_NAME = "朵麗星球_App測試庫"
 
 @st.cache_data(ttl=15)
 def get_all_sheets_data():
@@ -32,7 +32,7 @@ def get_all_sheets_data():
     except Exception as e:
         return {}
 
-def save_to_worksheet(category_name, rows, st_r):
+def save_to_worksheet(category_name, row_data):
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         if st.secrets.get("gcp_service_account"):
@@ -46,11 +46,18 @@ def save_to_worksheet(category_name, rows, st_r):
             sheet = spreadsheet.worksheet(category_name)
         except gspread.exceptions.WorksheetNotFound:
             sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
-        
-        sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
-        sheet.format(f"B{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
-        sheet.format(f"C{st_r}:F{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
-        sheet.format(f"G{st_r}:K{st_r}", {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}})
+            
+        # 💡 如果是全新的分頁，自動寫入 App 專用的標題列
+        existing_data = sheet.get_all_values()
+        if len(existing_data) == 0:
+            headers = [["編號", "日期", "分類", "貨號", "名稱", "規格與包裝", "裝箱量", "毛重KG", "進價RMB", "成本NTD", "10%報價", "商品圖片"]]
+            sheet.update("A1:L1", headers, value_input_option="USER_ENTERED")
+            sheet.format("A1:L1", {"backgroundColor": {"red": 0.8, "green": 0.9, "blue": 1.0}, "textFormat": {"bold": True}})
+            next_row = 2
+        else:
+            next_row = len(existing_data) + 1
+            
+        sheet.update(f"A{next_row}:L{next_row}", [row_data], value_input_option="USER_ENTERED")
         return True
     except Exception as e:
         st.error(f"寫入雲端失敗：{e}")
@@ -62,13 +69,12 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V45) ---
+# --- 4. 解析引擎 ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "outer_box_size": "", "extra_tags": ""}
     if not text: return data
     text_norm = text.replace('：', ':')
     
-    # 💡 增加斜線支援，讓 JFH006/7/8 可以被完整抓取
     m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9-/]+)', text_norm)
     if m_code: data["code"] = m_code.group(1)
     else:
@@ -107,8 +113,6 @@ def parse_text(text):
 
     segments = re.split(r'[\n,，]+', text_norm)
     name_segments = []
-    
-    # 💡 核心修復：改用 re.match()，只過濾「開頭是」這些字眼的句子，保護商品名稱！
     exclusion_pattern = r'^(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|箱數|箱数|一箱|價格|价格|單價|单价|重量|箱重|尺寸|彩盒|規格|规格|帽圍|帽围|包裝|包装|毛重|外箱|體積|体积|材積|材积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣)'
     
     for seg in segments:
@@ -116,11 +120,9 @@ def parse_text(text):
         seg = re.sub(r'[📦💰✅🔥✨🎈🍦🔫]', '', seg).strip()
         seg = re.sub(r'\[.*?\]', '', seg)
         seg = re.sub(r'是?\s*[0-9.]+\s*元', '', seg)
-        
         if len(seg) < 2: continue 
         if re.match(exclusion_pattern, seg): continue
         if re.match(r'^[A-Za-z0-9-\s/]+$', seg) or re.match(r'^[0-9.]+\s*[Kk][Gg克]$', seg): continue
-        
         name_segments.append(seg)
         
     if name_segments: 
@@ -132,13 +134,11 @@ def parse_text(text):
     return data
 
 # --- 5. 主畫面流程 ---
-default_text = "JFH006/7/8正版授權帶鐳射標籤JFH世界杯足球小風扇系列（三款混裝）黑白藍\n\n💰單價：26.8元\n📦裝箱量：100台/箱\n彩盒尺寸：5.3*4.5*13.3cm\n外箱規格：44×26.5×31.5CM\n外箱體積/材積：0.037 m³ / 1.31材\n毛重：15.5KG"
-user_input = st.text_area("📝 第一步：貼上廠商微信文案", value=default_text, height=180)
-
+user_input = st.text_area("📝 第一步：貼上廠商微信文案", height=150)
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 p = parse_text(user_input_tw)
 
-st.subheader("🔍 第二步：數據校正 (若解析有誤可直接修改)")
+st.subheader("🔍 第二步：數據校正")
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 final_code = c1.text_input("貨號", value=p["code"])
 final_name = c2.text_input("名稱", value=p["name"])
@@ -149,72 +149,72 @@ final_dom = c6.number_input("內陸運費(R/kg)", value=dom_rate_def)
 
 if final_qty > 0:
     st.markdown("---")
-    st.subheader("📊 第三步：選擇分頁與最終確認")
-    final_category = st.selectbox("📂 確定存入的分頁：", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
+    st.subheader("📊 第三步：存入 App 專用資料庫")
+    final_category = st.selectbox("📂 分類：", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
     
     all_sheets_data = get_all_sheets_data()
     duplicate_no = None
-    duplicate_reason = ""
-    duplicate_sheet = ""
 
     if all_sheets_data and (final_code or final_name):
-        check_code = f"貨號 {final_code}".strip() if final_code and len(final_code) > 2 else None
+        check_code = f"{final_code}".strip() if final_code and len(final_code) > 2 else None
         check_name = final_name.strip() if final_name and len(final_name) > 2 else None
         for sheet_title, sheet_rows in all_sheets_data.items():
             for i, row in enumerate(sheet_rows):
-                if len(row) > 1:
-                    cell_val = str(row[1]).strip()
-                    if (check_code and check_code in cell_val) or (check_name and check_name == cell_val):
-                        duplicate_reason = f"貨號/名稱：{final_code or final_name}"
-                        duplicate_sheet = sheet_title
-                        for j in range(i, -1, -1):
-                            if len(sheet_rows[j]) > 0 and str(sheet_rows[j][0]).lower().startswith('no'):
-                                duplicate_no = sheet_rows[j][0]
-                                break
+                if len(row) > 4:
+                    row_code = str(row[3]).strip()
+                    row_name = str(row[4]).strip()
+                    if (check_code and check_code in row_code) or (check_name and check_name == row_name):
+                        duplicate_no = str(row[0])
                         break
             if duplicate_no: break
 
     if duplicate_no:
-        st.error(f"🚨 **防撞單雷達警告**：商品已經在【{duplicate_sheet}】分頁建檔過了！編號：{duplicate_no}。")
+        st.error(f"🚨 **防撞單雷達警告**：商品已經建檔過了！編號：{duplicate_no}。")
 
-    st.warning(f"即將存入【{final_category}】分頁。")
-    final_confirm = st.checkbox(f"我已手動校對完成，確認資料正確")
+    final_confirm = st.checkbox(f"我已手動校對完成，確認寫入 App 資料庫")
     
     if st.button("執行存檔", type="primary", disabled=not final_confirm):
         target_data = all_sheets_data.get(final_category, [])
-        true_last_row = len(target_data)
+        true_last_row = len(target_data) if len(target_data) > 0 else 1
+        
+        # 計算下一個編號
         max_no = 0
         for r in target_data:
-            if r and r[0]:
+            if r and len(r) > 0:
                 m = re.search(r'no(\d+)', str(r[0]), re.IGNORECASE)
                 if m: max_no = max(max_no, int(m.group(1)))
         next_no = f"no{max_no + 1}"
         
-        st_r = true_last_row + 2 if true_last_row > 0 else 1
-        v_r = st_r + 1
-        
-        f10, f13, f15, f20 = f"=ROUND(K{v_r}/0.9,1)", f"=ROUND(K{v_r}/0.87,1)", f"=ROUND(K{v_r}/0.85,1)", f"=ROUND(K{v_r}/0.8,1)"
-        f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
-        f_dom_formula = f"=ROUNDUP((H{v_r}/1000)*{final_dom}, 2)"
-        f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
-        f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
+        # 💡 在 Python 中直接算出絕對數值，讓 AppSheet 讀取更穩定
+        f_single_weight = round((final_weight / final_qty) * 1000 * 1.03, 2)
+        f_dom_cost = round((f_single_weight / 1000) * final_dom, 2)
+        f_intl_cost = round((f_single_weight / 1000) * intl_rate, 2)
+        f_cost = round((final_price + f_dom_cost + f_intl_cost) * ex_rate, 1)
+        f10 = round(f_cost / 0.9, 1)
         
         info_lines = []
         if p["prod_size"]: info_lines.append(f"尺寸 {p['prod_size']}")
         if p["color_box_size"]: info_lines.append(f"彩盒尺寸 {p['color_box_size']}")
         if p["extra_tags"]: info_lines.append(p["extra_tags"])
-        
         info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
         today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
         
-        rows = [
-            [next_no, final_name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
-            [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost],
-            ["", f"裝箱 {final_qty}個/箱", "", "", "", "", "", "", "", "", ""],
-            ["", f"毛重 {final_weight}KG", "", "", "", "", "", "", "", "", ""],
-            ["", f"貨號 {final_code}", "", "", "", "", "", "", "", "", ""]
+        # 💡 單行資料庫格式！
+        row_data = [
+            next_no,           # A: 編號
+            today_str,         # B: 日期
+            final_category,    # C: 分類
+            final_code,        # D: 貨號
+            final_name,        # E: 名稱
+            info_display,      # F: 規格包裝
+            final_qty,         # G: 裝箱量
+            final_weight,      # H: 毛重KG
+            final_price,       # I: 進價RMB
+            f_cost,            # J: 成本NTD
+            f10,               # K: 10%報價NTD
+            ""                 # L: 留空給 AppSheet 傳圖片
         ]
         
-        if save_to_worksheet(final_category, rows, st_r):
+        if save_to_worksheet(final_category, row_data):
             get_all_sheets_data.clear()
-            st.success(f"✅ 儲存成功！已存入【{final_category}】。編號：{next_no}")
+            st.success(f"✅ 已存入【{SHEET_NAME}】的 {final_category} 分頁！編號：{next_no}")
