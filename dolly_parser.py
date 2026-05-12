@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V41")
-st.info("✅ 規格：修復【尺寸標籤誤植】、全局防撞單雷達、全欄位二次編輯、分頁自動分流。")
+st.title("🪐 半自動 - 採購報價彙整表 V42")
+st.info("✅ 規格：新增【自動隱藏外箱尺寸 (不在報價單顯示)】、全局防撞單雷達、全欄位二次編輯、分流。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -62,14 +62,12 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 (V41) ---
+# --- 4. 解析引擎 (V42) ---
 def parse_text(text):
-    # 💡 增加三個分開的尺寸欄位
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "outer_box_size": "", "extra_tags": ""}
     if not text: return data
     text_norm = text.replace('：', ':')
     
-    # 1. 貨號
     m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9-]+)', text_norm)
     if m_code: data["code"] = m_code.group(1)
     else:
@@ -79,37 +77,30 @@ def parse_text(text):
                 data["code"] = cand
                 break
 
-    # 2. 價格
     text_for_price = re.sub(r'(?:控價|控价|售价|售價|台幣|臺幣).*?(?:\n|$)', '', text_norm)
     m_price = re.search(r'(?:單價|单价|價格|价格|價錢)\s*:?\s*(?:rmb|RMB|¥)?\s*([0-9.]+)', text_for_price)
     if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
     if m_price: data["price"] = float(m_price.group(1))
 
-    # 3. 數量 
     m_qty = re.search(r'(?:每箱數量|每箱數量|裝箱數|裝箱數|箱數|箱數|數量|數量|裝箱量|裝箱量)\s*:?\s*(\d+)', text_norm)
     if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*(\d+)', text_norm)
     if m_qty: data["qty"] = int(m_qty.group(1))
 
-    # 4. 重量 
     m_total_weight = re.search(r'(?:毛重|整箱重量|箱重)\s*:?\s*([0-9.]+)', text_norm)
     if not m_total_weight: m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
     if m_total_weight: data["weight"] = float(m_total_weight.group(1)) 
 
-    # 💡 5. 尺寸解析 (精確化標籤)
-    # 找彩盒尺寸
     m_color = re.search(r'彩盒尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_color: data["color_box_size"] = m_color.group(1).strip()
     
-    # 找外箱規格/尺寸
+    # 💡 依然精準抓取外箱，確保它不會被誤認為產品尺寸，但後續存檔時我們不把它寫進去
     m_outer = re.search(r'(?:外箱規格|外箱尺寸|外箱)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_outer: data["outer_box_size"] = m_outer.group(1).strip()
     
-    # 找產品尺寸 (排除彩盒與外箱關鍵字)
     m_prod = re.search(r'(?<!(?:彩盒|外箱))(?:尺寸|產品|產品)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if not m_prod: m_prod = re.search(r'帽圍\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_prod: data["prod_size"] = m_prod.group(1).strip()
 
-    # 6. 包裝與特殊標籤
     extra_items = []
     if re.search(r'帶[鐳雷]射標', text_norm): extra_items.append("帶雷射標")
     m_pkg = re.search(r'(?:包裝|包裝)\s*:?\s*([^\n,，]+)', text_norm)
@@ -123,7 +114,7 @@ def parse_text(text):
         seg = re.sub(r'\[.*?\]', '', seg)
         seg = re.sub(r'是?\s*[0-9.]+\s*元', '', seg)
         if len(seg) < 2: continue 
-        if re.search(r'(?:型號|貨號|產品|數量|裝箱|箱數|價格|單價|重量|尺寸|包裝|外箱|運費|控價|台幣|帶[鐳雷]射標)\s*:?', seg): continue
+        if re.search(r'(?:型號|貨號|產品|數量|裝箱|箱數|價格|單價|重量|尺寸|規格|包裝|外箱|運費|體積|材積|控價|台幣|帶[鐳雷]射標)\s*:?', seg): continue
         name_segments.append(seg)
     if name_segments: data["name"] = " ".join(name_segments[:2]).strip()
     return data
@@ -202,11 +193,10 @@ if final_qty > 0:
         f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
         f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
         
-        # 💡 V41 核心邏輯：根據不同的尺寸來源顯示正確標籤
+        # 💡 V42 核心邏輯：組裝要給客人的報價文案，直接排除外箱尺寸！
         info_lines = []
         if p["prod_size"]: info_lines.append(f"尺寸 {p['prod_size']}")
         if p["color_box_size"]: info_lines.append(f"彩盒尺寸 {p['color_box_size']}")
-        if p["outer_box_size"]: info_lines.append(f"外箱尺寸 {p['outer_box_size']}")
         if p["extra_tags"]: info_lines.append(p["extra_tags"])
         
         info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
