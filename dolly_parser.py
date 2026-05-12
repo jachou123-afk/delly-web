@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V38")
-st.info("✅ 規格：新增【分類手動更正】、全欄位二次編輯、分頁自動分流、團隊防撞提醒。")
+st.title("🪐 半自動 - 採購報價彙整表 V39")
+st.info("✅ 規格：加回【團隊防撞單雷達】、分類手動更正、全欄位二次編輯、分頁自動分流。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -30,6 +30,17 @@ def get_worksheet(category_name):
     except Exception as e:
         st.error(f"連線錯誤: {e}")
         return None
+
+# 💡 建立快取機制，避免檢查重複時過度消耗 Google API 額度 (每15秒更新一次)
+@st.cache_data(ttl=15)
+def get_cached_data(category_name):
+    sheet = get_worksheet(category_name)
+    if sheet:
+        try:
+            return sheet.get_all_values()
+        except:
+            return []
+    return []
 
 # --- 3. 側邊欄設定 ---
 st.sidebar.header("⚙️ 成本參數設定")
@@ -95,7 +106,6 @@ p = parse_text(user_input_tw)
 
 st.subheader("🔍 第二步：數據校正 (若解析有誤可直接修改)")
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-# 💡 這裡開放讓您手動改，改完後存檔會以這裡為準
 final_code = c1.text_input("貨號", value=p["code"])
 final_name = c2.text_input("名稱", value=p["name"])
 final_price = c3.number_input("進價(RMB)", value=p["price"], format="%.2f")
@@ -107,10 +117,40 @@ if final_qty > 0:
     st.markdown("---")
     st.subheader("📊 第三步：選擇分頁與最終確認")
     
-    # 💡 分類選擇直接放在這，方便更正「正版/玩具/生活用品」
-    # 系統會預設在「正版」，若不是則手動切換
+    # 分類選擇
     final_category = st.selectbox("📂 確定存入的分頁：", ["正版", "玩具", "生活用品"], index=0)
     
+    # 💡 重新加回：自動檢查重複邏輯 (會根據選擇的分類去查)
+    all_data = get_cached_data(final_category)
+    duplicate_no = None
+    duplicate_reason = ""
+
+    if all_data and (final_code or final_name):
+        check_code = f"貨號 {final_code}".strip() if final_code and len(final_code) > 2 else None
+        check_name = final_name.strip() if final_name and len(final_name) > 2 else None
+        
+        for i, row in enumerate(all_data):
+            if len(row) > 1:
+                cell_val = str(row[1]).strip()
+                if check_code and check_code in cell_val:
+                    duplicate_reason = f"貨號：{final_code}"
+                    for j in range(i, -1, -1):
+                        if len(all_data[j]) > 0 and str(all_data[j][0]).lower().startswith('no'):
+                            duplicate_no = all_data[j][0]
+                            break
+                    break
+                elif check_name and check_name == cell_val:
+                    duplicate_reason = f"名稱：{final_name}"
+                    for j in range(i, -1, -1):
+                        if len(all_data[j]) > 0 and str(all_data[j][0]).lower().startswith('no'):
+                            duplicate_no = all_data[j][0]
+                            break
+                    break
+
+    # 💡 顯示防撞警告
+    if duplicate_no:
+        st.error(f"🚨 **防撞單提醒**：您輸入的商品（**{duplicate_reason}**）已經在【{final_category}】建檔過了！目前記錄在 **{duplicate_no}**。請確認是否仍要重複存入。")
+
     st.warning(f"即將存入【{final_category}】分頁。請確認以上貨號、名稱、價格皆正確無誤。")
     final_confirm = st.checkbox(f"我已手動校對完成，確認資料正確")
     
@@ -149,6 +189,10 @@ if final_qty > 0:
                 
                 sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
                 sheet.format(f"B{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
+                
+                # 💡 存檔成功後立刻清除快取，保證下次防撞雷達能抓到最新進度
+                get_cached_data.clear()
+                
                 st.success(f"✅ 儲存成功！已存入【{final_category}】。編號：{next_no}")
             except Exception as e:
                 st.error(f"儲存失敗：{e}")
