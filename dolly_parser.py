@@ -8,11 +8,10 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 (經典排版版)")
-st.info("✅ 規格：回歸【區塊式複製排版】、精準名稱過濾、自動清除Emoji、娃娃/吊飾分流、全局雷達。")
+st.title("🪐 半自動 - 採購報價彙整表 V52")
+st.info("✅ 規格：經典 5 行排版存檔、修復【裝箱冒號與整箱毛重誤判】、LINE 圖文預覽/一鍵複製區。")
 
 # --- 2. Google Sheets 連線功能 ---
-# 💡 已經幫您改回原本的正式表格名稱了！
 SHEET_NAME = "半自動 - 採購報價彙整表"
 
 @st.cache_data(ttl=15)
@@ -48,7 +47,6 @@ def save_to_worksheet(category_name, rows, st_r):
         except gspread.exceptions.WorksheetNotFound:
             sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
         
-        # 💡 以 5 行區塊寫入
         sheet.update(f"A{st_r}:K{st_r+4}", rows, value_input_option="USER_ENTERED")
         sheet.format(f"B{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
         sheet.format(f"C{st_r}:F{st_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
@@ -64,7 +62,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 ---
+# --- 4. 解析引擎 (V52 修復版) ---
 def parse_text(text):
     data = {"code": "", "name": "", "price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "outer_box_size": "", "extra_tags": ""}
     if not text: return data
@@ -84,11 +82,13 @@ def parse_text(text):
     if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
     if m_price: data["price"] = float(m_price.group(1))
 
-    m_qty = re.search(r'(?:每箱數量|每箱數量|裝箱數|裝箱數|箱數|箱數|數量|數量|裝箱量|裝箱量)\s*:?\s*(\d+)', text_norm)
-    if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*(\d+)', text_norm)
+    # 💡 核心修復 1：加入 :? 讓系統無視冒號，成功抓取「裝箱：24pcs」
+    m_qty = re.search(r'(?:每箱數量|裝箱數|箱數|數量|裝箱量)\s*:?\s*(\d+)', text_norm)
+    if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*:?\s*(\d+)', text_norm)
     if m_qty: data["qty"] = int(m_qty.group(1))
 
-    m_total_weight = re.search(r'(?:毛重|整箱重量|箱重)\s*:?\s*([0-9.]+)', text_norm)
+    # 💡 核心修復 2：明確加入「整箱毛重」，確保不會抓漏
+    m_total_weight = re.search(r'(?:整箱毛重|毛重|整箱重量|箱重)\s*:?\s*([0-9.]+)', text_norm)
     if not m_total_weight: m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
     if m_total_weight: data["weight"] = float(m_total_weight.group(1)) 
 
@@ -109,7 +109,8 @@ def parse_text(text):
     segments = re.split(r'[\n,，]+', text_norm)
     name_segments = []
     
-    exclusion_pattern = r'^(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|箱數|箱数|一箱|價格|价格|單價|单价|重量|箱重|尺寸|彩盒|規格|规格|帽圍|帽围|包裝|包装|毛重|外箱|體積|体积|材積|材积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣)'
+    # 💡 核心修復 3：把「整箱毛重」加入防呆黑名單，避免它污染商品名稱
+    exclusion_pattern = r'^(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|箱數|箱数|一箱|價格|价格|單價|单价|重量|箱重|尺寸|彩盒|規格|规格|帽圍|帽围|包裝|包装|整箱毛重|毛重|外箱|體積|体积|材積|材积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣)'
     
     for seg in segments:
         seg = seg.strip()
@@ -132,9 +133,15 @@ def parse_text(text):
     return data
 
 # --- 5. 主畫面流程 ---
-user_input = st.text_area("📝 第一步：貼上廠商微信文案", height=150)
-user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
-p = parse_text(user_input_tw)
+col_left, col_right = st.columns([2, 1])
+
+with col_left:
+    user_input = st.text_area("📝 第一步：貼上廠商微信文案", height=150)
+    user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
+    p = parse_text(user_input_tw)
+
+with col_right:
+    uploaded_image = st.file_uploader("🖼️ 附加商品圖片 (選填，方便預覽與複製)", type=["jpg", "png", "jpeg"])
 
 st.subheader("🔍 第二步：數據校正 (若解析有誤可直接修改)")
 c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -147,14 +154,38 @@ final_dom = c6.number_input("內陸運費(R/kg)", value=dom_rate_def)
 
 if final_qty > 0:
     st.markdown("---")
-    st.subheader("📊 第三步：選擇分頁與最終確認")
+    
+    f_weight = round((final_weight / final_qty) * 1000 * 1.03, 2)
+    f_dom_cost = round((f_weight / 1000) * final_dom, 2)
+    f_intl_cost = round((f_weight / 1000) * intl_rate, 2)
+    f_cost = round((final_price + f_dom_cost + f_intl_cost) * ex_rate, 1)
+    f10 = round(f_cost / 0.9, 1)
+    
+    info_lines = []
+    if p["prod_size"]: info_lines.append(f"尺寸 {p['prod_size']}")
+    if p["color_box_size"]: info_lines.append(f"彩盒尺寸 {p['color_box_size']}")
+    if p["extra_tags"]: info_lines.append(p["extra_tags"])
+    info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
+    
+    st.subheader("📱 給客人的 LINE 報價預覽 (右上角可一鍵複製)")
+    preview_col1, preview_col2 = st.columns([1, 2])
+    with preview_col1:
+        if uploaded_image:
+            st.image(uploaded_image, use_container_width=True)
+            st.caption("👆 您可以在圖片上【點擊右鍵 ➡️ 複製圖片】")
+        else:
+            st.info("尚未上傳圖片")
+    with preview_col2:
+        line_text = f"{final_name}\n{info_display}\n裝箱：{final_qty}個/箱\n單價：{f10} 元\n毛重：{final_weight} KG\n貨號：{final_code}"
+        st.code(line_text, language="text")
+        st.caption("👆 點擊右上角的複製圖示，即可將文案貼到 LINE。")
+
+    st.markdown("---")
+    st.subheader("📊 第三步：選擇分頁與存入 Google 表格")
     final_category = st.selectbox("📂 確定存入的分頁：", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
     
     all_sheets_data = get_all_sheets_data()
     duplicate_no = None
-    duplicate_reason = ""
-    duplicate_sheet = ""
-
     if all_sheets_data and (final_code or final_name):
         check_code = f"貨號 {final_code}".strip() if final_code and len(final_code) > 2 else None
         check_name = final_name.strip() if final_name and len(final_name) > 2 else None
@@ -163,22 +194,18 @@ if final_qty > 0:
                 if len(row) > 1:
                     cell_val = str(row[1]).strip()
                     if (check_code and check_code in cell_val) or (check_name and check_name == cell_val):
-                        duplicate_reason = f"貨號/名稱：{final_code or final_name}"
-                        duplicate_sheet = sheet_title
                         for j in range(i, -1, -1):
                             if len(sheet_rows[j]) > 0 and str(sheet_rows[j][0]).lower().startswith('no'):
-                                duplicate_no = sheet_rows[j][0]
+                                duplicate_no = f"{sheet_rows[j][0]} (在 {sheet_title})"
                                 break
                         break
             if duplicate_no: break
 
     if duplicate_no:
-        st.error(f"🚨 **防撞單雷達警告**：商品已經在【{duplicate_sheet}】分頁建檔過了！編號：{duplicate_no}。")
+        st.error(f"🚨 **防撞單雷達警告**：商品已經建檔過了！編號：{duplicate_no}。")
 
-    st.warning(f"即將存入【{final_category}】分頁。")
-    final_confirm = st.checkbox(f"我已手動校對完成，確認資料正確")
-    
-    if st.button("執行存檔", type="primary", disabled=not final_confirm):
+    final_confirm = st.checkbox(f"我已確認資料正確，準備寫入雲端")
+    if st.button("💾 執行存檔 (存入經典 5 行格式)", type="primary", disabled=not final_confirm):
         target_data = all_sheets_data.get(final_category, [])
         true_last_row = len(target_data)
         max_no = 0
@@ -191,23 +218,18 @@ if final_qty > 0:
         st_r = true_last_row + 2 if true_last_row > 0 else 1
         v_r = st_r + 1
         
-        f10, f13, f15, f20 = f"=ROUND(K{v_r}/0.9,1)", f"=ROUND(K{v_r}/0.87,1)", f"=ROUND(K{v_r}/0.85,1)", f"=ROUND(K{v_r}/0.8,1)"
-        f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
+        f13, f15, f20 = f"=ROUND(K{v_r}/0.87,1)", f"=ROUND(K{v_r}/0.85,1)", f"=ROUND(K{v_r}/0.8,1)"
+        f10_formula = f"=ROUND(K{v_r}/0.9,1)"
+        f_cost_formula = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
         f_dom_formula = f"=ROUNDUP((H{v_r}/1000)*{final_dom}, 2)"
         f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
         f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
         
-        info_lines = []
-        if p["prod_size"]: info_lines.append(f"尺寸 {p['prod_size']}")
-        if p["color_box_size"]: info_lines.append(f"彩盒尺寸 {p['color_box_size']}")
-        if p["extra_tags"]: info_lines.append(p["extra_tags"])
-        
-        info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
         today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
         
         rows = [
             [next_no, final_name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
-            [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost],
+            [today_str, info_display, f10_formula, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost_formula],
             ["", f"裝箱 {final_qty}個/箱", "", "", "", "", "", "", "", "", ""],
             ["", f"毛重 {final_weight}KG", "", "", "", "", "", "", "", "", ""],
             ["", f"貨號 {final_code}", "", "", "", "", "", "", "", "", ""]
