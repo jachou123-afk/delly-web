@@ -35,9 +35,22 @@ def get_credentials():
         clean_dict = {}
         for k, v in s_dict.items():
             if isinstance(v, str):
-                clean_dict[k] = clean_str(v)
+                # private_key 不能淨化換行!其他欄位才需要
+                if k == "private_key":
+                    clean_dict[k] = v
+                else:
+                    clean_dict[k] = clean_str(v)
             else:
                 clean_dict[k] = v
+
+        # 強制用 bytes decode 覆寫,100% 排除隱形字元
+        clean_dict['token_uri'] = b"https://oauth2.googleapis.com/token".decode('ascii')
+        clean_dict['auth_uri'] = b"https://accounts.google.com/o/oauth2/auth".decode('ascii')
+        clean_dict['auth_provider_x509_cert_url'] = b"https://www.googleapis.com/oauth2/v1/certs".decode('ascii')
+
+        return ServiceAccountCredentials.from_json_keyfile_dict(clean_dict, scope)
+    else:
+        return ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
 
         # 強制用 bytes decode 覆寫,100% 排除隱形字元
         clean_dict['token_uri'] = b"https://oauth2.googleapis.com/token".decode('ascii')
