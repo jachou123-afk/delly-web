@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V60")
-st.info("✅ 規格:【金鑰防護 V3】、【解析引擎簡化暴力版】、同規多款批量建檔、經典 5 行排版。")
+st.title("🪐 半自動 - 採購報價彙整表 V61")
+st.info("✅ 規格:【金鑰防護 V3】、【全形逗號修正】、同規多款批量建檔、經典 5 行排版。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -86,7 +86,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 V3 (暴力簡化版) ---
+# --- 4. 解析引擎 V4 (全形逗號修正版) ---
 def parse_text(text):
     common = {"price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "extra_tags": ""}
     products = []
@@ -94,51 +94,45 @@ def parse_text(text):
         return common, products
     
     # === 共用參數抓取 ===
-    
-    # 抓價格
     m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text)
     if m_price:
         common["price"] = float(m_price.group(1))
     
-    # 抓裝箱量
     m_qty = re.search(r'一箱\s*(\d+)', text)
     if not m_qty:
         m_qty = re.search(r'(?:裝箱|装箱|裝箱量)\s*:?\s*(\d+)', text)
     if m_qty:
         common["qty"] = int(m_qty.group(1))
     
-    # 抓毛重
     m_weight = re.search(r'(\d+(?:\.\d+)?)\s*[Kk][Gg]', text)
     if m_weight:
         common["weight"] = float(m_weight.group(1))
     
-    # 抓彩盒尺寸
     m_color = re.search(r'彩盒(?:尺寸)?\s*:?\s*([0-9.*xX×\s\-]+(?:[cC][mM]|公分)?)', text)
     if m_color:
         common["color_box_size"] = m_color.group(1).strip()
     
-    # 抓外箱規格(當產品尺寸用)
     m_outer = re.search(r'外箱(?:規格|规格|尺寸)?\s*:?\s*([0-9.*xX×\s\-]+(?:[cC][mM]|公分)?)', text)
     if m_outer:
         common["prod_size"] = m_outer.group(1).strip()
     
     common["extra_tags"] = ""
 
-    # === 商品清單抓取 (暴力法) ===
-    # 核心邏輯:逐行掃描,只要這行符合「英文字母+數字 開頭,後面跟逗號(全形或半形)」就抓
-    
-    lines = text.split('\n')
+    # === 商品清單抓取 (核心:統一逗號) ===
+    # 先把全形逗號、頓號統一成半形逗號
+    text_for_lines = text.replace('，', ',').replace('、', ',')
+    lines = text_for_lines.split('\n')
     
     for line in lines:
         line = line.strip()
         if not line:
             continue
         
-        # 暴力匹配:行首 = 英文字母至少 1 個 + 數字至少 3 個,後面跟著逗號或空白
-        m = re.match(r'^([A-Za-z]+\d{3,}[A-Za-z0-9\-]*)\s*[,,、]\s*(.+)$', line)
+        # 行首 = 英文字母 + 數字 + 逗號 + 名稱
+        m = re.match(r'^([A-Za-z]+\d{3,}[A-Za-z0-9\-]*)\s*,\s*(.+)$', line)
         if m:
             code = m.group(1).strip()
-            name = m.group(2).strip()
+            name = m.group(2).strip().lstrip(',').strip()
             if name and len(name) >= 2:
                 products.append({"code": code, "name": name})
     
@@ -155,8 +149,8 @@ user_input = st.text_area("📝 第一步:貼上廠商微信文案 (支援同規
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 common_data, products_data = parse_text(user_input_tw)
 
-# 🔍 診斷區(若抓不到可開啟)
-with st.expander("🔧 診斷資訊 (展開查看解析過程)"):
+# 🔧 診斷區
+with st.expander("🔧 診斷資訊 (若解析有誤可展開查看)"):
     st.write(f"原始輸入長度: {len(user_input)}")
     st.write(f"轉繁後長度: {len(user_input_tw)}")
     st.write(f"抓到商品數: {len(products_data)}")
@@ -165,10 +159,12 @@ with st.expander("🔧 診斷資訊 (展開查看解析過程)"):
     if user_input_tw:
         st.write("---")
         st.write("逐行分析:")
-        for i, line in enumerate(user_input_tw.split('\n')):
-            m = re.match(r'^([A-Za-z]+\d{3,}[A-Za-z0-9\-]*)\s*[,,、]\s*(.+)$', line.strip())
+        test_text = user_input_tw.replace('，', ',').replace('、', ',')
+        for i, line in enumerate(test_text.split('\n')):
+            line_s = line.strip()
+            m = re.match(r'^([A-Za-z]+\d{3,}[A-Za-z0-9\-]*)\s*,\s*(.+)$', line_s)
             status = "✅ 匹配" if m else "❌ 不匹配"
-            st.write(f"行 {i+1}: {status} | `{line}`")
+            st.write(f"行 {i+1}: {status} | `{line_s}`")
 
 st.subheader("🔍 第二步:共用參數校正")
 c1, c2, c3, c4 = st.columns(4)
