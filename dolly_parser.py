@@ -8,22 +8,20 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V57")
-st.info("✅ 規格:【金鑰自動淨化防護 V2】、同規多款批量建檔、經典 5 行排版。")
+st.title("🪐 半自動 - 採購報價彙整表 V58")
+st.info("✅ 規格:【金鑰防護 V3 - 修正 private_key 換行問題】、同規多款批量建檔、經典 5 行排版。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
 
 def clean_str(v):
-    """徹底清除所有隱形字元"""
+    """徹底清除所有隱形字元(不含換行,因為 private_key 需要保留換行)"""
     return (v
         .replace('\u200b', '')
         .replace('\ufeff', '')
         .replace('\u00a0', '')
         .replace('\u3000', '')
-        .replace('\r\n', '')
         .replace('\r', '')
-        .replace('\n', '')
         .replace('\t', '')
         .strip()
     )
@@ -35,7 +33,7 @@ def get_credentials():
         clean_dict = {}
         for k, v in s_dict.items():
             if isinstance(v, str):
-                # private_key 不能淨化換行!其他欄位才需要
+                # private_key 不能淨化,因為換行不能被破壞
                 if k == "private_key":
                     clean_dict[k] = v
                 else:
@@ -52,16 +50,6 @@ def get_credentials():
     else:
         return ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
 
-        # 強制用 bytes decode 覆寫,100% 排除隱形字元
-        clean_dict['token_uri'] = b"https://oauth2.googleapis.com/token".decode('ascii')
-        clean_dict['auth_uri'] = b"https://accounts.google.com/o/oauth2/auth".decode('ascii')
-        clean_dict['auth_provider_x509_cert_url'] = b"https://www.googleapis.com/oauth2/v1/certs".decode('ascii')
-
-        return ServiceAccountCredentials.from_json_keyfile_dict(clean_dict, scope)
-    else:
-        return ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
-
-@st.cache_data(ttl=15)
 @st.cache_data(ttl=15)
 def get_all_sheets_data():
     try:
@@ -73,18 +61,7 @@ def get_all_sheets_data():
             all_data[ws.title] = ws.get_all_values()
         return all_data
     except Exception as e:
-        # 診斷用:印出 private_key 開頭與結尾
-        try:
-            s_dict = dict(st.secrets["gcp_service_account"])
-            pk = s_dict.get("private_key", "")
-            st.error(f"private_key 長度: {len(pk)}")
-            st.error(f"開頭 50 字: {repr(pk[:50])}")
-            st.error(f"結尾 50 字: {repr(pk[-50:])}")
-            st.error(f"是否含 \\n: {chr(10) in pk}")
-            st.error(f"是否含字串 '\\n': {'\\n' in pk}")
-        except Exception as e2:
-            st.error(f"無法讀 secrets: {e2}")
-        st.error(f"原始錯誤:{e}")
+        st.error(f"讀取雲端失敗:{e}")
         return {}
 
 def save_bulk_to_worksheet(category_name, bulk_rows, st_r):
@@ -121,32 +98,43 @@ dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=
 def parse_text(text):
     common = {"price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "extra_tags": ""}
     products = []
-    if not text: return common, products
+    if not text:
+        return common, products
     
     text_norm = text.replace(':', ':')
     
     text_for_price = re.sub(r'(?:控價|控价|售价|售價|台幣|臺幣).*?(?:\n|$)', '', text_norm)
     m_price = re.search(r'(?:單價|单价|價格|价格|價錢)\s*:?\s*(?:rmb|RMB|¥)?\s*([0-9.]+)', text_for_price)
-    if not m_price: m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
-    if m_price: common["price"] = float(m_price.group(1))
+    if not m_price:
+        m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
+    if m_price:
+        common["price"] = float(m_price.group(1))
 
     m_qty = re.search(r'(?:每箱數量|裝箱數|箱數|數量|裝箱量)\s*:?\s*(\d+)', text_norm)
-    if not m_qty: m_qty = re.search(r'(?:裝箱|一箱)\s*:?\s*(\d+)', text_norm)
-    if m_qty: common["qty"] = int(m_qty.group(1))
+    if not m_qty:
+        m_qty = re.search(r'(?:裝箱|一箱)\s*:?\s*(\d+)', text_norm)
+    if m_qty:
+        common["qty"] = int(m_qty.group(1))
 
     m_total_weight = re.search(r'(?:整箱毛重|毛重|整箱重量|箱重)\s*:?\s*([0-9.]+)', text_norm)
-    if not m_total_weight: m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
-    if m_total_weight: common["weight"] = float(m_total_weight.group(1))
+    if not m_total_weight:
+        m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
+    if m_total_weight:
+        common["weight"] = float(m_total_weight.group(1))
 
     m_color = re.search(r'彩盒尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
-    if m_color: common["color_box_size"] = m_color.group(1).strip()
+    if m_color:
+        common["color_box_size"] = m_color.group(1).strip()
     m_prod = re.search(r'(?<!(?:彩盒|外箱))(?:尺寸|產品|產品)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
-    if m_prod: common["prod_size"] = m_prod.group(1).strip()
+    if m_prod:
+        common["prod_size"] = m_prod.group(1).strip()
 
     extra_items = []
-    if re.search(r'帶[鐳雷]射標', text_norm): extra_items.append("帶雷射標")
+    if re.search(r'帶[鐳雷]射標', text_norm):
+        extra_items.append("帶雷射標")
     m_pkg = re.search(r'(?:包裝|包裝)\s*:?\s*([^\n,,]+)', text_norm)
-    if m_pkg: extra_items.append(f"包裝:{m_pkg.group(1).strip()}")
+    if m_pkg:
+        extra_items.append(f"包裝:{m_pkg.group(1).strip()}")
     common["extra_tags"] = "\n".join(extra_items)
 
     lines = text_norm.split('\n')
@@ -155,8 +143,10 @@ def parse_text(text):
     for line in lines:
         line = line.strip()
         line = re.sub(r'[📦💰✅🔥✨🎈🍦🔫\[\]]', '', line).strip()
-        if not line or re.match(exclusion, line): continue
-        if re.search(r'(價格|价|装箱|毛重|重量|尺寸|规格|运费|包装)', line): continue
+        if not line or re.match(exclusion, line):
+            continue
+        if re.search(r'(價格|价|装箱|毛重|重量|尺寸|规格|运费|包装)', line):
+            continue
         
         m = re.match(r'^([A-Za-z0-9-]{4,})[,,\s]+(.*)$', line)
         if m:
@@ -168,7 +158,8 @@ def parse_text(text):
     if not products:
         single_code = ""
         m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9-/]+)', text_norm)
-        if m_code: single_code = m_code.group(1)
+        if m_code:
+            single_code = m_code.group(1)
         else:
             cands = re.findall(r'([A-Za-z0-9-/]{4,})', text_norm)
             for c in cands:
@@ -180,11 +171,14 @@ def parse_text(text):
             seg = seg.strip()
             seg = re.sub(r'[📦💰✅🔥✨🎈🍦🔫\[\]]', '', seg).strip()
             seg = re.sub(r'是?\s*[0-9.]+\s*元', '', seg)
-            if len(seg) < 2 or re.match(exclusion, seg): continue
-            if re.match(r'^[A-Za-z0-9-\s/]+$', seg) or re.match(r'^[0-9.]+\s*[Kk][Gg克]$', seg): continue
+            if len(seg) < 2 or re.match(exclusion, seg):
+                continue
+            if re.match(r'^[A-Za-z0-9-\s/]+$', seg) or re.match(r'^[0-9.]+\s*[Kk][Gg克]$', seg):
+                continue
             name_segs.append(seg)
         single_name = " ".join(name_segs[:2]).strip() if name_segs else ""
-        if single_code and single_code in single_name: single_name = single_name.replace(single_code, "").strip()
+        if single_code and single_code in single_name:
+            single_name = single_name.replace(single_code, "").strip()
         products.append({"code": single_code, "name": single_name})
         
     return common, products
@@ -204,8 +198,10 @@ final_dom = c4.number_input("內陸運費(R/kg)", value=dom_rate_def)
 st.markdown("---")
 st.subheader("📋 擷取到的商品清單 (可直接編輯、新增或刪除)")
 df_items = pd.DataFrame(products_data)
-if "code" not in df_items.columns: df_items["code"] = ""
-if "name" not in df_items.columns: df_items["name"] = ""
+if "code" not in df_items.columns:
+    df_items["code"] = ""
+if "name" not in df_items.columns:
+    df_items["name"] = ""
 df_items.insert(0, "寫入", True)
 df_items = df_items.rename(columns={"code": "貨號", "name": "名稱"})
 
@@ -238,7 +234,8 @@ if final_qty > 0:
                                     dup_found = True
                                     break
                             break
-                    if dup_found: break
+                    if dup_found:
+                        break
 
     if duplicate_warnings:
         for warn in duplicate_warnings:
@@ -254,15 +251,19 @@ if final_qty > 0:
             for r in target_data:
                 if r and r[0]:
                     m = re.search(r'no(\d+)', str(r[0]), re.IGNORECASE)
-                    if m: max_no = max(max_no, int(m.group(1)))
+                    if m:
+                        max_no = max(max_no, int(m.group(1)))
             
             st_r = true_last_row + 2 if true_last_row > 0 else 1
             
             bulk_rows = []
             info_lines = []
-            if common_data["prod_size"]: info_lines.append(f"尺寸 {common_data['prod_size']}")
-            if common_data["color_box_size"]: info_lines.append(f"彩盒尺寸 {common_data['color_box_size']}")
-            if common_data["extra_tags"]: info_lines.append(common_data["extra_tags"])
+            if common_data["prod_size"]:
+                info_lines.append(f"尺寸 {common_data['prod_size']}")
+            if common_data["color_box_size"]:
+                info_lines.append(f"彩盒尺寸 {common_data['color_box_size']}")
+            if common_data["extra_tags"]:
+                info_lines.append(common_data["extra_tags"])
             info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
             today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
             
