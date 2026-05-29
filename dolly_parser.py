@@ -8,14 +8,14 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V58")
-st.info("✅ 規格:【金鑰防護 V3 - 修正 private_key 換行問題】、同規多款批量建檔、經典 5 行排版。")
+st.title("🪐 半自動 - 採購報價彙整表 V59")
+st.info("✅ 規格:【金鑰防護 V3】、【解析引擎強化版】、同規多款批量建檔、經典 5 行排版。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
 
 def clean_str(v):
-    """徹底清除所有隱形字元(不含換行,因為 private_key 需要保留換行)"""
+    """徹底清除所有隱形字元(不含換行)"""
     return (v
         .replace('\u200b', '')
         .replace('\ufeff', '')
@@ -33,7 +33,6 @@ def get_credentials():
         clean_dict = {}
         for k, v in s_dict.items():
             if isinstance(v, str):
-                # private_key 不能淨化,因為換行不能被破壞
                 if k == "private_key":
                     clean_dict[k] = v
                 else:
@@ -41,7 +40,6 @@ def get_credentials():
             else:
                 clean_dict[k] = v
 
-        # 強制用 bytes decode 覆寫,100% 排除隱形字元
         clean_dict['token_uri'] = b"https://oauth2.googleapis.com/token".decode('ascii')
         clean_dict['auth_uri'] = b"https://accounts.google.com/o/oauth2/auth".decode('ascii')
         clean_dict['auth_provider_x509_cert_url'] = b"https://www.googleapis.com/oauth2/v1/certs".decode('ascii')
@@ -94,97 +92,146 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 ---
+# --- 4. 解析引擎 V2 (強化批量抓取) ---
 def parse_text(text):
     common = {"price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "extra_tags": ""}
     products = []
     if not text:
         return common, products
     
-    text_norm = text.replace(':', ':')
+    # 把全形逗號、冒號統一
+    text_norm = text.replace(':', ':').replace(',', ',')
     
+    # === 共用參數抓取 ===
+    
+    # 抓價格:支援「都是 18.8 元」「[Fireworks]18.8 元」「單價 18.8」等
     text_for_price = re.sub(r'(?:控價|控价|售价|售價|台幣|臺幣).*?(?:\n|$)', '', text_norm)
-    m_price = re.search(r'(?:單價|单价|價格|价格|價錢)\s*:?\s*(?:rmb|RMB|¥)?\s*([0-9.]+)', text_for_price)
+    m_price = re.search(r'(?:單價|单价|價格|价格|價錢|都是|价是)\s*:?\s*(?:\[[^\]]*\])?\s*(?:rmb|RMB|¥)?\s*([0-9]+(?:\.[0-9]+)?)', text_for_price)
     if not m_price:
         m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text_for_price)
     if m_price:
         common["price"] = float(m_price.group(1))
-
-    m_qty = re.search(r'(?:每箱數量|裝箱數|箱數|數量|裝箱量)\s*:?\s*(\d+)', text_norm)
+    
+    # 抓裝箱量:支援「一箱 60 只」「裝箱 60」「60 個/箱」等
+    m_qty = re.search(r'(?:每箱數量|裝箱數|箱數|數量|裝箱量|裝箱|装箱|一箱)\s*:?\s*(\d+)\s*(?:只|个|個|pcs)?', text_norm)
     if not m_qty:
-        m_qty = re.search(r'(?:裝箱|一箱)\s*:?\s*(\d+)', text_norm)
+        m_qty = re.search(r'一箱\s*(\d+)', text_norm)
+    if not m_qty:
+        m_qty = re.search(r'(\d+)\s*(?:只|个|個|pcs)\s*[//]\s*箱', text_norm)
     if m_qty:
         common["qty"] = int(m_qty.group(1))
 
+    # 抓毛重
     m_total_weight = re.search(r'(?:整箱毛重|毛重|整箱重量|箱重)\s*:?\s*([0-9.]+)', text_norm)
     if not m_total_weight:
         m_total_weight = re.search(r'([0-9.]+)\s*[Kk][Gg]', text_norm)
     if m_total_weight:
         common["weight"] = float(m_total_weight.group(1))
 
-    m_color = re.search(r'彩盒尺寸\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    # 抓尺寸
+    m_color = re.search(r'彩盒(?:尺寸|規格|规格)?\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_color:
         common["color_box_size"] = m_color.group(1).strip()
-    m_prod = re.search(r'(?<!(?:彩盒|外箱))(?:尺寸|產品|產品)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
+    m_prod = re.search(r'(?<!(?:彩盒|外箱))(?:產品尺寸|产品尺寸|尺寸)\s*:?\s*([0-9.*xX×\s-]+(?:[cC][mM]|公分)?)', text_norm)
     if m_prod:
         common["prod_size"] = m_prod.group(1).strip()
 
     extra_items = []
     if re.search(r'帶[鐳雷]射標', text_norm):
         extra_items.append("帶雷射標")
-    m_pkg = re.search(r'(?:包裝|包裝)\s*:?\s*([^\n,,]+)', text_norm)
-    if m_pkg:
-        extra_items.append(f"包裝:{m_pkg.group(1).strip()}")
     common["extra_tags"] = "\n".join(extra_items)
 
+    # === 商品清單抓取 (核心強化) ===
+    
+    # 排除關鍵字(行首出現這些字代表不是商品行)
+    exclusion_keywords = [
+        '型號', '型号', '貨號', '货号', '產品', '产品', '條碼', '条码',
+        '數量', '数量', '裝箱', '装箱', '箱數', '箱数', '一箱', '這', '这',
+        '價格', '价格', '單價', '单价', '價錢', '都是', '价是',
+        '重量', '箱重', '尺寸', '彩盒', '規格', '规格', '帽圍', '帽围',
+        '包裝', '包装', '整箱毛重', '毛重', '外箱', '體積', '体积',
+        '材積', '材积', '運費', '运费', '海快', '控價', '控价',
+        '售價', '售价', '台幣', '臺幣', '一張', '一张'
+    ]
+    
     lines = text_norm.split('\n')
-    exclusion = r'^(?:型號|型号|貨號|货号|產品|产品|條碼|条码|數量|数量|裝箱|装箱|箱數|箱数|一箱|價格|价格|單價|单价|重量|箱重|尺寸|彩盒|規格|规格|帽圍|帽围|包裝|包装|整箱毛重|毛重|外箱|體積|体积|材積|材积|運費|运费|海快|控價|控价|售價|售价|台幣|臺幣|这|這)'
     
     for line in lines:
         line = line.strip()
-        line = re.sub(r'[📦💰✅🔥✨🎈🍦🔫\[\]]', '', line).strip()
-        if not line or re.match(exclusion, line):
-            continue
-        if re.search(r'(價格|价|装箱|毛重|重量|尺寸|规格|运费|包装)', line):
+        # 清除表情符號和括號
+        line = re.sub(r'[📦💰✅🔥✨🎈🍦🔫\[\]【】]', '', line).strip()
+        if not line:
             continue
         
-        m = re.match(r'^([A-Za-z0-9-]{4,})[,,\s]+(.*)$', line)
+        # 檢查是否以排除字首開頭
+        is_excluded = False
+        for kw in exclusion_keywords:
+            if line.startswith(kw):
+                is_excluded = True
+                break
+        if is_excluded:
+            continue
+        
+        # 行中包含這些字也跳過(描述句)
+        if re.search(r'(?:都是|价是|这\d+款|這\d+款|图片|圖片|装箱|裝箱)', line):
+            continue
+        
+        # 核心匹配:貨號(英數字+數字組合) + 分隔符 + 名稱
+        # 支援格式:FF756628,史迪仔... / FF756628 史迪仔... / FF756628、史迪仔...
+        m = re.match(r'^([A-Za-z]+[0-9]+[A-Za-z0-9\-]*|[0-9]+[A-Za-z]+[A-Za-z0-9\-]*)[\s,、,:]+(.+)$', line)
         if m:
             code = m.group(1).strip()
             name = m.group(2).strip()
-            if not re.match(r'^\d+(?:\.\d+)?(?:pcs|kg|g|cm|mm|rmb|m³)$', code, re.IGNORECASE) and not re.match(r'^[\d/]+$', code) and 'opp' not in code.lower():
+            # 過濾掉純數字尾巴(如 29KG)、單位
+            if not re.match(r'^\d+(?:\.\d+)?(?:pcs|kg|g|cm|mm|rmb|m³)$', code, re.IGNORECASE):
+                if 'opp' not in code.lower() and len(name) >= 2:
+                    products.append({"code": code, "name": name})
+                    continue
+        
+        # 補強:沒有分隔符的「貨號 名稱」也試試
+        m2 = re.match(r'^([A-Z]{2,}[0-9]{3,})\s+(.+)$', line)
+        if m2:
+            code = m2.group(1).strip()
+            name = m2.group(2).strip()
+            if len(name) >= 2:
                 products.append({"code": code, "name": name})
-                
+                continue
+    
+    # 若沒抓到任何商品,fallback 單品邏輯
     if not products:
         single_code = ""
-        m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9-/]+)', text_norm)
+        m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号)\s*:?\s*([A-Za-z0-9\-/]+)', text_norm)
         if m_code:
             single_code = m_code.group(1)
         else:
-            cands = re.findall(r'([A-Za-z0-9-/]{4,})', text_norm)
+            cands = re.findall(r'([A-Za-z]+[0-9]{3,}[A-Za-z0-9\-]*)', text_norm)
             for c in cands:
-                if not re.match(r'^\d+(?:\.\d+)?(?:pcs|kg|g|cm|mm|rmb|m³)$', c, re.IGNORECASE) and not re.match(r'^[\d/]+$', c) and 'opp' not in c.lower():
+                if 'opp' not in c.lower():
                     single_code = c
                     break
-        name_segs = []
-        for seg in re.split(r'[\n,,]+', text_norm):
-            seg = seg.strip()
-            seg = re.sub(r'[📦💰✅🔥✨🎈🍦🔫\[\]]', '', seg).strip()
-            seg = re.sub(r'是?\s*[0-9.]+\s*元', '', seg)
-            if len(seg) < 2 or re.match(exclusion, seg):
+        
+        single_name = ""
+        for line in lines:
+            line = re.sub(r'[📦💰✅🔥✨🎈🍦🔫\[\]【】]', '', line).strip()
+            if not line:
                 continue
-            if re.match(r'^[A-Za-z0-9-\s/]+$', seg) or re.match(r'^[0-9.]+\s*[Kk][Gg克]$', seg):
+            is_excluded = False
+            for kw in exclusion_keywords:
+                if line.startswith(kw):
+                    is_excluded = True
+                    break
+            if is_excluded:
                 continue
-            name_segs.append(seg)
-        single_name = " ".join(name_segs[:2]).strip() if name_segs else ""
-        if single_code and single_code in single_name:
-            single_name = single_name.replace(single_code, "").strip()
+            if single_code and single_code in line:
+                single_name = line.replace(single_code, "").strip(' ,,、:: -')
+                break
+        
         products.append({"code": single_code, "name": single_name})
         
     return common, products
 
 # --- 5. 主畫面流程 ---
-user_input = st.text_area("📝 第一步:貼上廠商微信文案 (支援同規多款批量)", height=150)
+user_input = st.text_area("📝 第一步:貼上廠商微信文案 (支援同規多款批量)", height=200)
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 common_data, products_data = parse_text(user_input_tw)
 
@@ -196,7 +243,7 @@ final_weight = c3.number_input("毛重(kg)", value=common_data["weight"], format
 final_dom = c4.number_input("內陸運費(R/kg)", value=dom_rate_def)
 
 st.markdown("---")
-st.subheader("📋 擷取到的商品清單 (可直接編輯、新增或刪除)")
+st.subheader(f"📋 擷取到的商品清單 (共 {len(products_data)} 筆,可直接編輯、新增或刪除)")
 df_items = pd.DataFrame(products_data)
 if "code" not in df_items.columns:
     df_items["code"] = ""
