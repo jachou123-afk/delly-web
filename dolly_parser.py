@@ -49,6 +49,7 @@ def get_credentials():
         return ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
 
 @st.cache_data(ttl=15)
+@st.cache_data(ttl=15)
 def get_all_sheets_data():
     try:
         creds = get_credentials()
@@ -59,7 +60,18 @@ def get_all_sheets_data():
             all_data[ws.title] = ws.get_all_values()
         return all_data
     except Exception as e:
-        st.error(f"讀取雲端失敗:{e}")
+        # 診斷用:印出 private_key 開頭與結尾
+        try:
+            s_dict = dict(st.secrets["gcp_service_account"])
+            pk = s_dict.get("private_key", "")
+            st.error(f"private_key 長度: {len(pk)}")
+            st.error(f"開頭 50 字: {repr(pk[:50])}")
+            st.error(f"結尾 50 字: {repr(pk[-50:])}")
+            st.error(f"是否含 \\n: {chr(10) in pk}")
+            st.error(f"是否含字串 '\\n': {'\\n' in pk}")
+        except Exception as e2:
+            st.error(f"無法讀 secrets: {e2}")
+        st.error(f"原始錯誤:{e}")
         return {}
 
 def save_bulk_to_worksheet(category_name, bulk_rows, st_r):
