@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V61")
-st.info("✅ 規格:【金鑰防護 V3】、【全形逗號修正】、同規多款批量建檔、經典 5 行排版。")
+st.title("🪐 半自動 - 採購報價彙整表 V62")
+st.info("✅ 規格:【金鑰防護 V3】、【全形逗號修正】、【商品區塊自動空一行】、批量建檔。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -59,7 +59,8 @@ def get_all_sheets_data():
         st.error(f"讀取雲端失敗:{e}")
         return {}
 
-def save_bulk_to_worksheet(category_name, bulk_rows, st_r):
+def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
+    """block_size=6 表示每個商品區塊 = 5 行內容 + 1 行空白"""
     try:
         creds = get_credentials()
         client = gspread.authorize(creds)
@@ -70,8 +71,10 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r):
             sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
         end_r = st_r + len(bulk_rows) - 1
         sheet.update(f"A{st_r}:K{end_r}", bulk_rows, value_input_option="USER_ENTERED")
-        for i in range(len(bulk_rows) // 5):
-            base_r = st_r + (i * 5)
+        # 格式化:每個區塊的第一行(標題列)
+        num_blocks = len(bulk_rows) // block_size
+        for i in range(num_blocks):
+            base_r = st_r + (i * block_size)
             sheet.format(f"B{base_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
             sheet.format(f"C{base_r}:F{base_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
             sheet.format(f"G{base_r}:K{base_r}", {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}})
@@ -86,14 +89,13 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 V4 (全形逗號修正版) ---
+# --- 4. 解析引擎 ---
 def parse_text(text):
     common = {"price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "extra_tags": ""}
     products = []
     if not text:
         return common, products
     
-    # === 共用參數抓取 ===
     m_price = re.search(r'(\d+(?:\.\d+)?)\s*元', text)
     if m_price:
         common["price"] = float(m_price.group(1))
@@ -118,8 +120,6 @@ def parse_text(text):
     
     common["extra_tags"] = ""
 
-    # === 商品清單抓取 (核心:統一逗號) ===
-    # 先把全形逗號、頓號統一成半形逗號
     text_for_lines = text.replace('，', ',').replace('、', ',')
     lines = text_for_lines.split('\n')
     
@@ -127,8 +127,6 @@ def parse_text(text):
         line = line.strip()
         if not line:
             continue
-        
-        # 行首 = 英文字母 + 數字 + 逗號 + 名稱
         m = re.match(r'^([A-Za-z]+\d{3,}[A-Za-z0-9\-]*)\s*,\s*(.+)$', line)
         if m:
             code = m.group(1).strip()
@@ -136,7 +134,6 @@ def parse_text(text):
             if name and len(name) >= 2:
                 products.append({"code": code, "name": name})
     
-    # 若沒抓到,fallback 找單筆
     if not products:
         m_code = re.search(r'([A-Za-z]+\d{4,})', text)
         single_code = m_code.group(1) if m_code else ""
@@ -149,7 +146,6 @@ user_input = st.text_area("📝 第一步:貼上廠商微信文案 (支援同規
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 common_data, products_data = parse_text(user_input_tw)
 
-# 🔧 診斷區
 with st.expander("🔧 診斷資訊 (若解析有誤可展開查看)"):
     st.write(f"原始輸入長度: {len(user_input)}")
     st.write(f"轉繁後長度: {len(user_input_tw)}")
@@ -245,10 +241,13 @@ if final_qty > 0:
             info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
             today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
             
+            empty_row = ["", "", "", "", "", "", "", "", "", "", ""]
+            
             for idx, row in to_save_df.iterrows():
                 max_no += 1
                 next_no = f"no{max_no}"
                 
+                # 每個商品區塊 = 5 行內容 + 1 行空白 = 6 行
                 v_r = st_r + len(bulk_rows) + 1
                 
                 f10 = f"=ROUND(K{v_r}/0.9,1)"
@@ -265,10 +264,11 @@ if final_qty > 0:
                     [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost],
                     ["", f"裝箱 {final_qty}個/箱", "", "", "", "", "", "", "", "", ""],
                     ["", f"毛重 {final_weight}KG", "", "", "", "", "", "", "", "", ""],
-                    ["", f"貨號 {str(row['貨號']).strip()}", "", "", "", "", "", "", "", "", ""]
+                    ["", f"貨號 {str(row['貨號']).strip()}", "", "", "", "", "", "", "", "", ""],
+                    empty_row  # 🆕 每個商品下方加一行空白
                 ]
                 bulk_rows.extend(block)
             
-            if save_bulk_to_worksheet(final_category, bulk_rows, st_r):
+            if save_bulk_to_worksheet(final_category, bulk_rows, st_r, block_size=6):
                 get_all_sheets_data.clear()
                 st.success(f"✅ 批量儲存成功!已一口氣將 {len(to_save_df)} 款商品存入【{final_category}】!")
