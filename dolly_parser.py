@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V63")
-st.info("✅ 規格:【金鑰防護 V3】、【支援批量+單品兩種格式】、區塊空一行、批量建檔。")
+st.title("🪐 半自動 - 採購報價彙整表 V64")
+st.info("✅ 規格:【金鑰防護 V3】、【尺寸抓取強化-逐行掃描】、區塊空一行、批量建檔。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -87,26 +87,26 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 V5 (支援批量+單品) ---
+# --- 4. 解析引擎 V6 (尺寸抓取強化-逐行掃描) ---
 def parse_text(text):
     common = {"price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "extra_tags": ""}
     products = []
     if not text:
         return common, products
     
-    # 把全形冒號統一成半形,方便匹配
+    # 統一冒號、逗號
     text_n = text.replace(':', ':').replace('，', ',').replace('、', ',')
     
     # === 共用參數抓取 ===
     
-    # 抓價格:支援「單價:4 元」「都是 18.8 元」「4 元」等
+    # 抓價格
     m_price = re.search(r'(?:單價|单价|價格|价格|價錢|价钱|售價|售价|都是)\s*:?\s*(?:\[[^\]]*\])?\s*(?:rmb|RMB|¥)?\s*([0-9]+(?:\.[0-9]+)?)', text_n)
     if not m_price:
         m_price = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*元', text_n)
     if m_price:
         common["price"] = float(m_price.group(1))
     
-    # 抓裝箱量:支援「箱數:240pcs」「一箱 60 只」「裝箱 60」等
+    # 抓裝箱量
     m_qty = re.search(r'(?:每箱數量|裝箱數|裝箱量|箱數|箱数|裝箱|装箱|數量|数量)\s*:?\s*([0-9]+)', text_n)
     if not m_qty:
         m_qty = re.search(r'一箱\s*([0-9]+)', text_n)
@@ -115,27 +115,37 @@ def parse_text(text):
     if m_qty:
         common["qty"] = int(m_qty.group(1))
     
-    # 抓毛重:支援「箱重:26kg」「整箱毛重 29」「29KG」等
+    # 抓毛重
     m_weight = re.search(r'(?:整箱毛重|箱重|毛重|整箱重量)\s*:?\s*([0-9]+(?:\.[0-9]+)?)', text_n)
     if not m_weight:
         m_weight = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*[Kk][Gg]', text_n)
     if m_weight:
         common["weight"] = float(m_weight.group(1))
     
-    # 抓彩盒尺寸:支援「彩盒:10.5*6.3*13.6cm」「彩盒尺寸 61.5*4.8*25.8CM」
-    m_color = re.search(r'彩盒(?:尺寸|規格|规格)?\s*:?\s*([0-9.*xX×\s\-]+(?:[cC][mM]|公分)?)', text_n)
-    if m_color:
-        common["color_box_size"] = m_color.group(1).strip()
+    # 抓尺寸:逐行掃描更可靠
+    size_pattern = r'([0-9]+(?:\.[0-9]+)?(?:[*xX×][0-9]+(?:\.[0-9]+)?)+(?:[cC][mM]|公分)?)'
+    for line in text_n.split('\n'):
+        line_s = line.strip()
+        # 彩盒
+        if line_s.startswith('彩盒') and not common["color_box_size"]:
+            m = re.search(size_pattern, line_s)
+            if m:
+                common["color_box_size"] = m.group(1).strip()
+        # 產品
+        elif (line_s.startswith('產品') or line_s.startswith('产品')) and not common["prod_size"]:
+            m = re.search(size_pattern, line_s)
+            if m:
+                common["prod_size"] = m.group(1).strip()
     
-    # 抓產品尺寸:支援「產品:11*5.7*13cm」「尺寸 X*Y*Z」(不包含彩盒、外箱)
-    m_prod = re.search(r'(?:產品|产品|產品尺寸|产品尺寸)\s*:?\s*([0-9.*xX×\s\-]+(?:[cC][mM]|公分)?)', text_n)
-    if m_prod:
-        common["prod_size"] = m_prod.group(1).strip()
-    else:
-        # fallback:用外箱規格
-        m_outer = re.search(r'外箱(?:規格|规格|尺寸)?\s*:?\s*([0-9.*xX×\s\-]+(?:[cC][mM]|公分)?)', text_n)
-        if m_outer:
-            common["prod_size"] = m_outer.group(1).strip()
+    # fallback:產品尺寸沒抓到時用外箱
+    if not common["prod_size"]:
+        for line in text_n.split('\n'):
+            line_s = line.strip()
+            if line_s.startswith('外箱'):
+                m = re.search(size_pattern, line_s)
+                if m:
+                    common["prod_size"] = m.group(1).strip()
+                    break
     
     common["extra_tags"] = ""
 
@@ -156,13 +166,11 @@ def parse_text(text):
     
     # 模式 B:單品格式(若 A 沒抓到)
     if not products:
-        # 抓型號/貨號:支援「型号:888-6」「貨號 FF756628」等
         single_code = ""
         m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号|編號|编号)\s*:?\s*([A-Za-z0-9\-/]+)', text_n)
         if m_code:
             single_code = m_code.group(1).strip()
         
-        # 抓名稱:取第一行非參數說明的文字當名稱
         single_name = ""
         exclusion_keywords = [
             '型號', '型号', '貨號', '货号', '單價', '单价', '價格', '价格',
@@ -182,7 +190,6 @@ def parse_text(text):
                     break
             if is_excluded:
                 continue
-            # 跳過純數字+單位的行
             if re.match(r'^[0-9.*xX×\s\-]+(?:[cC][mM]|公分|[Kk][Gg]|元|pcs)?$', line_s):
                 continue
             single_name = line_s
@@ -210,6 +217,11 @@ final_price = c1.number_input("進價(RMB)", value=common_data["price"], format=
 final_qty = c2.number_input("裝箱量", value=common_data["qty"], step=1)
 final_weight = c3.number_input("毛重(kg)", value=common_data["weight"], format="%.2f")
 final_dom = c4.number_input("內陸運費(R/kg)", value=dom_rate_def)
+
+# 顯示抓到的尺寸資訊
+c5, c6 = st.columns(2)
+final_prod_size = c5.text_input("產品尺寸", value=common_data["prod_size"])
+final_color_size = c6.text_input("彩盒尺寸", value=common_data["color_box_size"])
 
 st.markdown("---")
 st.subheader(f"📋 擷取到的商品清單 (共 {len(products_data)} 筆,可直接編輯、新增或刪除)")
@@ -274,12 +286,10 @@ if final_qty > 0:
             
             bulk_rows = []
             info_lines = []
-            if common_data["prod_size"]:
-                info_lines.append(f"尺寸 {common_data['prod_size']}")
-            if common_data["color_box_size"]:
-                info_lines.append(f"彩盒尺寸 {common_data['color_box_size']}")
-            if common_data["extra_tags"]:
-                info_lines.append(common_data["extra_tags"])
+            if final_prod_size:
+                info_lines.append(f"尺寸 {final_prod_size}")
+            if final_color_size:
+                info_lines.append(f"彩盒尺寸 {final_color_size}")
             info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
             today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
             
