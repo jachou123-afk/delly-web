@@ -8,8 +8,8 @@ import datetime
 
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V64")
-st.info("✅ 規格:【金鑰防護 V3】、【尺寸抓取強化-逐行掃描】、區塊空一行、批量建檔。")
+st.title("🪐 半自動 - 採購報價彙整表 V65")
+st.info("✅ 規格:【金鑰防護 V3】、【全 emoji 文案支援】、【貨號彈性格式】、區塊空一行。")
 
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
@@ -87,7 +87,7 @@ ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
 
-# --- 4. 解析引擎 V6 (尺寸抓取強化-逐行掃描) ---
+# --- 4. 解析引擎 V7 (支援 emoji 文案 + 彈性貨號) ---
 def parse_text(text):
     common = {"price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "extra_tags": ""}
     products = []
@@ -99,50 +99,56 @@ def parse_text(text):
     
     # === 共用參數抓取 ===
     
-    # 抓價格
-    m_price = re.search(r'(?:單價|单价|價格|价格|價錢|价钱|售價|售价|都是)\s*:?\s*(?:\[[^\]]*\])?\s*(?:rmb|RMB|¥)?\s*([0-9]+(?:\.[0-9]+)?)', text_n)
+    # 抓價格:支援「💰13.5元」「單價:4 元」「都是 18.8 元」
+    m_price = re.search(r'(?:單價|单价|價格|价格|價錢|价钱|售價|售价|都是|💰)\s*:?\s*(?:\[[^\]]*\])?\s*(?:rmb|RMB|¥)?\s*([0-9]+(?:\.[0-9]+)?)', text_n)
     if not m_price:
         m_price = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*元', text_n)
     if m_price:
         common["price"] = float(m_price.group(1))
     
-    # 抓裝箱量
+    # 抓裝箱量:支援「📦36盒/箱」「箱數:240pcs」「一箱 60 只」
     m_qty = re.search(r'(?:每箱數量|裝箱數|裝箱量|箱數|箱数|裝箱|装箱|數量|数量)\s*:?\s*([0-9]+)', text_n)
     if not m_qty:
         m_qty = re.search(r'一箱\s*([0-9]+)', text_n)
     if not m_qty:
-        m_qty = re.search(r'([0-9]+)\s*(?:pcs|只|個|个)\s*[//]?\s*箱?', text_n)
+        # 「36盒/箱」「240pcs/箱」「60只/箱」
+        m_qty = re.search(r'([0-9]+)\s*(?:盒|pcs|只|個|个|套|瓶|罐)\s*[//]\s*箱', text_n)
+    if not m_qty:
+        m_qty = re.search(r'([0-9]+)\s*(?:pcs|只|個|个)', text_n)
     if m_qty:
         common["qty"] = int(m_qty.group(1))
     
-    # 抓毛重
-    m_weight = re.search(r'(?:整箱毛重|箱重|毛重|整箱重量)\s*:?\s*([0-9]+(?:\.[0-9]+)?)', text_n)
+    # 抓毛重:支援「⚖️12.5kg」「箱重:26kg」「29KG」
+    m_weight = re.search(r'(?:整箱毛重|箱重|毛重|整箱重量|⚖️)\s*:?\s*([0-9]+(?:\.[0-9]+)?)', text_n)
     if not m_weight:
         m_weight = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*[Kk][Gg]', text_n)
     if m_weight:
         common["weight"] = float(m_weight.group(1))
     
-    # 抓尺寸:逐行掃描更可靠
+    # 抓尺寸:逐行掃描更可靠 (支援 * 和 × 兩種乘號)
     size_pattern = r'([0-9]+(?:\.[0-9]+)?(?:[*xX×][0-9]+(?:\.[0-9]+)?)+(?:[cC][mM]|公分)?)'
     for line in text_n.split('\n'):
         line_s = line.strip()
-        # 彩盒
-        if line_s.startswith('彩盒') and not common["color_box_size"]:
-            m = re.search(size_pattern, line_s)
+        # 移除 emoji 後再判斷
+        line_clean = re.sub(r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉]', '', line_s).strip()
+        
+        # 彩盒 / 亞克力盒 (透明包裝盒)
+        if (line_clean.startswith('彩盒') or line_clean.startswith('亞克力') or line_clean.startswith('亚克力')) and not common["color_box_size"]:
+            m = re.search(size_pattern, line_clean)
             if m:
                 common["color_box_size"] = m.group(1).strip()
         # 產品
-        elif (line_s.startswith('產品') or line_s.startswith('产品')) and not common["prod_size"]:
-            m = re.search(size_pattern, line_s)
+        elif (line_clean.startswith('產品') or line_clean.startswith('产品')) and not common["prod_size"]:
+            m = re.search(size_pattern, line_clean)
             if m:
                 common["prod_size"] = m.group(1).strip()
     
     # fallback:產品尺寸沒抓到時用外箱
     if not common["prod_size"]:
         for line in text_n.split('\n'):
-            line_s = line.strip()
-            if line_s.startswith('外箱'):
-                m = re.search(size_pattern, line_s)
+            line_clean = re.sub(r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉]', '', line.strip()).strip()
+            if line_clean.startswith('外箱'):
+                m = re.search(size_pattern, line_clean)
                 if m:
                     common["prod_size"] = m.group(1).strip()
                     break
@@ -151,18 +157,31 @@ def parse_text(text):
 
     # === 商品清單抓取 ===
     
-    # 模式 A:批量格式「貨號,名稱」每行一個(英文+數字開頭)
+    # 模式 A:批量格式
+    # 規則:行首是貨號 (允許英文+數字、純數字+橫線+字母組合) + 空白或逗號 + 名稱
+    # 例:FF756628,史迪仔... / 777-10A 仿真合金工程車
     lines = text_n.split('\n')
     for line in lines:
         line = line.strip()
+        # 移除前後 emoji
+        line = re.sub(r'^[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉\s]+', '', line)
+        line = re.sub(r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉\s]+$', '', line)
         if not line:
             continue
-        m = re.match(r'^([A-Za-z]+\d{3,}[A-Za-z0-9\-]*)\s*,\s*(.+)$', line)
+        
+        # 嘗試多種貨號格式
+        # 格式 1: 英文+數字 (FF756628)
+        # 格式 2: 數字+橫線+字母 (777-10A, 888-6B)
+        # 格式 3: 純英數混合帶橫線 (HK-123)
+        m = re.match(r'^([A-Za-z0-9]+\-?[A-Za-z0-9]+)[\s,]+(.+)$', line)
         if m:
             code = m.group(1).strip()
             name = m.group(2).strip().lstrip(',').strip()
-            if name and len(name) >= 2:
-                products.append({"code": code, "name": name})
+            # 過濾掉太短或純數字的"貨號"
+            if (re.search(r'[A-Za-z]', code) or '-' in code) and len(code) >= 4 and name and len(name) >= 2:
+                # 排除是描述句子的情況 (如「這 6 款價格...」)
+                if not re.search(r'(?:這|这|都是|價格|价格|裝箱|装箱|箱數|箱数|毛重|尺寸|彩盒|外箱)', name[:6]):
+                    products.append({"code": code, "name": name})
     
     # 模式 B:單品格式(若 A 沒抓到)
     if not products:
@@ -170,17 +189,22 @@ def parse_text(text):
         m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号|編號|编号)\s*:?\s*([A-Za-z0-9\-/]+)', text_n)
         if m_code:
             single_code = m_code.group(1).strip()
+        else:
+            # 找開頭像貨號的字串
+            m_first = re.search(r'^\s*([A-Za-z0-9]+\-[A-Za-z0-9]+)', text_n, re.MULTILINE)
+            if m_first:
+                single_code = m_first.group(1).strip()
         
         single_name = ""
         exclusion_keywords = [
             '型號', '型号', '貨號', '货号', '單價', '单价', '價格', '价格',
             '裝箱', '装箱', '箱數', '箱数', '數量', '数量', '毛重', '箱重',
-            '尺寸', '彩盒', '外箱', '產品', '产品', '規格', '规格',
+            '尺寸', '彩盒', '外箱', '產品', '产品', '規格', '规格', '亞克力', '亚克力',
             '包裝', '包装', '運費', '运费', '材積', '材积'
         ]
         for line in lines:
             line_s = line.strip()
-            line_s = re.sub(r'[📦💰✅🔥✨🎈🍦🔫\[\]【】]', '', line_s).strip()
+            line_s = re.sub(r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉\[\]【】]', '', line_s).strip()
             if not line_s:
                 continue
             is_excluded = False
@@ -200,7 +224,7 @@ def parse_text(text):
     return common, products
 
 # --- 5. 主畫面流程 ---
-user_input = st.text_area("📝 第一步:貼上廠商微信文案 (支援批量&單品兩種格式)", height=200)
+user_input = st.text_area("📝 第一步:貼上廠商微信文案 (支援批量&單品&emoji 文案)", height=200)
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 common_data, products_data = parse_text(user_input_tw)
 
@@ -210,6 +234,15 @@ with st.expander("🔧 診斷資訊 (若解析有誤可展開查看)"):
     st.write(f"抓到商品數: {len(products_data)}")
     st.write("共用參數:", common_data)
     st.write("商品清單:", products_data)
+    if user_input_tw:
+        st.write("---")
+        st.write("逐行分析:")
+        for i, line in enumerate(user_input_tw.split('\n')):
+            line_s = re.sub(r'^[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉\s]+', '', line.strip())
+            line_s = re.sub(r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉\s]+$', '', line_s)
+            m = re.match(r'^([A-Za-z0-9]+\-?[A-Za-z0-9]+)[\s,]+(.+)$', line_s)
+            status = "✅" if m else "❌"
+            st.write(f"行 {i+1}: {status} | `{line_s}`")
 
 st.subheader("🔍 第二步:共用參數校正")
 c1, c2, c3, c4 = st.columns(4)
@@ -218,7 +251,6 @@ final_qty = c2.number_input("裝箱量", value=common_data["qty"], step=1)
 final_weight = c3.number_input("毛重(kg)", value=common_data["weight"], format="%.2f")
 final_dom = c4.number_input("內陸運費(R/kg)", value=dom_rate_def)
 
-# 顯示抓到的尺寸資訊
 c5, c6 = st.columns(2)
 final_prod_size = c5.text_input("產品尺寸", value=common_data["prod_size"])
 final_color_size = c6.text_input("彩盒尺寸", value=common_data["color_box_size"])
