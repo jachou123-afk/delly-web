@@ -5,15 +5,12 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import zhconv
 import datetime
-
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V68")
-st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。")
-
+st.title("🪐 半自動 - 採購報價彙整表 V69")
+st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V69 修正:一箱N只/同行格式裝箱量解析】")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
-
 def clean_str(v):
     return (v
         .replace('\u200b', '')
@@ -24,7 +21,6 @@ def clean_str(v):
         .replace('\t', '')
         .strip()
     )
-
 def get_credentials():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     if st.secrets.get("gcp_service_account"):
@@ -44,7 +40,6 @@ def get_credentials():
         return ServiceAccountCredentials.from_json_keyfile_dict(clean_dict, scope)
     else:
         return ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
-
 @st.cache_data(ttl=15)
 def get_all_sheets_data():
     try:
@@ -58,7 +53,6 @@ def get_all_sheets_data():
     except Exception as e:
         st.error(f"讀取雲端失敗:{e}")
         return {}
-
 def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
     try:
         creds = get_credentials()
@@ -80,32 +74,36 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
     except Exception as e:
         st.error(f"寫入雲端失敗:{e}")
         return False
-
 # --- 3. 側邊欄設定 ---
 st.sidebar.header("⚙️ 成本參數設定")
 ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
 dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
-
-# --- 4. 解析引擎 V10 ---
+# --- 4. 解析引擎 V11 ---
 def parse_text(text):
     common = {"price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "extra_tags": ""}
     products = []
     if not text:
         return common, products
-    
+
+    # 前處理：把全形標點、逗號統一
     text_n = text.replace(':', ':').replace(',', ',').replace('、', ',')
-    
-    # === 共用參數抓取 ===
-    
-    # 價格:支援「單個價格」「單價」「💰」「都是」
-    m_price = re.search(r'(?:單個價格|单个价格|單價|单价|價格|价格|價錢|价钱|售價|售价|都是|💰)\s*:?\s*(?:\[[^\]]*\])?\s*(?:rmb|RMB|¥)?\s*([0-9]+(?:\.[0-9]+)?)', text_n)
+
+    # 把 [Fireworks] [玫瑰] 等文字 emoji 標籤清掉，避免干擾解析
+    text_n = re.sub(r'\[[^\]]{1,20}\]', '', text_n)
+
+    # ===== 共用參數抓取 =====
+
+    # 價格：支援「單個價格」「單價」「💰」「都是」「N元」
+    m_price = re.search(
+        r'(?:單個價格|单个价格|單價|单价|價格|价格|價錢|价钱|售價|售价|都是|💰)\s*:?\s*(?:\[[^\]]*\])?\s*(?:rmb|RMB|¥)?\s*([0-9]+(?:\.[0-9]+)?)',
+        text_n)
     if not m_price:
         m_price = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*元', text_n)
     if m_price:
         common["price"] = float(m_price.group(1))
-    
-    # 裝箱量:逐行掃描,排除干擾
+
+    # 裝箱量：逐行掃描（關鍵字開頭）
     qty_keywords = ['每箱數量', '每箱数量', '箱數', '箱数', '裝箱量', '裝箱數', '裝箱', '装箱', '一箱']
     for line in text_n.split('\n'):
         line_s = re.sub(r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯]', '', line.strip()).strip()
@@ -119,34 +117,44 @@ def parse_text(text):
                     break
         if common["qty"] > 0:
             break
-    
+
+    # 備用 pattern 1：「128只/箱」「128盒/箱」
     if common["qty"] == 0:
-        m_qty = re.search(r'([0-9]+)\s*(?:盒|pcs|只|個|个|套|瓶|罐)\s*[//]\s*箱', text_n)
+        m_qty = re.search(r'([0-9]+)\s*(?:盒|pcs|只|個|个|套|瓶|罐)\s*[/／]\s*箱', text_n)
         if m_qty:
             common["qty"] = int(m_qty.group(1))
-    
-    # 毛重:支援「整箱重量」「箱重」「毛重」
-    m_weight = re.search(r'(?:整箱毛重|整箱重量|箱重|毛重|⚖️)\s*:?\s*([0-9]+(?:\.[0-9]+)?)', text_n)
+
+    # 備用 pattern 2：「一箱128只」「一箱128個」— V69 新增，處理同行格式
+    if common["qty"] == 0:
+        m_qty2 = re.search(r'一箱\s*([0-9]+)\s*(?:盒|pcs|只|個|个|套|瓶|罐)', text_n)
+        if m_qty2:
+            common["qty"] = int(m_qty2.group(1))
+
+    # 備用 pattern 3：純數字接單位（最後兜底）
+    if common["qty"] == 0:
+        m_qty3 = re.search(r'([0-9]+)\s*(?:盒|只|個|个|套|瓶|罐)\b', text_n)
+        if m_qty3:
+            common["qty"] = int(m_qty3.group(1))
+
+    # 毛重：支援「整箱重量」「箱重」「毛重」「N KG」
+    m_weight = re.search(
+        r'(?:整箱毛重|整箱重量|箱重|毛重|⚖️)\s*:?\s*([0-9]+(?:\.[0-9]+)?)',
+        text_n)
     if not m_weight:
         m_weight = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*[Kk][Gg]', text_n)
     if m_weight:
         common["weight"] = float(m_weight.group(1))
-    
-    # === 尺寸抓取:逐行掃描 ===
-    # 對應規則:
-    # - 彩盒 / 亞克力 / 單個包裝 / 单个包装 → 彩盒尺寸
-    # - 產品 / 單個尺寸 / 单个尺寸 → 產品尺寸
-    # - 外箱 → 忽略
+
+    # ===== 尺寸抓取：逐行掃描 =====
     size_pattern = r'([0-9]+(?:\.[0-9]+)?(?:[*xX×][0-9]+(?:\.[0-9]+)?)+(?:[cC][mM]|公分)?)'
     emoji_pattern = r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉]'
-    
+
     color_box_keywords = ['彩盒', '亞克力', '亚克力', '單個包裝', '单个包装', '包裝盒', '包装盒']
     prod_size_keywords = ['產品', '产品', '單個尺寸', '单个尺寸', '產品尺寸', '产品尺寸']
-    
+
     for line in text_n.split('\n'):
         line_clean = re.sub(emoji_pattern, '', line.strip()).strip()
-        
-        # 彩盒尺寸
+
         if not common["color_box_size"]:
             for kw in color_box_keywords:
                 if line_clean.startswith(kw):
@@ -154,7 +162,7 @@ def parse_text(text):
                     if m:
                         common["color_box_size"] = m.group(1).strip()
                     break
-        # 產品尺寸
+
         if not common["prod_size"]:
             for kw in prod_size_keywords:
                 if line_clean.startswith(kw):
@@ -162,25 +170,24 @@ def parse_text(text):
                     if m:
                         common["prod_size"] = m.group(1).strip()
                     break
-    
-    # === 包裝備註 ===
+
+    # ===== 包裝備註 =====
     extra_items = []
     for line in text_n.split('\n'):
         line_s = re.sub(emoji_pattern, '', line.strip()).strip()
         m_pkg = re.match(r'(?:包裝|包装)\s*:?\s*(.+)', line_s)
         if m_pkg:
-            content = m_pkg.group(1).strip()
-            # 排除「包裝:50 個/opp 袋」這種已經是分裝資訊的(避免跟主備註重複)
-            # 仍然抓進備註
-            extra_items.append(f"包裝: {content}")
-    # 雷射標
+            extra_items.append(f"包裝: {m_pkg.group(1).strip()}")
     if re.search(r'帶[鐳雷]射標|帶[鐳雷]射|镭射', text_n):
         extra_items.append("帶雷射標")
+    # 正版授權標記
+    if re.search(r'正版授權|正版授权', text_n):
+        extra_items.append("正版授權")
     common["extra_tags"] = "\n".join(extra_items)
 
-    # === 商品清單抓取 ===
-    
-    # 模式 A:批量格式「貨號,名稱」
+    # ===== 商品清單抓取 =====
+
+    # 模式 A：批量格式「貨號,名稱」（多品）
     lines = text_n.split('\n')
     for line in lines:
         line = line.strip()
@@ -188,28 +195,29 @@ def parse_text(text):
         line = re.sub(r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉\s]+$', '', line)
         if not line:
             continue
-        
-        m = re.match(r'^([A-Za-z0-9]+\-?[A-Za-z0-9]+)[\s,]+(.+)$', line)
+
+        m = re.match(r'^([A-Za-z0-9]+\-?[A-Za-z0-9]+)[\s,，]+(.+)$', line)
         if m:
             code = m.group(1).strip()
-            name = m.group(2).strip().lstrip(',').strip()
+            name = m.group(2).strip().lstrip(',，').strip()
             if (re.search(r'[A-Za-z]', code) or '-' in code) and len(code) >= 4 and name and len(name) >= 2:
                 if not re.search(r'(?:這|这|都是|價格|价格|裝箱|装箱|箱數|箱数|毛重|尺寸|彩盒|外箱|亞克力|亚克力|包裝|包装|條碼|条码)', name[:6]):
                     products.append({"code": code, "name": name})
-    
-    # 模式 B:單品 (強化:支援多行名稱合併)
+
+    # 模式 B：單品（強化：支援多行名稱合併）
     if not products:
         single_code = ""
-        m_code = re.search(r'(?:型號|型号|貨號|货号|產品編號|产品编号|編號|编号)\s*:?\s*([A-Za-z0-9\-/]+)', text_n)
+        m_code = re.search(
+            r'(?:型號|型号|貨號|货号|產品編號|产品编号|編號|编号)\s*:?\s*([A-Za-z0-9\-/]+)',
+            text_n)
         if m_code:
             single_code = m_code.group(1).strip()
         else:
-            m_first = re.search(r'^\s*([A-Za-z0-9]+\-[A-Za-z0-9]+)', text_n, re.MULTILINE)
+            # 從第一行抓貨號（支援「FF784564，名稱」同行格式）
+            m_first = re.search(r'^\s*([A-Za-z]{1,4}[0-9]{4,})', text_n, re.MULTILINE)
             if m_first:
                 single_code = m_first.group(1).strip()
-        
-        # 抓名稱:從上往下掃,收集「非參數行」直到遇到第一個「參數行」
-        # 參數行 = 開頭是排除關鍵字 + 有冒號
+
         exclusion_keywords = [
             '型號', '型号', '貨號', '货号', '單價', '单价', '單個價格', '单个价格',
             '價格', '价格', '裝箱', '装箱', '箱數', '箱数', '每箱', '一箱',
@@ -219,78 +227,77 @@ def parse_text(text):
             '包裝', '包装', '運費', '运费', '材積', '材积', '條碼', '条码',
             '配件', '需要', '帶鐳', '帶雷', '镭射', '电池', '電池'
         ]
-        
+
         name_lines = []
         for line in lines:
             line_s = line.strip()
-            # 移除前綴標籤「#正版授權」「【新款】」等
             line_s = re.sub(r'^[#＃【】\[\]]+', '', line_s).strip()
             line_s = re.sub(r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉]', '', line_s).strip()
+            # 清掉文字 emoji 標籤
+            line_s = re.sub(r'\[[^\]]{1,20}\]', '', line_s).strip()
             if not line_s:
                 continue
-            
+
             is_excluded = False
             for kw in exclusion_keywords:
                 if line_s.startswith(kw):
                     is_excluded = True
                     break
-            
+
             if is_excluded:
-                # 遇到參數行就停止收集名稱
                 if name_lines:
                     break
                 continue
-            
-            # 跳過純尺寸/重量/價格的行
+
+            # 跳過純尺寸/重量/價格行
             if re.match(r'^[0-9.*xX×\s\-]+(?:[cC][mM]|公分|[Kk][Gg]|元|pcs)?$', line_s):
                 continue
-            # 跳過「N 個圖案/N 款混裝」
             if re.match(r'^[0-9]+\s*(?:個|个|款|種|种)', line_s):
                 continue
-            # 跳過開頭是「正版授權」「新款」這種純標籤的單獨行
             if line_s in ('正版授權', '正版授权', '新款', '熱賣', '热卖'):
                 continue
-            
+
+            # V69 新增：若整行包含貨號+名稱（同行格式），只取名稱部分
+            if single_code and line_s.startswith(single_code):
+                remainder = line_s[len(single_code):].lstrip('，,、 \t').strip()
+                # 把價格/數量等資訊從名稱中剔除
+                remainder = re.sub(r'[0-9]+(?:\.[0-9]+)?\s*元.*', '', remainder).strip()
+                remainder = re.sub(r'，.*', '', remainder).strip()
+                if remainder:
+                    name_lines.append(remainder)
+                continue
+
             name_lines.append(line_s)
-            # 收集最多 3 行,避免抓過頭
             if len(name_lines) >= 3:
                 break
-        
-        # 處理:把開頭的「正版授權」字樣保留在名稱裡
+
         single_name = " ".join(name_lines).strip()
-        # 把貨號從名稱中拿掉
         if single_code and single_code in single_name:
             single_name = single_name.replace(single_code, "").strip()
-        
-        products.append({"code": single_code, "name": single_name})
-        
-    return common, products
 
+        products.append({"code": single_code, "name": single_name})
+
+    return common, products
 # --- 5. 主畫面流程 ---
 user_input = st.text_area("📝 第一步:貼上廠商微信文案 (支援批量&單品&emoji 文案)", height=200)
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 common_data, products_data = parse_text(user_input_tw)
-
 with st.expander("🔧 診斷資訊 (若解析有誤可展開查看)"):
     st.write(f"原始輸入長度: {len(user_input)}")
     st.write(f"轉繁後長度: {len(user_input_tw)}")
     st.write(f"抓到商品數: {len(products_data)}")
     st.write("共用參數:", common_data)
     st.write("商品清單:", products_data)
-
 st.subheader("🔍 第二步:共用參數校正")
 c1, c2, c3, c4 = st.columns(4)
 final_price = c1.number_input("進價(RMB)", value=common_data["price"], format="%.2f")
 final_qty = c2.number_input("裝箱量", value=common_data["qty"], step=1)
 final_weight = c3.number_input("毛重(kg)", value=common_data["weight"], format="%.2f")
 final_dom = c4.number_input("內陸運費(R/kg)", value=dom_rate_def)
-
 c5, c6 = st.columns(2)
 final_prod_size = c5.text_input("產品尺寸 (沒抓到可手動輸入)", value=common_data["prod_size"])
 final_color_size = c6.text_input("彩盒尺寸 (亞克力/單個包裝也算)", value=common_data["color_box_size"])
-
 final_extra = st.text_input("額外備註 (包裝資訊、雷射標等,可手動編輯)", value=common_data["extra_tags"])
-
 st.markdown("---")
 st.subheader(f"📋 擷取到的商品清單 (共 {len(products_data)} 筆,可直接編輯、新增或刪除)")
 df_items = pd.DataFrame(products_data)
@@ -300,24 +307,22 @@ if "name" not in df_items.columns:
     df_items["name"] = ""
 df_items.insert(0, "寫入", True)
 df_items = df_items.rename(columns={"code": "貨號", "name": "名稱"})
-
 edited_df = st.data_editor(df_items, num_rows="dynamic", use_container_width=True)
-
 if final_qty > 0:
     st.markdown("---")
     st.subheader("📊 第三步:選擇分頁與批量存入")
     final_category = st.selectbox("📂 確定存入的分頁:", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
-    
+
     to_save_df = edited_df[(edited_df["寫入"] == True) & ((edited_df["貨號"] != "") | (edited_df["名稱"] != ""))]
-    
+
     all_sheets_data = get_all_sheets_data()
-    
+
     duplicate_warnings = []
     if all_sheets_data and not to_save_df.empty:
         for idx, row in to_save_df.iterrows():
             check_code = f"貨號 {str(row['貨號']).strip()}" if str(row['貨號']).strip() and len(str(row['貨號']).strip()) > 2 else None
             check_name = str(row['名稱']).strip() if str(row['名稱']).strip() and len(str(row['名稱']).strip()) > 2 else None
-            
+
             for sheet_title, sheet_rows in all_sheets_data.items():
                 dup_found = False
                 for i, s_row in enumerate(sheet_rows):
@@ -332,14 +337,12 @@ if final_qty > 0:
                             break
                     if dup_found:
                         break
-
     if duplicate_warnings:
         for warn in duplicate_warnings:
             st.error(f"🚨 **撞單雷達警告**:{warn}")
-
     if not to_save_df.empty:
         final_confirm = st.checkbox(f"我已手動校對完成,確認寫入共 {len(to_save_df)} 款商品")
-        
+
         if st.button("💾 執行批量存檔", type="primary", disabled=not final_confirm):
             target_data = all_sheets_data.get(final_category, [])
             true_last_row = len(target_data)
@@ -349,9 +352,9 @@ if final_qty > 0:
                     m = re.search(r'no(\d+)', str(r[0]), re.IGNORECASE)
                     if m:
                         max_no = max(max_no, int(m.group(1)))
-            
+
             st_r = true_last_row + 2 if true_last_row > 0 else 1
-            
+
             bulk_rows = []
             info_lines = []
             if final_prod_size:
@@ -362,15 +365,15 @@ if final_qty > 0:
                 info_lines.append(final_extra)
             info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
             today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
-            
+
             empty_row = ["", "", "", "", "", "", "", "", "", "", ""]
-            
+
             for idx, row in to_save_df.iterrows():
                 max_no += 1
                 next_no = f"no{max_no}"
-                
+
                 v_r = st_r + len(bulk_rows) + 1
-                
+
                 f10 = f"=ROUND(K{v_r}/0.9,1)"
                 f13 = f"=ROUND(K{v_r}/0.87,1)"
                 f15 = f"=ROUND(K{v_r}/0.85,1)"
@@ -379,7 +382,7 @@ if final_qty > 0:
                 f_dom_formula = f"=ROUNDUP((H{v_r}/1000)*{final_dom}, 2)"
                 f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
                 f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
-                
+
                 block = [
                     [next_no, str(row['名稱']).strip(), "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
                     [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost],
@@ -389,7 +392,7 @@ if final_qty > 0:
                     empty_row
                 ]
                 bulk_rows.extend(block)
-            
+
             if save_bulk_to_worksheet(final_category, bulk_rows, st_r, block_size=6):
                 get_all_sheets_data.clear()
                 st.success(f"✅ 批量儲存成功!已一口氣將 {len(to_save_df)} 款商品存入【{final_category}】!")
