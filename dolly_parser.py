@@ -7,10 +7,11 @@ import zhconv
 import datetime
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V69")
-st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V69 修正:隻/只轉繁問題、一箱N隻同行格式】")
+st.title("🪐 半自動 - 採購報價彙整表 V70")
+st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V70 新增:成本參數可存為雲端預設(_設定分頁)】")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
+SETTINGS_WS = "_設定"
 def clean_str(v):
     return (v
         .replace('\u200b', '')
@@ -53,6 +54,48 @@ def get_all_sheets_data():
     except Exception as e:
         st.error(f"讀取雲端失敗:{e}")
         return {}
+
+# --- 2.5 成本參數預設值(存於 Google Sheets 的 _設定 分頁)---
+def load_settings():
+    defaults = {"ex_rate": 4.7, "intl_rate": 8.5, "dom_rate": 1.5}
+    try:
+        creds = get_credentials()
+        client = gspread.authorize(creds)
+        spreadsheet = client.open(SHEET_NAME)
+        try:
+            ws = spreadsheet.worksheet(SETTINGS_WS)
+        except gspread.exceptions.WorksheetNotFound:
+            return defaults
+        for row in ws.get_all_values():
+            if len(row) >= 2 and row[0] in defaults:
+                try:
+                    defaults[row[0]] = float(row[1])
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+    return defaults
+
+def save_settings(s):
+    try:
+        creds = get_credentials()
+        client = gspread.authorize(creds)
+        spreadsheet = client.open(SHEET_NAME)
+        try:
+            ws = spreadsheet.worksheet(SETTINGS_WS)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = spreadsheet.add_worksheet(title=SETTINGS_WS, rows="10", cols="2")
+        rows = [[k, v] for k, v in s.items()]
+        ws.update("A1:B" + str(len(rows)), rows, value_input_option="USER_ENTERED")
+        return True
+    except Exception as e:
+        st.sidebar.error(f"儲存預設失敗:{e}")
+        return False
+
+@st.cache_data(ttl=300)
+def get_settings_cached():
+    return load_settings()
+
 def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
     try:
         creds = get_credentials()
@@ -75,10 +118,18 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
         st.error(f"寫入雲端失敗:{e}")
         return False
 # --- 3. 側邊欄設定 ---
+settings = get_settings_cached()
 st.sidebar.header("⚙️ 成本參數設定")
-ex_rate = st.sidebar.number_input("匯率", value=4.7, step=0.1)
-intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=8.5, step=0.5)
-dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=1.5, step=0.5)
+ex_rate = st.sidebar.number_input("匯率", value=settings["ex_rate"], step=0.05, format="%.2f")
+intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=settings["intl_rate"], step=0.5)
+dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=settings["dom_rate"], step=0.5)
+
+if st.sidebar.button("📌 將目前數值設為預設"):
+    if save_settings({"ex_rate": ex_rate, "intl_rate": intl_rate, "dom_rate": dom_rate_def}):
+        get_settings_cached.clear()
+        st.sidebar.success(f"已更新預設 → 匯率 {ex_rate}")
+        st.rerun()
+st.sidebar.caption(f"目前雲端預設:匯率 {settings['ex_rate']} / 國際 {settings['intl_rate']} / 內陸 {settings['dom_rate']}")
 # --- 4. 解析引擎 V11 ---
 # 注意：zhconv 會把「只」轉成「隻」，所有單位 pattern 都需含「隻」
 UNIT_PAT = r'(?:盒|pcs|PCS|只|隻|個|个|套|瓶|罐)'
