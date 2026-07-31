@@ -135,6 +135,25 @@ st.sidebar.caption(f"目前雲端預設:匯率 {settings['ex_rate']} / 國際 {s
 UNIT_PAT = r'(?:盒|pcs|PCS|只|隻|個|个|套|瓶|罐)'
 EMOJI_PAT = r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉]'
 
+def clean_product_name(name):
+    """移除同行品名尾端已被解析成欄位的價格、箱規與重量資訊。"""
+    name = name.strip().lstrip(',，、').strip()
+    # 例：工程系列-mini工程隊馬卡龍是4.3元，一箱240隻，26KG
+    name = re.sub(
+        r'\s*[，,]?\s*(?:是\s*)?(?:RMB|rmb|¥)?\s*'
+        r'[0-9]+(?:\.[0-9]+)?\s*元(?:\s*[，,、].*)?\s*$',
+        '',
+        name,
+    ).strip()
+    # 沒有價格、但把箱規接在品名後面的格式。
+    name = re.sub(
+        r'\s*[，,、]\s*一箱\s*[0-9]+\s*' + UNIT_PAT
+        + r'(?:\s*[，,、].*)?\s*$',
+        '',
+        name,
+    ).strip()
+    return name
+
 def parse_text(text):
     common = {"price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "extra_tags": ""}
     products = []
@@ -252,7 +271,7 @@ def parse_text(text):
         m = re.match(r'^([A-Za-z0-9]+\-?[A-Za-z0-9]+)[\s,，]+(.+)$', line)
         if m:
             code = m.group(1).strip()
-            name = m.group(2).strip().lstrip(',，').strip()
+            name = clean_product_name(m.group(2))
             if (re.search(r'[A-Za-z]', code) or '-' in code) and len(code) >= 4 and name and len(name) >= 2:
                 if not re.search(r'(?:這|这|都是|價格|价格|裝箱|装箱|箱數|箱数|毛重|尺寸|彩盒|外箱|亞克力|亚克力|包裝|包装|條碼|条码)', name[:6]):
                     products.append({"code": code, "name": name})
@@ -309,8 +328,7 @@ def parse_text(text):
             # 同行格式：FF784564，名稱 6.2元，一箱128隻...
             if single_code and line_s.startswith(single_code):
                 remainder = line_s[len(single_code):].lstrip('，,、 \t').strip()
-                # 拿掉「是XXX」「6.2元，一箱...」等後綴
-                remainder = re.sub(r'\s*[是，,].*', '', remainder).strip()
+                remainder = clean_product_name(remainder)
                 if remainder:
                     name_lines.append(remainder)
                 continue
