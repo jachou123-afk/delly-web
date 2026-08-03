@@ -139,7 +139,7 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
         except gspread.exceptions.WorksheetNotFound:
             sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
         end_r = st_r + len(bulk_rows) - 1
-        sheet.update(f"A{st_r}:K{end_r}", bulk_rows, value_input_option="USER_ENTERED")
+        sheet.update(f"A{st_r}:L{end_r}", bulk_rows, value_input_option="USER_ENTERED")
         num_blocks = len(bulk_rows) // block_size
         for i in range(num_blocks):
             base_r = st_r + (i * block_size)
@@ -414,7 +414,19 @@ edited_df = st.data_editor(df_items, num_rows="dynamic", use_container_width=Tru
 if final_qty > 0:
     st.markdown("---")
     st.subheader("📊 第三步:選擇分頁與批量存入")
-    final_category = st.selectbox("📂 確定存入的分頁:", ["正版", "玩具", "生活用品", "娃娃", "吊飾"], index=0)
+    category_col, vendor_col = st.columns([1, 1])
+    with category_col:
+        final_category = st.selectbox(
+            "📂 確定存入的分頁:",
+            ["正版", "玩具", "生活用品", "娃娃", "吊飾"],
+            index=0,
+        )
+    with vendor_col:
+        final_vendor = st.selectbox(
+            "🏷️ 廠商:",
+            ["v菲凡", "v多品村", "v優娜卡樂星"],
+            index=0,
+        )
     to_save_df = edited_df[(edited_df["寫入"] == True) & ((edited_df["貨號"] != "") | (edited_df["名稱"] != ""))]
     all_sheets_data = get_all_sheets_data()
     duplicate_warnings = []
@@ -477,7 +489,7 @@ if final_qty > 0:
                 info_lines.append(final_extra)
             info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
             today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
-            empty_row = ["", "", "", "", "", "", "", "", "", "", ""]
+            empty_row = [""] * 12
             for idx, row in to_save_df.iterrows():
                 max_no += 1
                 next_no = f"no{max_no}"
@@ -491,14 +503,17 @@ if final_qty > 0:
                 f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
                 f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
                 block = [
-                    [next_no, str(row['名稱']).strip(), "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本"],
-                    [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost],
-                    ["", f"裝箱 {final_qty}個/箱", "", "", "", "", "", "", "", "", ""],
-                    ["", f"毛重 {final_weight}KG", "", "", "", "", "", "", "", "", ""],
-                    ["", f"貨號 {normalize_code(row['貨號'])}", "", "", "", "", "", "", "", "", ""],
+                    [next_no, str(row['名稱']).strip(), "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本", final_vendor],
+                    [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost, ""],
+                    ["", f"裝箱 {final_qty}個/箱"] + [""] * 10,
+                    ["", f"毛重 {final_weight}KG"] + [""] * 10,
+                    ["", f"貨號 {normalize_code(row['貨號'])}"] + [""] * 10,
                     empty_row
                 ]
                 bulk_rows.extend(block)
             if save_bulk_to_worksheet(final_category, bulk_rows, st_r, block_size=6):
                 get_all_sheets_data.clear()
-                st.success(f"✅ 批量儲存成功!已一口氣將 {len(to_save_df)} 款商品存入【{final_category}】!")
+                st.success(
+                    f"✅ 批量儲存成功!已一口氣將 {len(to_save_df)} 款商品存入【{final_category}】，"
+                    f"廠商【{final_vendor}】!"
+                )
