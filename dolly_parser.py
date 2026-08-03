@@ -96,6 +96,39 @@ def save_settings(s):
 def get_settings_cached():
     return load_settings()
 
+def normalize_code(value):
+    """統一貨號格式，避免大小寫或空白造成錯誤判斷。"""
+    return re.sub(r"\s+", "", str(value or "")).upper()
+
+def normalize_name(value):
+    """統一商品名稱的外圍空白，保留名稱內容。"""
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+def extract_saved_products(sheet_rows):
+    """從既有的 6 列商品區塊擷取名稱與貨號。"""
+    products = []
+    for i, row in enumerate(sheet_rows):
+        if not row or not re.fullmatch(r"no\d+", str(row[0]).strip(), re.IGNORECASE):
+            continue
+
+        name = normalize_name(row[1]) if len(row) > 1 else ""
+        code = ""
+        code_row_index = i + 4
+        if code_row_index < len(sheet_rows) and len(sheet_rows[code_row_index]) > 1:
+            code_match = re.match(
+                r"^貨號\s*(.+)$",
+                str(sheet_rows[code_row_index][1]).strip(),
+            )
+            if code_match:
+                code = normalize_code(code_match.group(1))
+
+        products.append({
+            "no": str(row[0]).strip(),
+            "code": code,
+            "name": name,
+        })
+    return products
+
 def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
     try:
         creds = get_credentials()
@@ -268,9 +301,13 @@ def parse_text(text):
         line = re.sub(EMOJI_PAT + r'+$', '', line)
         if not line:
             continue
-        m = re.match(r'^([A-Za-z0-9]+\-?[A-Za-z0-9]+)[\s,，]+(.+)$', line)
+        m = re.match(
+            r'^\s*([A-Za-z0-9]+(?:-[A-Za-z0-9]+)?)'
+            r'\s*(?:[，,、:：]|\s+)\s*(.+)$',
+            line,
+        )
         if m:
-            code = m.group(1).strip()
+            code = normalize_code(m.group(1))
             name = clean_product_name(m.group(2))
             if (re.search(r'[A-Za-z]', code) or '-' in code) and len(code) >= 4 and name and len(name) >= 2:
                 if not re.search(r'(?:這|这|都是|價格|价格|裝箱|装箱|箱數|箱数|毛重|尺寸|彩盒|外箱|亞克力|亚克力|包裝|包装|條碼|条码)', name[:6]):
@@ -381,24 +418,40 @@ if final_qty > 0:
     to_save_df = edited_df[(edited_df["寫入"] == True) & ((edited_df["貨號"] != "") | (edited_df["名稱"] != ""))]
     all_sheets_data = get_all_sheets_data()
     duplicate_warnings = []
-    if all_sheets_data and not to_save_df.empty:
+    seen_batch = {}
+    if not to_save_df.empty:
         for idx, row in to_save_df.iterrows():
-            check_code = f"貨號 {str(row['貨號']).strip()}" if str(row['貨號']).strip() and len(str(row['貨號']).strip()) > 2 else None
-            check_name = str(row['名稱']).strip() if str(row['名稱']).strip() and len(str(row['名稱']).strip()) > 2 else None
-            for sheet_title, sheet_rows in all_sheets_data.items():
-                dup_found = False
-                for i, s_row in enumerate(sheet_rows):
-                    if len(s_row) > 1:
-                        cell_val = str(s_row[1]).strip()
-                        if (check_code and check_code in cell_val) or (check_name and check_name == cell_val):
-                            for j in range(i, -1, -1):
-                                if len(sheet_rows[j]) > 0 and str(sheet_rows[j][0]).lower().startswith('no'):
-                                    duplicate_warnings.append(f"【{check_name or check_code}】已存在於 {sheet_title} (編號: {sheet_rows[j][0]})")
-                                    dup_found = True
-                                    break
+            check_code = normalize_code(row["貨號"])
+            check_name = normalize_name(row["名稱"])
+            if len(check_code) <= 2:
+                check_code = ""
+            if len(check_name) <= 2:
+                check_name = ""
+
+            # 同一批資料：有貨號時以貨號識別，沒有貨號才退回使用名稱。
+            batch_key = ("code", check_code) if check_code else ("name", check_name)
+            if batch_key in seen_batch:
+                duplicate_warnings.append(
+                    f"【{check_code or check_name}】本批次與第 {seen_batch[batch_key] + 1} 筆重複"
+                )
+            else:
+                seen_batch[batch_key] = idx
+
+            # 雲端既有資料：有貨號時只比貨號；沒有貨號時才比名稱。
+            if all_sheets_data and (check_code or check_name):
+                for sheet_title, sheet_rows in all_sheets_data.items():
+                    for existing in extract_saved_products(sheet_rows):
+                        if check_code:
+                            dup_found = existing["code"] == check_code
+                        else:
+                            dup_found = existing["name"] == check_name
+
+                        if dup_found:
+                            duplicate_warnings.append(
+                                f"【{check_code or check_name}】已存在於 "
+                                f"{sheet_title} (編號: {existing['no']})"
+                            )
                             break
-                    if dup_found:
-                        break
     if duplicate_warnings:
         for warn in duplicate_warnings:
             st.error(f"🚨 **撞單雷達警告**:{warn}")
@@ -442,7 +495,7 @@ if final_qty > 0:
                     [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost],
                     ["", f"裝箱 {final_qty}個/箱", "", "", "", "", "", "", "", "", ""],
                     ["", f"毛重 {final_weight}KG", "", "", "", "", "", "", "", "", ""],
-                    ["", f"貨號 {str(row['貨號']).strip()}", "", "", "", "", "", "", "", "", ""],
+                    ["", f"貨號 {normalize_code(row['貨號'])}", "", "", "", "", "", "", "", "", ""],
                     empty_row
                 ]
                 bulk_rows.extend(block)
