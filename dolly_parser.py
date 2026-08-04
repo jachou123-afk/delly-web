@@ -188,7 +188,15 @@ def clean_product_name(name):
     return name
 
 def parse_text(text):
-    common = {"price": 0.0, "qty": 0, "weight": 0.0, "prod_size": "", "color_box_size": "", "extra_tags": ""}
+    common = {
+        "price": 0.0,
+        "qty": 0,
+        "weight": 0.0,
+        "prod_size": "",
+        "color_box_size": "",
+        "outer_box_size": "",
+        "extra_tags": "",
+    }
     products = []
     if not text:
         return common, products
@@ -248,21 +256,41 @@ def parse_text(text):
             common["qty"] = int(m.group(1))
 
     # ===== 毛重 =====
-    m_weight = re.search(
-        r'(?:整箱毛重|整箱重量|箱重|毛重|⚖️)\s*:?\s*([0-9]+(?:\.[0-9]+)?)',
-        text_n)
-    if not m_weight:
-        m_weight = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*[Kk][Gg]', text_n)
-    if m_weight:
-        common["weight"] = float(m_weight.group(1))
+    m_weight_pair = re.search(
+        r'(?:箱毛淨重|箱毛净重|整箱毛淨重|整箱毛净重|毛淨重|毛净重)'
+        r'\s*[：:]?\s*([0-9]+(?:\.[0-9]+)?)\s*[/／]\s*'
+        r'([0-9]+(?:\.[0-9]+)?)\s*[Kk][Gg]',
+        text_n,
+    )
+    if m_weight_pair:
+        common["weight"] = max(
+            float(m_weight_pair.group(1)),
+            float(m_weight_pair.group(2)),
+        )
+    else:
+        m_weight = re.search(
+            r'(?:整箱毛重|整箱重量|箱重|毛重|⚖️)\s*[：:]?\s*([0-9]+(?:\.[0-9]+)?)',
+            text_n)
+        if not m_weight:
+            m_weight = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*[Kk][Gg]', text_n)
+        if m_weight:
+            common["weight"] = float(m_weight.group(1))
 
     # ===== 尺寸 =====
     size_pattern = r'([0-9]+(?:\.[0-9]+)?(?:[*xX×][0-9]+(?:\.[0-9]+)?)+(?:[cC][mM]|公分)?)'
     color_box_keywords = ['彩盒','亞克力','亚克力','單個包裝','单个包装','包裝盒','包装盒']
+    outer_box_keywords = ['外箱規格', '外箱规格', '外箱尺寸', '外箱']
     prod_size_keywords = ['產品','产品','單個尺寸','单个尺寸','產品尺寸','产品尺寸']
 
     for line in text_n.split('\n'):
         line_clean = re.sub(EMOJI_PAT, '', line.strip()).strip()
+        if not common["outer_box_size"]:
+            for kw in outer_box_keywords:
+                if line_clean.startswith(kw):
+                    m = re.search(size_pattern, line_clean)
+                    if m:
+                        common["outer_box_size"] = m.group(1).strip()
+                    break
         if not common["color_box_size"]:
             for kw in color_box_keywords:
                 if line_clean.startswith(kw):
@@ -322,9 +350,13 @@ def parse_text(text):
         if m_code:
             single_code = m_code.group(1).strip()
         else:
-            m_first = re.search(r'^\s*([A-Za-z]{1,4}[0-9]{4,})', text_n, re.MULTILINE)
+            m_first = re.search(
+                r'^\s*([A-Za-z]{1,6}-?[0-9]{1,6})\s*$',
+                text_n,
+                re.MULTILINE,
+            )
             if m_first:
-                single_code = m_first.group(1).strip()
+                single_code = normalize_code(m_first.group(1))
 
         exclusion_keywords = [
             '型號','型号','貨號','货号','單價','单价','單個價格','单个价格',
@@ -400,6 +432,7 @@ final_dom = c4.number_input("內陸運費(R/kg)", value=dom_rate_def)
 c5, c6 = st.columns(2)
 final_prod_size = c5.text_input("產品尺寸 (沒抓到可手動輸入)", value=common_data["prod_size"])
 final_color_size = c6.text_input("彩盒尺寸 (亞克力/單個包裝也算)", value=common_data["color_box_size"])
+final_outer_size = st.text_input("外箱尺寸 (沒抓到可手動輸入)", value=common_data["outer_box_size"])
 final_extra = st.text_input("額外備註 (包裝資訊、雷射標等,可手動編輯)", value=common_data["extra_tags"])
 st.markdown("---")
 st.subheader(f"📋 擷取到的商品清單 (共 {len(products_data)} 筆,可直接編輯、新增或刪除)")
@@ -485,6 +518,8 @@ if final_qty > 0:
                 info_lines.append(f"尺寸 {final_prod_size}")
             if final_color_size:
                 info_lines.append(f"彩盒尺寸 {final_color_size}")
+            if final_outer_size:
+                info_lines.append(f"外箱尺寸 {final_outer_size}")
             if final_extra:
                 info_lines.append(final_extra)
             info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
