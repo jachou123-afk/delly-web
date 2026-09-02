@@ -7,8 +7,8 @@ import zhconv
 import datetime
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V70")
-st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V70 新增:成本參數可存為雲端預設(_設定分頁)】")
+st.title("🪐 半自動 - 採購報價彙整表 V71")
+st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V71 新增:單個重量辨識；缺重量時運費、成本與報價留白】")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
 SETTINGS_WS = "_設定"
@@ -150,6 +150,95 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
     except Exception as e:
         st.error(f"寫入雲端失敗:{e}")
         return False
+
+def resolve_weight_inputs(carton_weight_kg, unit_weight_g, qty):
+    """統一重量來源，並以較高的每件重量避免低估運費。"""
+    carton_weight_kg = max(float(carton_weight_kg or 0), 0.0)
+    unit_weight_g = max(float(unit_weight_g or 0), 0.0)
+    qty = int(qty or 0)
+    carton_unit_g = (
+        carton_weight_kg * 1000 / qty
+        if carton_weight_kg > 0 and qty > 0
+        else 0.0
+    )
+    candidates = [value for value in (carton_unit_g, unit_weight_g) if value > 0]
+    base_weight_g = max(candidates) if candidates else 0.0
+    mismatch_ratio = 0.0
+    if carton_unit_g > 0 and unit_weight_g > 0:
+        mismatch_ratio = abs(carton_unit_g - unit_weight_g) / max(
+            carton_unit_g,
+            unit_weight_g,
+        )
+
+    if carton_unit_g > 0 and unit_weight_g > 0:
+        source = "both"
+    elif carton_unit_g > 0:
+        source = "carton"
+    elif unit_weight_g > 0:
+        source = "unit"
+    else:
+        source = "missing"
+
+    return {
+        "source": source,
+        "carton_unit_g": carton_unit_g,
+        "unit_weight_g": unit_weight_g,
+        "base_weight_g": base_weight_g,
+        "chargeable_weight_g": base_weight_g * 1.03 if base_weight_g > 0 else 0.0,
+        "mismatch_ratio": mismatch_ratio,
+    }
+
+
+def build_cost_formulas(
+    v_r,
+    carton_weight_kg,
+    unit_weight_g,
+    final_qty,
+    final_dom,
+    intl_rate,
+    ex_rate,
+):
+    """建立成本公式；沒有有效重量時，運費、成本與報價全部留白。"""
+    weight_cell = f"H{v_r}"
+    domestic_cell = f"I{v_r}"
+    international_cell = f"J{v_r}"
+    cost_cell = f"K{v_r}"
+    weight_state = resolve_weight_inputs(carton_weight_kg, unit_weight_g, final_qty)
+
+    if weight_state["source"] == "missing":
+        weight_formula = ""
+    elif weight_state["source"] == "unit":
+        weight_formula = f"=ROUNDUP({unit_weight_g}*1.03,2)"
+    elif weight_state["source"] == "carton":
+        weight_formula = (
+            f"=ROUNDUP(({carton_weight_kg}/{final_qty})*1000*1.03,2)"
+        )
+    else:
+        weight_formula = (
+            f"=ROUNDUP(MAX(({carton_weight_kg}/{final_qty})*1000,"
+            f"{unit_weight_g})*1.03,2)"
+        )
+
+    return {
+        "quote_10": f'=IF(OR({cost_cell}="",{cost_cell}<=0),"",ROUND({cost_cell}/0.9,1))',
+        "quote_13": f'=IF(OR({cost_cell}="",{cost_cell}<=0),"",ROUND({cost_cell}/0.87,1))',
+        "quote_15": f'=IF(OR({cost_cell}="",{cost_cell}<=0),"",ROUND({cost_cell}/0.85,1))',
+        "quote_20": f'=IF(OR({cost_cell}="",{cost_cell}<=0),"",ROUND({cost_cell}/0.8,1))',
+        "weight": weight_formula,
+        "domestic": (
+            f'=IF(OR({weight_cell}="",{weight_cell}<=0),"",'
+            f'ROUNDUP(({weight_cell}/1000)*{final_dom},2))'
+        ),
+        "international": (
+            f'=IF(OR({weight_cell}="",{weight_cell}<=0),"",'
+            f'ROUNDUP(({weight_cell}/1000)*{intl_rate},2))'
+        ),
+        "cost": (
+            f'=IF(OR({weight_cell}="",{weight_cell}<=0,'
+            f'{domestic_cell}="",{international_cell}=""),"",'
+            f'ROUND((G{v_r}+{domestic_cell}+{international_cell})*{ex_rate},1))'
+        ),
+    }
 # --- 3. 側邊欄設定 ---
 settings = get_settings_cached()
 st.sidebar.header("⚙️ 成本參數設定")
@@ -163,7 +252,7 @@ if st.sidebar.button("📌 將目前數值設為預設"):
         st.sidebar.success(f"已更新預設 → 匯率 {ex_rate}")
         st.rerun()
 st.sidebar.caption(f"目前雲端預設:匯率 {settings['ex_rate']} / 國際 {settings['intl_rate']} / 內陸 {settings['dom_rate']}")
-# --- 4. 解析引擎 V11 ---
+# --- 4. 解析引擎 V12 ---
 # 注意：zhconv 會把「只」轉成「隻」，所有單位 pattern 都需含「隻」
 UNIT_PAT = r'(?:盒|pcs|PCS|只|隻|個|个|套|瓶|罐)'
 EMOJI_PAT = r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉]'
@@ -192,6 +281,7 @@ def parse_text(text):
         "price": 0.0,
         "qty": 0,
         "weight": 0.0,
+        "unit_weight_g": 0.0,
         "prod_size": "",
         "color_box_size": "",
         "outer_box_size": "",
@@ -255,12 +345,29 @@ def parse_text(text):
         if m:
             common["qty"] = int(m.group(1))
 
-    # ===== 毛重 =====
+    # ===== 單個重量 =====
+    unit_weight_pattern = (
+        r'(?:單個重量|单个重量|每個重量|每个重量|單件重量|单件重量|'
+        r'每件重量|單重|单重)\s*[：:]?\s*(?:約|约)?\s*'
+        r'([0-9]+(?:\.[0-9]+)?)\s*([Kk][Gg]|公斤|千克|[Gg]|公克|克)'
+    )
+    m_unit_weight = re.search(unit_weight_pattern, text_n)
+    if m_unit_weight:
+        unit_weight_value = float(m_unit_weight.group(1))
+        unit_weight_unit = m_unit_weight.group(2).lower()
+        if unit_weight_unit in ("kg", "公斤", "千克"):
+            unit_weight_value *= 1000
+        common["unit_weight_g"] = unit_weight_value
+
+    # 單個重量若以 kg 表示，不能再被下方無標籤的整箱 KG 規則誤抓。
+    carton_weight_text = re.sub(unit_weight_pattern, "", text_n)
+
+    # ===== 整箱毛重 =====
     m_weight_pair = re.search(
         r'(?:箱毛淨重|箱毛净重|整箱毛淨重|整箱毛净重|毛淨重|毛净重)'
         r'\s*[：:]?\s*([0-9]+(?:\.[0-9]+)?)\s*[/／]\s*'
         r'([0-9]+(?:\.[0-9]+)?)\s*[Kk][Gg]',
-        text_n,
+        carton_weight_text,
     )
     if m_weight_pair:
         common["weight"] = max(
@@ -270,9 +377,12 @@ def parse_text(text):
     else:
         m_weight = re.search(
             r'(?:整箱毛重|整箱重量|箱重|毛重|⚖️)\s*[：:]?\s*([0-9]+(?:\.[0-9]+)?)',
-            text_n)
+            carton_weight_text)
         if not m_weight:
-            m_weight = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*[Kk][Gg]', text_n)
+            m_weight = re.search(
+                r'([0-9]+(?:\.[0-9]+)?)\s*[Kk][Gg]',
+                carton_weight_text,
+            )
         if m_weight:
             common["weight"] = float(m_weight.group(1))
 
@@ -361,7 +471,8 @@ def parse_text(text):
         exclusion_keywords = [
             '型號','型号','貨號','货号','單價','单价','單個價格','单个价格',
             '價格','价格','裝箱','装箱','箱數','箱数','每箱','一箱',
-            '數量','数量','毛重','箱重','整箱重量','整箱毛重',
+            '數量','数量','重量','單重','单重','單個重量','单个重量',
+            '每個重量','每个重量','毛重','箱重','整箱重量','整箱毛重',
             '尺寸','單個尺寸','单个尺寸','單個包裝','单个包装',
             '彩盒','外箱','產品','产品','規格','规格','亞克力','亚克力',
             '包裝','包装','運費','运费','材積','材积','條碼','条码',
@@ -424,14 +535,40 @@ with st.expander("🔧 診斷資訊 (若解析有誤可展開查看)"):
     st.write("共用參數:", common_data)
     st.write("商品清單:", products_data)
 st.subheader("🔍 第二步:共用參數校正")
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 final_price = c1.number_input("進價(RMB)", value=common_data["price"], format="%.2f")
 final_qty = c2.number_input("裝箱量", value=common_data["qty"], step=1)
-final_weight = c3.number_input("毛重(kg)", value=common_data["weight"], format="%.2f")
-final_dom = c4.number_input("內陸運費(R/kg)", value=dom_rate_def)
-c5, c6 = st.columns(2)
-final_prod_size = c5.text_input("產品尺寸 (沒抓到可手動輸入)", value=common_data["prod_size"])
-final_color_size = c6.text_input("彩盒尺寸 (亞克力/單個包裝也算)", value=common_data["color_box_size"])
+final_unit_weight_g = c3.number_input(
+    "單個重量(g)",
+    value=common_data["unit_weight_g"],
+    format="%.2f",
+)
+final_carton_weight_kg = c4.number_input(
+    "整箱毛重(kg)",
+    value=common_data["weight"],
+    format="%.2f",
+)
+final_dom = c5.number_input("內陸運費(R/kg)", value=dom_rate_def)
+weight_state = resolve_weight_inputs(
+    final_carton_weight_kg,
+    final_unit_weight_g,
+    final_qty,
+)
+if weight_state["source"] == "missing":
+    st.warning("⚠️ 缺少單個重量或整箱毛重：重量、運費、預估到手成本及 10%～20% 報價會留白，避免誤報價。")
+elif weight_state["source"] == "unit":
+    st.info(
+        f"ℹ️ 已辨識單個重量 {final_unit_weight_g:g}g；運費將以 "
+        f"{weight_state['chargeable_weight_g']:.2f}g/pcs（含 3%）計算，不推算整箱毛重。"
+    )
+elif weight_state["source"] == "both" and weight_state["mismatch_ratio"] >= 0.2:
+    st.warning(
+        "⚠️ 單個重量與整箱毛重換算差異超過 20%；"
+        f"將暫以較高的 {weight_state['base_weight_g']:.2f}g/pcs 計算，避免低估運費。"
+    )
+c6, c7 = st.columns(2)
+final_prod_size = c6.text_input("產品尺寸 (沒抓到可手動輸入)", value=common_data["prod_size"])
+final_color_size = c7.text_input("彩盒尺寸 (亞克力/單個包裝也算)", value=common_data["color_box_size"])
 final_outer_size = st.text_input("外箱尺寸 (沒抓到可手動輸入)", value=common_data["outer_box_size"])
 final_extra = st.text_input("額外備註 (包裝資訊、雷射標等,可手動編輯)", value=common_data["extra_tags"])
 st.markdown("---")
@@ -529,19 +666,44 @@ if final_qty > 0:
                 max_no += 1
                 next_no = f"no{max_no}"
                 v_r = st_r + len(bulk_rows) + 1
-                f10 = f"=ROUND(K{v_r}/0.9,1)"
-                f13 = f"=ROUND(K{v_r}/0.87,1)"
-                f15 = f"=ROUND(K{v_r}/0.85,1)"
-                f20 = f"=ROUND(K{v_r}/0.8,1)"
-                f_cost = f"=ROUND((G{v_r}+I{v_r}+J{v_r})*{ex_rate},1)"
-                f_dom_formula = f"=ROUNDUP((H{v_r}/1000)*{final_dom}, 2)"
-                f_intl_formula = f"=ROUNDUP((H{v_r}/1000)*{intl_rate}, 2)"
-                f_weight_formula = f"=ROUNDUP(({final_weight}/{final_qty})*1000*1.03, 2)"
+                formulas = build_cost_formulas(
+                    v_r,
+                    final_carton_weight_kg,
+                    final_unit_weight_g,
+                    final_qty,
+                    final_dom,
+                    intl_rate,
+                    ex_rate,
+                )
+                if final_carton_weight_kg > 0 and final_unit_weight_g > 0:
+                    weight_note = (
+                        f"整箱毛重 {final_carton_weight_kg:g}KG／"
+                        f"單個重量 {final_unit_weight_g:g}g"
+                    )
+                elif final_carton_weight_kg > 0:
+                    weight_note = f"整箱毛重 {final_carton_weight_kg:g}KG"
+                elif final_unit_weight_g > 0:
+                    weight_note = f"單個重量 {final_unit_weight_g:g}g"
+                else:
+                    weight_note = "重量 未提供"
                 block = [
                     [next_no, str(row['名稱']).strip(), "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本", final_vendor],
-                    [today_str, info_display, f10, f13, f15, f20, final_price, f_weight_formula, f_dom_formula, f_intl_formula, f_cost, ""],
+                    [
+                        today_str,
+                        info_display,
+                        formulas["quote_10"],
+                        formulas["quote_13"],
+                        formulas["quote_15"],
+                        formulas["quote_20"],
+                        final_price,
+                        formulas["weight"],
+                        formulas["domestic"],
+                        formulas["international"],
+                        formulas["cost"],
+                        "",
+                    ],
                     ["", f"裝箱 {final_qty}個/箱"] + [""] * 10,
-                    ["", f"毛重 {final_weight}KG"] + [""] * 10,
+                    ["", weight_note] + [""] * 10,
                     ["", f"貨號 {normalize_code(row['貨號'])}"] + [""] * 10,
                     empty_row
                 ]
