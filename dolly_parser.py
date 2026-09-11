@@ -7,8 +7,8 @@ import zhconv
 import datetime
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V71")
-st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V71 新增:單個重量辨識；缺重量時運費、成本與報價留白】")
+st.title("🪐 半自動 - 採購報價彙整表 V72")
+st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V72 重量加成 5%；多品村廣州包郵】")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表"
 SETTINGS_WS = "_設定"
@@ -104,6 +104,19 @@ def normalize_name(value):
     """統一商品名稱的外圍空白，保留名稱內容。"""
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
+def is_free_shipping_vendor(vendor):
+    """多品村由廣州出貨，陸運費固定包郵。"""
+    normalized = re.sub(r"\s+", "", str(vendor or "")).lower()
+    return normalized in ("多品村", "v多品村")
+
+def build_carton_note_row(final_qty, vendor):
+    """建立裝箱備註列，並把多品村包郵註記放在大陸運費欄下方。"""
+    row = [""] * 12
+    row[1] = f"裝箱 {final_qty}個/箱"
+    if is_free_shipping_vendor(vendor):
+        row[8] = "廣州包郵"
+    return row
+
 def extract_saved_products(sheet_rows):
     """從既有的 6 列商品區塊擷取名稱與貨號。"""
     products = []
@@ -146,6 +159,16 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
             sheet.format(f"B{base_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
             sheet.format(f"C{base_r}:F{base_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
             sheet.format(f"G{base_r}:K{base_r}", {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}})
+            note_index = (i * block_size) + 2
+            if (
+                note_index < len(bulk_rows)
+                and len(bulk_rows[note_index]) > 8
+                and bulk_rows[note_index][8] == "廣州包郵"
+            ):
+                sheet.format(
+                    f"I{base_r + 2}",
+                    {"backgroundColor": {"red": 0.8509804, "green": 0.91764706, "blue": 0.827451}},
+                )
         return True
     except Exception as e:
         st.error(f"寫入雲端失敗:{e}")
@@ -184,7 +207,7 @@ def resolve_weight_inputs(carton_weight_kg, unit_weight_g, qty):
         "carton_unit_g": carton_unit_g,
         "unit_weight_g": unit_weight_g,
         "base_weight_g": base_weight_g,
-        "chargeable_weight_g": base_weight_g * 1.03 if base_weight_g > 0 else 0.0,
+        "chargeable_weight_g": base_weight_g * 1.05 if base_weight_g > 0 else 0.0,
         "mismatch_ratio": mismatch_ratio,
     }
 
@@ -197,6 +220,7 @@ def build_cost_formulas(
     final_dom,
     intl_rate,
     ex_rate,
+    vendor="",
 ):
     """建立成本公式；沒有有效重量時，運費、成本與報價全部留白。"""
     weight_cell = f"H{v_r}"
@@ -208,15 +232,25 @@ def build_cost_formulas(
     if weight_state["source"] == "missing":
         weight_formula = ""
     elif weight_state["source"] == "unit":
-        weight_formula = f"=ROUNDUP({unit_weight_g}*1.03,2)"
+        weight_formula = f"=ROUNDUP({unit_weight_g}*1.05,2)"
     elif weight_state["source"] == "carton":
         weight_formula = (
-            f"=ROUNDUP(({carton_weight_kg}/{final_qty})*1000*1.03,2)"
+            f"=ROUNDUP(({carton_weight_kg}/{final_qty})*1000*1.05,2)"
         )
     else:
         weight_formula = (
             f"=ROUNDUP(MAX(({carton_weight_kg}/{final_qty})*1000,"
-            f"{unit_weight_g})*1.03,2)"
+            f"{unit_weight_g})*1.05,2)"
+        )
+
+    if is_free_shipping_vendor(vendor):
+        domestic_formula = (
+            f'=IF(OR({weight_cell}="",{weight_cell}<=0),"",0)'
+        )
+    else:
+        domestic_formula = (
+            f'=IF(OR({weight_cell}="",{weight_cell}<=0),"",'
+            f'ROUNDUP(({weight_cell}/1000)*{final_dom},2))'
         )
 
     return {
@@ -225,10 +259,7 @@ def build_cost_formulas(
         "quote_15": f'=IF(OR({cost_cell}="",{cost_cell}<=0),"",ROUND({cost_cell}/0.85,1))',
         "quote_20": f'=IF(OR({cost_cell}="",{cost_cell}<=0),"",ROUND({cost_cell}/0.8,1))',
         "weight": weight_formula,
-        "domestic": (
-            f'=IF(OR({weight_cell}="",{weight_cell}<=0),"",'
-            f'ROUNDUP(({weight_cell}/1000)*{final_dom},2))'
-        ),
+        "domestic": domestic_formula,
         "international": (
             f'=IF(OR({weight_cell}="",{weight_cell}<=0),"",'
             f'ROUNDUP(({weight_cell}/1000)*{intl_rate},2))'
@@ -559,7 +590,7 @@ if weight_state["source"] == "missing":
 elif weight_state["source"] == "unit":
     st.info(
         f"ℹ️ 已辨識單個重量 {final_unit_weight_g:g}g；運費將以 "
-        f"{weight_state['chargeable_weight_g']:.2f}g/pcs（含 3%）計算，不推算整箱毛重。"
+        f"{weight_state['chargeable_weight_g']:.2f}g/pcs（含 5%）計算，不推算整箱毛重。"
     )
 elif weight_state["source"] == "both" and weight_state["mismatch_ratio"] >= 0.2:
     st.warning(
@@ -597,6 +628,8 @@ if final_qty > 0:
             ["v菲凡", "v多品村", "v優娜卡樂星"],
             index=0,
         )
+    if is_free_shipping_vendor(final_vendor):
+        st.success("✅ 此廠商廣州包郵")
     to_save_df = edited_df[(edited_df["寫入"] == True) & ((edited_df["貨號"] != "") | (edited_df["名稱"] != ""))]
     all_sheets_data = get_all_sheets_data()
     duplicate_warnings = []
@@ -674,6 +707,7 @@ if final_qty > 0:
                     final_dom,
                     intl_rate,
                     ex_rate,
+                    final_vendor,
                 )
                 if final_carton_weight_kg > 0 and final_unit_weight_g > 0:
                     weight_note = (
@@ -702,7 +736,7 @@ if final_qty > 0:
                         formulas["cost"],
                         "",
                     ],
-                    ["", f"裝箱 {final_qty}個/箱"] + [""] * 10,
+                    build_carton_note_row(final_qty, final_vendor),
                     ["", weight_note] + [""] * 10,
                     ["", f"貨號 {normalize_code(row['貨號'])}"] + [""] * 10,
                     empty_row

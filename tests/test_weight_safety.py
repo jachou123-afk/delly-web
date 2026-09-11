@@ -39,12 +39,16 @@ class WeightSafetyTests(unittest.TestCase):
                 "normalize_name",
                 "clean_product_name",
                 "parse_text",
+                "is_free_shipping_vendor",
+                "build_carton_note_row",
                 "resolve_weight_inputs",
                 "build_cost_formulas",
             },
             {"UNIT_PAT", "EMOJI_PAT"},
         )
         cls.parse_text = staticmethod(namespace["parse_text"])
+        cls.is_free_shipping_vendor = staticmethod(namespace["is_free_shipping_vendor"])
+        cls.build_carton_note_row = staticmethod(namespace["build_carton_note_row"])
         cls.resolve_weight_inputs = staticmethod(namespace["resolve_weight_inputs"])
         cls.build_cost_formulas = staticmethod(namespace["build_cost_formulas"])
 
@@ -78,7 +82,7 @@ class WeightSafetyTests(unittest.TestCase):
     def test_unit_weight_keeps_cost_path_available(self):
         formulas = self.build_cost_formulas(18, 0.0, 150.0, 150, 1.5, 8.5, 4.85)
 
-        self.assertEqual(formulas["weight"], "=ROUNDUP(150.0*1.03,2)")
+        self.assertEqual(formulas["weight"], "=ROUNDUP(150.0*1.05,2)")
         self.assertIn('H18=""', formulas["domestic"])
         self.assertIn('H18=""', formulas["international"])
         self.assertIn('H18=""', formulas["cost"])
@@ -94,6 +98,31 @@ class WeightSafetyTests(unittest.TestCase):
         for key in ("quote_10", "quote_13", "quote_15", "quote_20"):
             self.assertIn('K24=""', formulas[key])
 
+        free_shipping = self.build_cost_formulas(
+            24, 0.0, 0.0, 72, 1.5, 8.5, 4.85, "v多品村"
+        )
+        self.assertEqual(
+            free_shipping["domestic"],
+            '=IF(OR(H24="",H24<=0),"",0)',
+        )
+
+    def test_duopincun_has_zero_domestic_freight_and_shipping_note(self):
+        formulas = self.build_cost_formulas(
+            18, 0.0, 150.0, 150, 1.5, 8.5, 4.85, "v多品村"
+        )
+        note_row = self.build_carton_note_row(150, "v多品村")
+
+        self.assertTrue(self.is_free_shipping_vendor("多品村"))
+        self.assertTrue(self.is_free_shipping_vendor("V多品村"))
+        self.assertFalse(self.is_free_shipping_vendor("v菲凡"))
+        self.assertEqual(
+            formulas["domestic"],
+            '=IF(OR(H18="",H18<=0),"",0)',
+        )
+        self.assertEqual(note_row[1], "裝箱 150個/箱")
+        self.assertEqual(note_row[8], "廣州包郵")
+        self.assertEqual(len(note_row), 12)
+
     def test_both_weights_choose_the_higher_per_piece_value(self):
         state = self.resolve_weight_inputs(16.0, 150.0, 150)
         formulas = self.build_cost_formulas(30, 16.0, 150.0, 150, 1.5, 8.5, 4.85)
@@ -103,14 +132,14 @@ class WeightSafetyTests(unittest.TestCase):
         self.assertGreaterEqual(state["mismatch_ratio"], 0.2)
         self.assertEqual(
             formulas["weight"],
-            "=ROUNDUP(MAX((16.0/150)*1000,150.0)*1.03,2)",
+            "=ROUNDUP(MAX((16.0/150)*1000,150.0)*1.05,2)",
         )
 
     def test_carton_weight_keeps_existing_calculation(self):
         formulas = self.build_cost_formulas(36, 26.0, 0.0, 240, 1.5, 8.5, 4.7)
 
         self.assertIn(
-            "ROUNDUP((26.0/240)*1000*1.03,2)",
+            "ROUNDUP((26.0/240)*1000*1.05,2)",
             formulas["weight"],
         )
         self.assertIn("ROUND((G36+I36+J36)*4.7,1)", formulas["cost"])
