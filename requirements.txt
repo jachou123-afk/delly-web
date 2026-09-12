@@ -1,5 +1,5 @@
-streamlit
+streamlit==1.63.0
 pandas
-gspread
+gspread==6.2.1
 oauth2client
 zhconv

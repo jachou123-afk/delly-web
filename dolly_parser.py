@@ -7,10 +7,10 @@ import zhconv
 import datetime
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V72")
-st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V72 重量加成 5%；多品村廣州包郵】")
+st.title("🪐 半自動 - 採購報價彙整表 V73")
+st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V73 修正雲端預設儲存；重量加成 5%；多品村廣州包郵】")
 # --- 2. Google Sheets 連線功能 ---
-SHEET_NAME = "半自動 - 採購報價彙整表"
+SHEET_NAME = "半自動 - 採購報價彙整表BGD"
 SETTINGS_WS = "_設定"
 def clean_str(v):
     return (v
@@ -41,12 +41,20 @@ def get_credentials():
         return ServiceAccountCredentials.from_json_keyfile_dict(clean_dict, scope)
     else:
         return ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
+
+def open_spreadsheet(client):
+    """優先使用固定試算表 ID，未設定時才以正式檔名開啟。"""
+    spreadsheet_id = clean_str(str(st.secrets.get("spreadsheet_id", "")))
+    if spreadsheet_id:
+        return client.open_by_key(spreadsheet_id)
+    return client.open(SHEET_NAME)
+
 @st.cache_data(ttl=15)
 def get_all_sheets_data():
     try:
         creds = get_credentials()
         client = gspread.authorize(creds)
-        spreadsheet = client.open(SHEET_NAME)
+        spreadsheet = open_spreadsheet(client)
         all_data = {}
         for ws in spreadsheet.worksheets():
             all_data[ws.title] = ws.get_all_values()
@@ -61,7 +69,7 @@ def load_settings():
     try:
         creds = get_credentials()
         client = gspread.authorize(creds)
-        spreadsheet = client.open(SHEET_NAME)
+        spreadsheet = open_spreadsheet(client)
         try:
             ws = spreadsheet.worksheet(SETTINGS_WS)
         except gspread.exceptions.WorksheetNotFound:
@@ -72,21 +80,25 @@ def load_settings():
                     defaults[row[0]] = float(row[1])
                 except ValueError:
                     pass
-    except Exception:
-        pass
+    except Exception as e:
+        st.sidebar.error(f"讀取雲端預設失敗:{type(e).__name__}: {e}")
     return defaults
 
 def save_settings(s):
     try:
         creds = get_credentials()
         client = gspread.authorize(creds)
-        spreadsheet = client.open(SHEET_NAME)
+        spreadsheet = open_spreadsheet(client)
         try:
             ws = spreadsheet.worksheet(SETTINGS_WS)
         except gspread.exceptions.WorksheetNotFound:
             ws = spreadsheet.add_worksheet(title=SETTINGS_WS, rows="10", cols="2")
         rows = [[k, v] for k, v in s.items()]
-        ws.update("A1:B" + str(len(rows)), rows, value_input_option="USER_ENTERED")
+        ws.update(
+            values=rows,
+            range_name="A1:B" + str(len(rows)),
+            value_input_option="USER_ENTERED",
+        )
         return True
     except Exception as e:
         st.sidebar.error(f"儲存預設失敗:{e}")
@@ -146,13 +158,17 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
     try:
         creds = get_credentials()
         client = gspread.authorize(creds)
-        spreadsheet = client.open(SHEET_NAME)
+        spreadsheet = open_spreadsheet(client)
         try:
             sheet = spreadsheet.worksheet(category_name)
         except gspread.exceptions.WorksheetNotFound:
             sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
         end_r = st_r + len(bulk_rows) - 1
-        sheet.update(f"A{st_r}:L{end_r}", bulk_rows, value_input_option="USER_ENTERED")
+        sheet.update(
+            values=bulk_rows,
+            range_name=f"A{st_r}:L{end_r}",
+            value_input_option="USER_ENTERED",
+        )
         num_blocks = len(bulk_rows) // block_size
         for i in range(num_blocks):
             base_r = st_r + (i * block_size)
@@ -611,7 +627,7 @@ if "name" not in df_items.columns:
     df_items["name"] = ""
 df_items.insert(0, "寫入", True)
 df_items = df_items.rename(columns={"code": "貨號", "name": "名稱"})
-edited_df = st.data_editor(df_items, num_rows="dynamic", use_container_width=True)
+edited_df = st.data_editor(df_items, num_rows="dynamic", width="stretch")
 if final_qty > 0:
     st.markdown("---")
     st.subheader("📊 第三步:選擇分頁與批量存入")
