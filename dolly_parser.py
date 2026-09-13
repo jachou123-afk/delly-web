@@ -11,8 +11,8 @@ import hashlib
 from zoneinfo import ZoneInfo
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V74")
-st.info("V74：逐款解析、保留補充資訊、成本防呆、衝突阻擋及寫後核對。重量加成5%、多品村廣州包郵與既有報價公式不變。")
+st.title("🪐 半自動 - 採購報價彙整表 V75")
+st.info("V75：新增既有商品原位修正，先選定原 NO 並核對修改前後差異；保留原日期、NO、格式及圖片位置。V74 解析與成本防呆維持不變。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
 SETTINGS_WS = "_設定"
@@ -156,8 +156,92 @@ def extract_saved_products(sheet_rows):
             "no": str(row[0]).strip(),
             "code": code,
             "name": name,
+            "row_index": i + 1,
         })
     return products
+
+
+def protect_user_entered_rows(rows, block_size=6):
+    """USER_ENTERED 仍用於新增日期與公式；其餘文字禁止被解讀成公式。"""
+    protected = []
+    formula_columns = {2, 3, 4, 5, 7, 8, 9, 10}
+    for row_index, row in enumerate(rows or []):
+        protected_row = []
+        for col_index, value in enumerate(row or []):
+            formula_cell = (
+                row_index % block_size == 1 and col_index in formula_columns
+            )
+            if (
+                not formula_cell
+                and isinstance(value, str)
+                and value.startswith(("=", "+", "-", "@"))
+            ):
+                value = "'" + value
+            protected_row.append(value)
+        protected.append(protected_row)
+    return protected
+
+
+def pad_block(rows, height=6, width=12):
+    """把 Sheets 省略的尾端空白補回，供精確快照與寫後核對。"""
+    result = []
+    for row in list(rows or [])[:height]:
+        values = list(row or [])[:width]
+        result.append(values + [""] * (width - len(values)))
+    while len(result) < height:
+        result.append([""] * width)
+    return result
+
+
+def get_saved_block(sheet_rows, base_row):
+    """以 1-based 商品標題列取得固定 6x12 區塊。"""
+    if not isinstance(base_row, int) or base_row < 1:
+        raise ValueError("商品起始列不合法")
+    return pad_block(list(sheet_rows or [])[base_row - 1:base_row + 5])
+
+
+def normalize_name_key(value):
+    """僅用於候選排序；不據此自動選定或覆蓋商品。"""
+    return re.sub(r"[\W_]+", "", normalize_name(value), flags=re.UNICODE).lower()
+
+
+def find_update_candidates(product, sheet_rows):
+    """列出指定分頁的全部商品，符合貨號／品名者排前，但不自動選取。"""
+    code = normalize_code(product.get("code", ""))
+    name_key = normalize_name_key(product.get("name", ""))
+    candidates = []
+    for saved in extract_saved_products(sheet_rows):
+        code_match = bool(code and code == saved["code"])
+        name_match = bool(name_key and name_key == normalize_name_key(saved["name"]))
+        rank = 0 if code_match and name_match else 1 if name_match else 2 if code_match else 3
+        item = dict(saved)
+        item["match_reason"] = (
+            "貨號＋品名符合" if rank == 0 else
+            "品名符合、貨號不同" if rank == 1 else
+            "貨號符合、品名不同" if rank == 2 else
+            "無直接符合"
+        )
+        candidates.append(item)
+    return sorted(candidates, key=lambda item: (item["match_reason"] == "無直接符合", {"貨號＋品名符合": 0, "品名符合、貨號不同": 1, "貨號符合、品名不同": 2}.get(item["match_reason"], 3), item["row_index"]))
+
+
+@st.cache_data(ttl=15)
+def get_target_formula_block(category_name, base_row):
+    """讀取既有商品的原始值／公式快照，不以計算後顯示值取代公式。"""
+    try:
+        creds = get_credentials()
+        client = gspread.authorize(creds)
+        sheet = open_spreadsheet(client).worksheet(category_name)
+        rows = sheet.get(
+            f"A{base_row}:L{base_row + 5}",
+            value_render_option="FORMULA",
+            maintain_size=True,
+            pad_values=True,
+        )
+        return {"worksheet_id": sheet.id, "block": pad_block(rows)}
+    except Exception as e:
+        st.error(f"讀取原商品公式快照失敗：{e}")
+        return None
 
 def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expected_rows=None):
     write_started = False
@@ -196,7 +280,7 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
             sheet.add_rows(end_r - sheet.row_count)
         write_started = True
         sheet.update(
-            values=bulk_rows,
+            values=protect_user_entered_rows(bulk_rows, block_size),
             range_name=f"A{st_r}:L{end_r}",
             value_input_option="USER_ENTERED",
         )
@@ -781,9 +865,34 @@ def cost_blockers(price, qty, carton_kg, unit_g, dom, intl, ex, issues=(), price
     return list(dict.fromkeys(reasons))
 
 
-def duplicate_messages(incoming, sheets):
+def supplemental_uncertainty_issues(text):
+    """重新掃描可編輯補充欄，避免人工新增的疑慮繞過成本防呆。"""
+    normalized = zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw")
+    issues = []
+    if re.search(r"待定|待確認|另議|未定|以實際", normalized):
+        issues.append("補充欄含未確認條件，請先向來源確認")
+    if re.search(
+        r"木架|木框|另加|另計|不含運|運費另|附加費|"
+        r"(?:運費|打包費|包裝費|加工費)\s*:?[\s約]*\d",
+        normalized,
+    ):
+        issues.append("有木架或額外費用，須確認是否已包含重量及費用")
+    return issues
+
+
+def duplicate_messages(incoming, sheets, exclude=None):
+    """回報重複／衝突；原位修正時只排除已明確選定的那一個 NO。"""
     messages = []
-    existing = [(title, p) for title, rows in sheets.items() for p in extract_saved_products(rows)]
+    excluded = {
+        (str(title), str(no).strip().lower())
+        for title, no in (exclude or set())
+    }
+    existing = [
+        (title, p)
+        for title, rows in sheets.items()
+        for p in extract_saved_products(rows)
+        if (str(title), str(p["no"]).strip().lower()) not in excluded
+    ]
     seen = []
     for item in incoming:
         code, name = normalize_code(item["code"]), normalize_name(item["name"])
@@ -792,9 +901,359 @@ def duplicate_messages(incoming, sheets):
             same_name = bool(name and name == saved["name"])
             if same_code or same_name:
                 kind = "同貨號不同品名衝突" if same_code and not same_name else "重複或同品名待核對"
-                messages.append(f"{kind}：{code} {name} → {title} {saved.get('no', '')} {saved['name']}；停止新增，不自動覆蓋或跳過")
+                messages.append(f"{kind}：{code} {name} → {title} {saved.get('no', '')} {saved['name']}；停止寫入，不自動覆蓋或跳過")
         seen.append({"code": code, "name": name})
     return messages
+
+
+def build_product_block(
+    no_value,
+    date_value,
+    value_row,
+    name,
+    code,
+    price,
+    qty,
+    qty_unit,
+    carton_weight_kg,
+    unit_weight_g,
+    dom_rate,
+    international_rate,
+    exchange_rate,
+    vendor,
+    prod_size="",
+    color_size="",
+    outer_size="",
+    extra="",
+    blocked=False,
+):
+    """建立同一套 6x12 商品區塊，新增與原位修正共用。"""
+    formulas = build_cost_formulas(
+        value_row,
+        carton_weight_kg,
+        unit_weight_g,
+        qty,
+        dom_rate,
+        international_rate,
+        exchange_rate,
+        vendor,
+        final_price=price,
+        blocked=blocked,
+    )
+    info_lines = [f"計價單位：{qty_unit}"]
+    if prod_size:
+        info_lines.append(f"尺寸 {prod_size}")
+    if color_size:
+        info_lines.append(f"彩盒尺寸 {color_size}")
+    if outer_size:
+        info_lines.append(f"外箱尺寸 {outer_size}")
+    if extra:
+        info_lines.append(str(extra).strip())
+    info_display = "\n".join(info_lines)
+
+    if carton_weight_kg > 0 and unit_weight_g > 0:
+        weight_note = f"整箱毛重 {carton_weight_kg:g}KG／單個重量 {unit_weight_g:g}g"
+    elif carton_weight_kg > 0:
+        weight_note = f"整箱毛重 {carton_weight_kg:g}KG"
+    elif unit_weight_g > 0:
+        weight_note = f"單個重量 {unit_weight_g:g}g"
+    else:
+        weight_note = "重量 未提供"
+
+    stored_price = price if isinstance(price, (int, float)) and math.isfinite(price) and price > 0 else ""
+    return [
+        [no_value, normalize_name(name), "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", f"重量g/{qty_unit}", "大陸運費rmb", "國際運費", "預估到手成本", vendor],
+        [date_value, info_display, formulas["quote_10"], formulas["quote_13"], formulas["quote_15"], formulas["quote_20"], stored_price, formulas["weight"], formulas["domestic"], formulas["international"], formulas["cost"], ""],
+        build_carton_note_row(qty, vendor, qty_unit),
+        ["", weight_note] + [""] * 10,
+        ["", f"貨號 {normalize_code(code)}"] + [""] * 10,
+        [""] * 12,
+    ]
+
+
+UPDATE_CELL_COORDS = tuple(
+    [(0, 1), (0, 7), (0, 11)]
+    + [(1, col) for col in range(1, 11)]
+    + [(2, 1), (2, 8), (3, 1), (4, 1)]
+)
+SAFETY_CLEAR_COORDS = tuple([(1, col) for col in (2, 3, 4, 5, 7, 8, 9, 10)])
+
+
+def update_batch_data(base_row, new_block):
+    """更新白名單；刻意不包含 A 欄、空白列、M:T、格式與圖片物件。"""
+    block = pad_block(new_block)
+    return [
+        {"range": f"B{base_row}", "values": [[block[0][1]]]},
+        {"range": f"H{base_row}", "values": [[block[0][7]]]},
+        {"range": f"L{base_row}", "values": [[block[0][11]]]},
+        {"range": f"B{base_row + 1}:K{base_row + 1}", "values": [block[1][1:11]]},
+        {"range": f"B{base_row + 2}", "values": [[block[2][1]]]},
+        {"range": f"I{base_row + 2}", "values": [[block[2][8]]]},
+        {"range": f"B{base_row + 3}", "values": [[block[3][1]]]},
+        {"range": f"B{base_row + 4}", "values": [[block[4][1]]]},
+    ]
+
+
+def safety_clear_block(old_formula_block):
+    """資料仍待確認時，只清除衍生數字，保留全部原始欄位。"""
+    result = pad_block(old_formula_block)
+    result = [row[:] for row in result]
+    for row, col in SAFETY_CLEAR_COORDS:
+        result[row][col] = ""
+    return result
+
+
+def safety_clear_batch_data(base_row):
+    return [
+        {"range": f"C{base_row + 1}:F{base_row + 1}", "values": [["", "", "", ""]]},
+        {"range": f"H{base_row + 1}:K{base_row + 1}", "values": [["", "", "", ""]]},
+    ]
+
+
+def user_entered_cell_data(value, formula_allowed=False):
+    """建立明確型別的 Sheets CellData，文字永遠不交給公式解析器。"""
+    if value is None or value == "":
+        entered_value = {}
+    elif formula_allowed:
+        if not isinstance(value, str) or not value.startswith("="):
+            raise ValueError("衍生欄位只能寫入公式或空白")
+        entered_value = {"formulaValue": value}
+    elif isinstance(value, bool):
+        entered_value = {"boolValue": value}
+    elif isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            raise ValueError("不可寫入非有限數字")
+        entered_value = {"numberValue": value}
+    else:
+        entered_value = {"stringValue": str(value)}
+    return {"userEnteredValue": entered_value}
+
+
+def correction_value_update_requests(
+    worksheet_id,
+    base_row,
+    old_formula_block,
+    new_block,
+    active_coords,
+):
+    """用單一 atomic batch 的 typed updateCells，只建立真正有差異的請求。"""
+    old, new = pad_block(old_formula_block), pad_block(new_block)
+    requests = []
+    for row, col in active_coords:
+        if cells_equal(old[row][col], new[row][col]):
+            continue
+        requests.append({
+            "updateCells": {
+                "range": {
+                    "sheetId": worksheet_id,
+                    "startRowIndex": base_row - 1 + row,
+                    "endRowIndex": base_row + row,
+                    "startColumnIndex": col,
+                    "endColumnIndex": col + 1,
+                },
+                "rows": [{
+                    "values": [user_entered_cell_data(
+                        new[row][col],
+                        formula_allowed=(row, col) in SAFETY_CLEAR_COORDS,
+                    )]
+                }],
+                "fields": "userEnteredValue",
+            }
+        })
+    return requests
+
+
+def cells_equal(actual, expected):
+    if (
+        isinstance(actual, (int, float))
+        and not isinstance(actual, bool)
+        and isinstance(expected, (int, float))
+        and not isinstance(expected, bool)
+    ):
+        return actual == expected
+    actual_value = "" if actual is None else actual
+    expected_value = "" if expected is None else expected
+    return str(actual_value) == str(expected_value)
+
+
+def changed_update_cells(old_formula_block, new_block):
+    old, new = pad_block(old_formula_block), pad_block(new_block)
+    return [(row, col) for row, col in UPDATE_CELL_COORDS if not cells_equal(old[row][col], new[row][col])]
+
+
+def update_diff_rows(old_display_block, new_block):
+    """提供人可讀的修改前後差異；NO 與日期列出但永遠不寫入。"""
+    old, new = pad_block(old_display_block), pad_block(new_block)
+    fields = [
+        ("NO（保留）", old[0][0], old[0][0]),
+        ("原日期（保留）", old[1][0], old[1][0]),
+        ("商品名稱", old[0][1], new[0][1]),
+        ("貨號", old[4][1], new[4][1]),
+        ("廠商", old[0][11], new[0][11]),
+        ("進價 RMB", old[1][6], new[1][6]),
+        ("商品資訊", old[1][1], new[1][1]),
+        ("裝箱資訊", old[2][1], new[2][1]),
+        ("重量資訊", old[3][1], new[3][1]),
+        ("大陸運費備註", old[2][8], new[2][8]),
+        ("報價／運費／成本", "現有值或公式", "依新版防呆公式重新計算" if any(new[1][col] for col in (2, 3, 4, 5, 7, 8, 9, 10)) else "全部留白"),
+        ("圖片與格式", "保留", "不在寫入範圍"),
+    ]
+    return [{"欄位": field, "目前": before, "修正後": after} for field, before, after in fields]
+
+
+def update_existing_product(
+    category_name,
+    base_row,
+    expected_no,
+    expected_worksheet_id,
+    expected_rows,
+    expected_formula_block,
+    new_block,
+    safety_only=False,
+    identity_evidence="",
+):
+    """以精確 NO＋列號＋雙快照原位更新；任何漂移都停止，不重新定位。"""
+    write_started = False
+    try:
+        if expected_rows is None or expected_formula_block is None:
+            raise ValueError("缺少原商品快照")
+        expected_display = get_saved_block(expected_rows, base_row)
+        expected_formula = pad_block(expected_formula_block)
+        planned = pad_block(new_block)
+        expected_no = str(expected_no or "").strip()
+        if not str(identity_evidence or "").strip():
+            raise ValueError("缺少同一商品的人工作業確認")
+        if not re.fullmatch(r"no\d+", expected_no, re.I):
+            raise ValueError("原 NO 格式不合法")
+        if str(expected_display[0][0]).strip().lower() != expected_no.lower():
+            raise ValueError("所選 NO 與顯示快照不一致")
+        if str(expected_formula[0][0]).strip().lower() != expected_no.lower():
+            raise ValueError("所選 NO 與公式快照不一致")
+        if sum(
+            1 for row in expected_rows
+            if row and str(row[0]).strip().lower() == expected_no.lower()
+        ) != 1:
+            raise ValueError("原 NO 不唯一，停止修正")
+        if any(
+            row and re.fullmatch(r"no\d+", str(row[0]).strip(), re.I)
+            for row in expected_display[1:]
+        ):
+            raise ValueError("商品 6 列區塊重疊或不完整")
+        if str(planned[0][0]).strip().lower() != expected_no.lower():
+            raise ValueError("原位修正不得變更 NO")
+        active_coords = SAFETY_CLEAR_COORDS if safety_only else UPDATE_CELL_COORDS
+        if safety_only:
+            for row in range(6):
+                for col in range(12):
+                    if (row, col) in SAFETY_CLEAR_COORDS:
+                        if planned[row][col] != "":
+                            raise ValueError("安全待確認模式只能清空衍生數字")
+                    elif not cells_equal(planned[row][col], expected_formula[row][col]):
+                        raise ValueError("安全待確認模式不得修改原始資料")
+        if not any(not cells_equal(expected_formula[row][col], planned[row][col]) for row, col in active_coords):
+            raise ValueError("沒有可套用的變更")
+
+        creds = get_credentials()
+        client = gspread.authorize(creds)
+        spreadsheet = open_spreadsheet(client)
+        try:
+            sheet = spreadsheet.worksheet(category_name)
+        except gspread.exceptions.WorksheetNotFound:
+            st.error("找不到原分頁，停止修正；不會新建分頁。")
+            return False
+        if sheet.id != expected_worksheet_id:
+            st.error("分頁已被刪除或重建，停止修正；請重新選擇原商品。")
+            return False
+
+        fresh_rows = sheet.get_all_values()
+        fresh_formula = pad_block(sheet.get(
+            f"A{base_row}:L{base_row + 5}",
+            value_render_option="FORMULA",
+            maintain_size=True,
+            pad_values=True,
+        ))
+        if fresh_rows != expected_rows or fresh_formula != expected_formula:
+            st.error("原商品或雲表已被修改，停止修正；請重新載入並重新核對差異。")
+            get_all_sheets_data.clear()
+            get_target_formula_block.clear()
+            return False
+
+        if not safety_only:
+            live_sheets = {ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()}
+            planned_product = extract_saved_products(planned)[0]
+            conflicts = duplicate_messages(
+                [{"code": planned_product["code"], "name": planned_product["name"]}],
+                live_sheets,
+                exclude={(category_name, expected_no)},
+            )
+            if conflicts:
+                st.error("；".join(conflicts))
+                return False
+
+        # 最後一次精確讀取；不因列移動而自動重新搜尋目標。
+        # 同時再次掃描全部分頁，把跨分頁撞單的競態窗口縮到最小。
+        final_live_sheets = {
+            ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()
+        }
+        if final_live_sheets.get(category_name) != expected_rows or pad_block(sheet.get(
+            f"A{base_row}:L{base_row + 5}",
+            value_render_option="FORMULA",
+            maintain_size=True,
+            pad_values=True,
+        )) != expected_formula:
+            st.error("送出前原商品又有變動，已停止修正。")
+            get_all_sheets_data.clear()
+            get_target_formula_block.clear()
+            return False
+        if not safety_only:
+            final_conflicts = duplicate_messages(
+                [{
+                    "code": planned_product["code"],
+                    "name": planned_product["name"],
+                }],
+                final_live_sheets,
+                exclude={(category_name, expected_no)},
+            )
+            if final_conflicts:
+                st.error("送出前再次核對發現撞單：" + "；".join(final_conflicts))
+                return False
+
+        requests = correction_value_update_requests(
+            sheet.id,
+            base_row,
+            expected_formula,
+            planned,
+            active_coords,
+        )
+        if not requests:
+            raise ValueError("送出前已沒有可套用的變更")
+        write_started = True
+        spreadsheet.batch_update({"requests": requests})
+
+        actual_formula = pad_block(sheet.get(
+            f"A{base_row}:L{base_row + 5}",
+            value_render_option="FORMULA",
+            maintain_size=True,
+            pad_values=True,
+        ))
+        for row, col in active_coords:
+            if not cells_equal(actual_formula[row][col], planned[row][col]):
+                raise ValueError(f"寫後核對不符：{category_name}!{chr(65 + col)}{base_row + row}")
+        # 所有非白名單儲存格（含 NO、日期、空白列）必須完全不變。
+        whitelist = set(active_coords)
+        for row in range(6):
+            for col in range(12):
+                if (row, col) not in whitelist and not cells_equal(actual_formula[row][col], expected_formula[row][col]):
+                    raise ValueError(f"保留欄位遭變更：{category_name}!{chr(65 + col)}{base_row + row}")
+        return True
+    except Exception as e:
+        get_all_sheets_data.clear()
+        get_target_formula_block.clear()
+        if write_started:
+            st.error(f"原位資料可能已更新，但寫後核對未完成。請先檢查原 NO，不可直接重試。詳情：{e}")
+        else:
+            st.error(f"尚未更新原商品：{e}")
+        return False
 
 
 # --- 5. 主畫面流程 ---
@@ -850,9 +1309,20 @@ parsed_unit = common_data["qty_unit"]
 final_qty_unit = st.selectbox("装箱及計價單位（必須一致；不同時先人工換算）", unit_options,
                                 index=unit_options.index(parsed_unit) if parsed_unit in unit_options else 0)
 active_issues = list(common_data["issues"])
+active_issues.extend(supplemental_uncertainty_issues(final_extra))
+active_issues = list(dict.fromkeys(active_issues))
 if any("木架或額外費用" in issue for issue in active_issues):
     st.warning("木架等附加項目未確認前不提供成本。若費用另加，先將每銷售單位進價及整箱重量校正為含附加項目的數值。")
-    confirmation_key = hashlib.sha256(repr((user_input, final_price, final_qty, final_unit_weight_g, final_carton_weight_kg)).encode()).hexdigest()
+    confirmation_key = hashlib.sha256(
+        repr((
+            user_input,
+            final_price,
+            final_qty,
+            final_unit_weight_g,
+            final_carton_weight_kg,
+            final_extra,
+        )).encode()
+    ).hexdigest()
     extra_basis = st.text_input("供應商確認依據／費用與重量換算說明", key="basis_" + confirmation_key)
     if st.checkbox("已向來源確認：上述進價、重量已涵蓋全部附加費用，沒有未確認項目", key="extra_" + confirmation_key) and extra_basis.strip():
         active_issues = [issue for issue in active_issues if "木架或額外費用" not in issue]
@@ -860,7 +1330,11 @@ if any("木架或額外費用" in issue for issue in active_issues):
 block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
                              final_dom, intl_rate, ex_rate, active_issues, common_data["price_unit"], final_qty_unit)
 if block_reasons:
-    st.error("待確認：" + "；".join(block_reasons) + "。重量、運費、成本、報價全部留白；本次禁止存檔。")
+    st.error(
+        "待確認：" + "；".join(block_reasons)
+        + "。重量、運費、成本、報價全部留白；新增商品禁止存檔，"
+        "修正既有商品只能清除原列的不安全衍生數字。"
+    )
     st.write({key: "" for key in ("計費重量", "內陸運費", "國際運費", "到手成本", "10%報價", "13%報價", "15%報價", "20%報價")})
 st.markdown("---")
 st.subheader(f"📋 擷取到的商品清單 (共 {len(products_data)} 筆,可直接編輯、新增或刪除)")
@@ -872,122 +1346,381 @@ if "name" not in df_items.columns:
 df_items.insert(0, "寫入", True)
 df_items = df_items.rename(columns={"code": "貨號", "name": "名稱"})
 edited_df = st.data_editor(df_items, num_rows="dynamic", width="stretch")
-if final_qty > 0:
+if user_input.strip():
     st.markdown("---")
-    st.subheader("📊 第三步:選擇分頁與逐款存入")
-    category_col, vendor_col = st.columns([1, 1])
-    with category_col:
-        final_category = st.selectbox(
-            "📂 確定存入的分頁:",
-            ["G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾"],
-            index=0,
-        )
-    with vendor_col:
-        final_vendor = st.selectbox(
-            "🏷️ 廠商:",
-            ["v菲凡", "v多品村", "v優娜卡樂星"],
-            index=0,
-        )
-    if is_free_shipping_vendor(final_vendor):
-        st.success("✅ 此廠商廣州包郵")
-    to_save_df = edited_df[(edited_df["寫入"] == True) & ((edited_df["貨號"] != "") | (edited_df["名稱"] != ""))]
+    st.subheader("📊 第三步：選擇新增或原位修正")
+    operation = st.radio(
+        "操作方式",
+        ["新增商品", "修正既有商品"],
+        horizontal=True,
+        help="原位修正不新增列、不更改 NO 或原日期，也不處理圖片與格式。",
+    )
+    final_category = st.selectbox(
+        "📂 分頁",
+        ["G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾"],
+        index=0,
+    )
+
+    to_save_df = edited_df[
+        (edited_df["寫入"] == True)
+        & ((edited_df["貨號"] != "") | (edited_df["名稱"] != ""))
+    ]
+    hard_reasons = []
+    invalid_names = any(
+        not normalize_name(row["名稱"]) for _, row in to_save_df.iterrows()
+    )
+    if len(to_save_df) != 1 or invalid_names:
+        hard_reasons.append("每次只能選擇一款有完整品名的商品")
+
     all_sheets_data = get_all_sheets_data()
     if all_sheets_data is None:
-        st.error("雲表讀取失敗，停止存檔；不可把讀取失敗當成空表。")
+        st.error("雲表讀取失敗，停止所有存檔；不可把讀取失敗當成空表。")
         st.stop()
-    duplicate_warnings = duplicate_messages(
-        [{"code": row["貨號"], "name": row["名稱"]} for _, row in to_save_df.iterrows()], all_sheets_data)
     if final_category not in all_sheets_data:
-        block_reasons.append("找不到指定分頁，禁止自動新建分頁")
-        st.error("找不到指定分頁，已停止存檔；請核對分頁名稱。")
-    if duplicate_warnings:
-        for warn in duplicate_warnings:
-            st.error(f"🚨 **撞單雷達警告**:{warn}")
+        hard_reasons.append("找不到指定分頁")
+        st.error("找不到指定分頁，已停止；不會自動新建分頁。")
+
+    selected_target = None
+    target_display_block = None
+    target_formula_block = None
+    target_worksheet_id = None
+    identity_verified = False
+    identity_evidence = ""
+    source_product = None
+    if len(to_save_df) == 1:
+        source_row = to_save_df.iloc[0]
+        source_product = {
+            "code": normalize_code(source_row["貨號"]),
+            "name": normalize_name(source_row["名稱"]),
+        }
+
+    if operation == "修正既有商品" and source_product and final_category in all_sheets_data:
+        candidates = find_update_candidates(source_product, all_sheets_data[final_category])
+        candidate_map = {
+            f"{item['row_index']}|{item['no']}": item for item in candidates
+        }
+        target_key = "update_target_" + hashlib.sha256(
+            repr((user_input, source_product, final_category)).encode()
+        ).hexdigest()
+        selected_key = st.selectbox(
+            "🎯 要修正的原商品（可搜尋 NO、貨號或名稱）",
+            [""] + list(candidate_map),
+            index=0,
+            format_func=lambda key: (
+                "請明確選擇原 NO；系統不會自動選定"
+                if not key else
+                f"{candidate_map[key]['match_reason']}｜{candidate_map[key]['no']}｜"
+                f"{candidate_map[key]['code'] or '無貨號'}｜{candidate_map[key]['name']}"
+            ),
+            key=target_key,
+        )
+        st.caption("符合解析結果者只會排在前面；即使只有一筆，也必須由你親自選定原 NO。")
+        if selected_key:
+            selected_target = candidate_map[selected_key]
+            base_row = selected_target["row_index"]
+            target_display_block = get_saved_block(
+                all_sheets_data[final_category], base_row
+            )
+            target_snapshot = get_target_formula_block(final_category, base_row)
+            if target_snapshot is None:
+                hard_reasons.append("無法取得原商品公式快照")
+            else:
+                target_worksheet_id = target_snapshot["worksheet_id"]
+                target_formula_block = target_snapshot["block"]
+                no_count = sum(
+                    1 for item in extract_saved_products(all_sheets_data[final_category])
+                    if item["no"].lower() == selected_target["no"].lower()
+                )
+                if no_count != 1:
+                    hard_reasons.append("原 NO 在分頁內不唯一")
+                code_match = bool(
+                    source_product["code"]
+                    and source_product["code"] == selected_target["code"]
+                )
+                name_match = bool(
+                    normalize_name_key(source_product["name"])
+                    and normalize_name_key(source_product["name"])
+                    == normalize_name_key(selected_target["name"])
+                )
+                if code_match and name_match:
+                    identity_verified = True
+                    identity_evidence = "貨號＋品名完全相符"
+                    st.success(f"目標身分相符：{final_category} {selected_target['no']}")
+                elif code_match or name_match:
+                    st.warning(
+                        "目標只有"
+                        + ("貨號" if code_match else "品名")
+                        + "符合；請在差異表確認這就是要修正的原商品。"
+                    )
+                    partial_identity_confirmed = st.checkbox(
+                        f"我已核對原圖／完整原文，確認 {selected_target['no']} 是同一商品，"
+                        + ("此次是在修正品名" if code_match else "此次是在修正貨號"),
+                        key="partial_identity_" + target_key,
+                    )
+                    identity_verified = partial_identity_confirmed
+                    identity_evidence = (
+                        "單一識別欄符合，已人工確認另一欄修正"
+                        if partial_identity_confirmed else ""
+                    )
+                    if not identity_verified:
+                        hard_reasons.append("貨號或品名不一致，尚未人工確認")
+                else:
+                    st.error("所選 NO 的貨號與品名都不同，不能直接套用。")
+                    identity_basis = st.text_input(
+                        "請填寫用原圖／原文確認為同一商品的依據",
+                        key="identity_basis_" + target_key,
+                    )
+                    identity_confirmed = st.checkbox(
+                        f"我已用原圖或完整原文確認 {selected_target['no']} 就是同一商品",
+                        key="identity_confirm_" + target_key,
+                    )
+                    identity_verified = bool(
+                        identity_basis.strip() and identity_confirmed
+                    )
+                    identity_evidence = (
+                        identity_basis.strip() if identity_verified else ""
+                    )
+                    if not identity_verified:
+                        hard_reasons.append("目標商品身分尚未確認")
+        else:
+            hard_reasons.append("尚未選定要修正的原 NO")
+
+    vendor_options = ["v菲凡", "v多品村", "v優娜卡樂星"]
+    existing_vendor = (
+        target_display_block[0][11]
+        if target_display_block else ""
+    )
+    if existing_vendor and existing_vendor not in vendor_options:
+        vendor_options.insert(0, existing_vendor)
+    vendor_default = (
+        vendor_options.index(existing_vendor)
+        if existing_vendor in vendor_options else 0
+    )
+    vendor_key = "vendor_" + hashlib.sha256(
+        repr((operation, final_category, selected_target and selected_target["no"])).encode()
+    ).hexdigest()
+    final_vendor = st.selectbox(
+        "🏷️ 廠商",
+        vendor_options,
+        index=vendor_default,
+        key=vendor_key,
+        disabled=bool(operation == "修正既有商品" and block_reasons),
+    )
+    if is_free_shipping_vendor(final_vendor):
+        st.success("✅ 此廠商廣州包郵")
+
+    duplicate_warnings = []
+    if source_product and operation == "新增商品":
+        duplicate_warnings = duplicate_messages(
+            [source_product], all_sheets_data
+        )
+    elif (
+        source_product
+        and operation == "修正既有商品"
+        and selected_target
+        and not block_reasons
+    ):
+        duplicate_warnings = duplicate_messages(
+            [source_product],
+            all_sheets_data,
+            exclude={(final_category, selected_target["no"])},
+        )
+    for warning in duplicate_warnings:
+        st.error(f"🚨 撞單雷達警告：{warning}")
+
+    planned_update_block = None
+    safety_only = False
+    update_has_changes = False
+    if (
+        operation == "修正既有商品"
+        and selected_target
+        and target_formula_block is not None
+        and target_display_block is not None
+        and source_product
+    ):
+        base_row = selected_target["row_index"]
+        if block_reasons:
+            safety_only = True
+            planned_update_block = safety_clear_block(target_formula_block)
+            update_has_changes = any(
+                not cells_equal(target_formula_block[row][col], planned_update_block[row][col])
+                for row, col in SAFETY_CLEAR_COORDS
+            )
+            st.warning(
+                "這筆資料仍有疑慮：本次只允許清空 C:F 與 H:K 的報價、重量、運費及成本；"
+                "名稱、貨號、進價、備註、NO、日期、圖片與格式都不會改。"
+            )
+        else:
+            planned_update_block = build_product_block(
+                selected_target["no"],
+                target_display_block[1][0],
+                base_row + 1,
+                source_product["name"],
+                source_product["code"],
+                final_price,
+                final_qty,
+                final_qty_unit,
+                final_carton_weight_kg,
+                final_unit_weight_g,
+                final_dom,
+                intl_rate,
+                ex_rate,
+                final_vendor,
+                final_prod_size,
+                final_color_size,
+                final_outer_size,
+                final_extra,
+                blocked=False,
+            )
+            update_has_changes = bool(
+                changed_update_cells(target_formula_block, planned_update_block)
+            )
+
+        st.info(
+            f"修正目標：{final_category}!A{base_row}:L{base_row + 5}｜"
+            f"{selected_target['no']}。A 欄 NO、原日期、第 6 列空白、M:T、格式及圖片不在寫入範圍。"
+        )
+        st.dataframe(
+            pd.DataFrame(update_diff_rows(target_display_block, planned_update_block)),
+            width="stretch",
+            hide_index=True,
+        )
+        if not update_has_changes:
+            hard_reasons.append("目前沒有可套用的變更")
+            st.info("目前沒有可套用的變更；不會重複寫入。")
+
+    if hard_reasons:
+        for reason in dict.fromkeys(hard_reasons):
+            st.error(f"停止存檔：{reason}")
+
     if not to_save_df.empty:
-        review_key = hashlib.sha256(repr((user_input, to_save_df.to_dict(), final_price, final_qty,
-            final_qty_unit, final_carton_weight_kg, final_unit_weight_g, final_dom, intl_rate, ex_rate,
-            final_category, final_vendor, final_prod_size, final_color_size, final_outer_size, final_extra)).encode()).hexdigest()
-        final_confirm = st.checkbox(f"我已逐欄對照原文、補充資訊及廠商，確認寫入共 {len(to_save_df)} 款商品", key="review_" + review_key)
-        invalid_names = any(not normalize_name(row["名稱"]) for _, row in to_save_df.iterrows())
-        if invalid_names or len(to_save_df) != 1:
-            st.error("請每次選擇一款有完整品名的商品存檔。")
-        if st.button("💾 執行存檔", type="primary", disabled=bool(not final_confirm or block_reasons or duplicate_warnings or invalid_names or len(to_save_df) != 1)):
-            target_data = all_sheets_data.get(final_category, [])
-            true_last_row = len(target_data)
-            max_no = 0
-            for r in target_data:
-                if r and r[0]:
-                    m = re.search(r'no(\d+)', str(r[0]), re.IGNORECASE)
-                    if m:
-                        max_no = max(max_no, int(m.group(1)))
-            st_r = true_last_row + 2 if true_last_row > 0 else 1
-            bulk_rows = []
-            info_lines = []
-            info_lines.append(f"計價單位：{final_qty_unit}")
-            if final_prod_size:
-                info_lines.append(f"尺寸 {final_prod_size}")
-            if final_color_size:
-                info_lines.append(f"彩盒尺寸 {final_color_size}")
-            if final_outer_size:
-                info_lines.append(f"外箱尺寸 {final_outer_size}")
-            if final_extra:
-                info_lines.append(final_extra)
-            info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
-            today = datetime.datetime.now(ZoneInfo("Asia/Taipei"))
-            today_str = f"{today.year}/{today.month}/{today.day}"
-            empty_row = [""] * 12
-            for idx, row in to_save_df.iterrows():
-                max_no += 1
-                next_no = f"no{max_no}"
-                v_r = st_r + len(bulk_rows) + 1
-                formulas = build_cost_formulas(
-                    v_r,
+        review_payload = (
+            user_input,
+            to_save_df.to_dict(),
+            final_price,
+            final_qty,
+            final_qty_unit,
+            final_carton_weight_kg,
+            final_unit_weight_g,
+            final_dom,
+            intl_rate,
+            ex_rate,
+            operation,
+            final_category,
+            final_vendor,
+            final_prod_size,
+            final_color_size,
+            final_outer_size,
+            final_extra,
+            selected_target,
+            identity_verified,
+            identity_evidence,
+            target_worksheet_id,
+            target_formula_block,
+            planned_update_block,
+            safety_only,
+        )
+        review_key = hashlib.sha256(repr(review_payload).encode()).hexdigest()
+        if operation == "修正既有商品" and selected_target:
+            confirm_label = (
+                f"我確認目標是 {final_category} {selected_target['no']}，"
+                + ("並只清除待確認的衍生數字" if safety_only else "已核對完整原文及上述修改前後差異")
+            )
+        else:
+            confirm_label = "我已逐欄對照原文、補充資訊及廠商，確認新增這 1 款商品"
+        final_confirm = st.checkbox(confirm_label, key="review_" + review_key)
+
+        if operation == "新增商品":
+            create_disabled = bool(
+                not final_confirm
+                or block_reasons
+                or duplicate_warnings
+                or hard_reasons
+                or len(to_save_df) != 1
+            )
+            if st.button("💾 新增商品", type="primary", disabled=create_disabled):
+                target_data = all_sheets_data[final_category]
+                true_last_row = len(target_data)
+                max_no = 0
+                for existing_row in target_data:
+                    if existing_row and existing_row[0]:
+                        match = re.search(r"no(\d+)", str(existing_row[0]), re.I)
+                        if match:
+                            max_no = max(max_no, int(match.group(1)))
+                start_row = true_last_row + 2 if true_last_row > 0 else 1
+                next_no = f"no{max_no + 1}"
+                today = datetime.datetime.now(ZoneInfo("Asia/Taipei"))
+                today_str = f"{today.year}/{today.month}/{today.day}"
+                source_row = to_save_df.iloc[0]
+                new_block = build_product_block(
+                    next_no,
+                    today_str,
+                    start_row + 1,
+                    source_row["名稱"],
+                    source_row["貨號"],
+                    final_price,
+                    final_qty,
+                    final_qty_unit,
                     final_carton_weight_kg,
                     final_unit_weight_g,
-                    final_qty,
                     final_dom,
                     intl_rate,
                     ex_rate,
                     final_vendor,
-                    final_price=final_price,
-                    blocked=bool(block_reasons),
+                    final_prod_size,
+                    final_color_size,
+                    final_outer_size,
+                    final_extra,
+                    blocked=False,
                 )
-                if final_carton_weight_kg > 0 and final_unit_weight_g > 0:
-                    weight_note = (
-                        f"整箱毛重 {final_carton_weight_kg:g}KG／"
-                        f"單個重量 {final_unit_weight_g:g}g"
+                if save_bulk_to_worksheet(
+                    final_category,
+                    new_block,
+                    start_row,
+                    block_size=6,
+                    expected_rows=target_data,
+                ):
+                    get_all_sheets_data.clear()
+                    st.success(
+                        f"✅ 寫入並核對成功！已將商品存入【{final_category}】，"
+                        f"編號【{next_no}】，廠商【{final_vendor}】。"
                     )
-                elif final_carton_weight_kg > 0:
-                    weight_note = f"整箱毛重 {final_carton_weight_kg:g}KG"
-                elif final_unit_weight_g > 0:
-                    weight_note = f"單個重量 {final_unit_weight_g:g}g"
-                else:
-                    weight_note = "重量 未提供"
-                block = [
-                    [next_no, str(row['名稱']).strip(), "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", f"重量g/{final_qty_unit}", "大陸運費rmb", "國際運費", "預估到手成本", final_vendor],
-                    [
-                        today_str,
-                        info_display,
-                        formulas["quote_10"],
-                        formulas["quote_13"],
-                        formulas["quote_15"],
-                        formulas["quote_20"],
-                        final_price,
-                        formulas["weight"],
-                        formulas["domestic"],
-                        formulas["international"],
-                        formulas["cost"],
-                        "",
-                    ],
-                    build_carton_note_row(final_qty, final_vendor, final_qty_unit),
-                    ["", weight_note] + [""] * 10,
-                    ["", f"貨號 {normalize_code(row['貨號'])}"] + [""] * 10,
-                    empty_row
-                ]
-                bulk_rows.extend(block)
-            if save_bulk_to_worksheet(final_category, bulk_rows, st_r, block_size=6, expected_rows=target_data):
-                get_all_sheets_data.clear()
-                st.success(
-                    f"✅ 寫入並核對成功！已將 {len(to_save_df)} 款商品存入【{final_category}】，"
-                    f"廠商【{final_vendor}】!"
-                )
+        else:
+            update_disabled = bool(
+                not final_confirm
+                or hard_reasons
+                or not selected_target
+                or not identity_verified
+                or target_formula_block is None
+                or not update_has_changes
+                or (duplicate_warnings and not safety_only)
+            )
+            button_label = (
+                "🛡️ 原位清除不安全的衍生數字"
+                if safety_only else
+                "🛠️ 套用原位修正"
+            )
+            if st.button(button_label, type="primary", disabled=update_disabled):
+                if update_existing_product(
+                    final_category,
+                    selected_target["row_index"],
+                    selected_target["no"],
+                    target_worksheet_id,
+                    all_sheets_data[final_category],
+                    target_formula_block,
+                    planned_update_block,
+                    safety_only=safety_only,
+                    identity_evidence=identity_evidence,
+                ):
+                    get_all_sheets_data.clear()
+                    get_target_formula_block.clear()
+                    if safety_only:
+                        st.success(
+                            f"✅ 已原位清除【{final_category} {selected_target['no']}】"
+                            "的報價、重量、運費與成本；NO、日期、原始資料、圖片及格式均保留。"
+                        )
+                    else:
+                        st.success(
+                            f"✅ 已原位修正並核對【{final_category} {selected_target['no']}】；"
+                            "沒有新增列，NO、原日期、圖片及格式均保留。"
+                        )
