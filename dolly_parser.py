@@ -5,10 +5,14 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import zhconv
 import datetime
+import math
+import unicodedata
+import hashlib
+from zoneinfo import ZoneInfo
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V73")
-st.info("✅ 規格:【金鑰防護 V3】、【單個包裝=彩盒】、【名稱多行合併】、區塊空一行。【V73 修正雲端預設儲存；重量加成 5%；多品村廣州包郵】")
+st.title("🪐 半自動 - 採購報價彙整表 V74")
+st.info("V74：逐款解析、保留補充資訊、成本防呆、衝突阻擋及寫後核對。重量加成5%、多品村廣州包郵與既有報價公式不變。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
 SETTINGS_WS = "_設定"
@@ -61,7 +65,7 @@ def get_all_sheets_data():
         return all_data
     except Exception as e:
         st.error(f"讀取雲端失敗:{e}")
-        return {}
+        return None
 
 # --- 2.5 成本參數預設值(存於 Google Sheets 的 _設定 分頁)---
 def load_settings():
@@ -79,9 +83,10 @@ def load_settings():
                 try:
                     defaults[row[0]] = float(row[1])
                 except ValueError:
-                    pass
+                    raise ValueError(f"雲端設定 {row[0]} 不是有效數字")
     except Exception as e:
         st.sidebar.error(f"讀取雲端預設失敗:{type(e).__name__}: {e}")
+        return None
     return defaults
 
 def save_settings(s):
@@ -121,10 +126,10 @@ def is_free_shipping_vendor(vendor):
     normalized = re.sub(r"\s+", "", str(vendor or "")).lower()
     return normalized in ("多品村", "v多品村")
 
-def build_carton_note_row(final_qty, vendor):
+def build_carton_note_row(final_qty, vendor, qty_unit="個"):
     """建立裝箱備註列，並把多品村包郵註記放在大陸運費欄下方。"""
     row = [""] * 12
-    row[1] = f"裝箱 {final_qty}個/箱"
+    row[1] = f"裝箱 {final_qty}{qty_unit}/箱"
     if is_free_shipping_vendor(vendor):
         row[8] = "廣州包郵"
     return row
@@ -154,7 +159,8 @@ def extract_saved_products(sheet_rows):
         })
     return products
 
-def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
+def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expected_rows=None):
+    write_started = False
     try:
         creds = get_credentials()
         client = gspread.authorize(creds)
@@ -162,13 +168,61 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
         try:
             sheet = spreadsheet.worksheet(category_name)
         except gspread.exceptions.WorksheetNotFound:
-            sheet = spreadsheet.add_worksheet(title=category_name, rows="1000", cols="20")
+            st.error("找不到目標分頁，已停止；不會自動新建分頁。")
+            return False
+        fresh = sheet.get_all_values()
+        expected_start = len(fresh) + 2 if fresh else 1
+        if expected_rows is None or fresh != expected_rows or st_r != expected_start:
+            st.error("雲表已變動或缺少讀取快照，請重新載入並校對後再存檔。")
+            get_all_sheets_data.clear()
+            return False
+        if not bulk_rows or len(bulk_rows) % block_size:
+            raise ValueError("商品區塊不完整")
+        incoming = extract_saved_products(bulk_rows)
+        live_sheets = {ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()}
+        conflicts = duplicate_messages(incoming, live_sheets)
+        if conflicts:
+            st.error("；".join(conflicts))
+            get_all_sheets_data.clear()
+            return False
+        # Recheck the destination immediately before the write. Sheets has no
+        # compare-and-swap; this detects changes but is not a distributed lock.
+        if sheet.get_all_values() != expected_rows:
+            st.error("存檔前雲表已變動，請重新載入。")
+            get_all_sheets_data.clear()
+            return False
         end_r = st_r + len(bulk_rows) - 1
+        if end_r > sheet.row_count:
+            sheet.add_rows(end_r - sheet.row_count)
+        write_started = True
         sheet.update(
             values=bulk_rows,
             range_name=f"A{st_r}:L{end_r}",
             value_input_option="USER_ENTERED",
         )
+        actual = sheet.get(f"A{st_r}:L{end_r}", value_render_option="FORMULA")
+        # API omits trailing empty cells/rows. Dates can return serial numbers
+        # or formatted text; verify their value without requiring a new format.
+        for row_index, expected in enumerate(bulk_rows):
+            row_actual = actual[row_index] if row_index < len(actual) else []
+            for col, value in enumerate(expected):
+                received = row_actual[col] if col < len(row_actual) else ""
+                if col == 0 and row_index % block_size == 1:
+                    expected_date = datetime.datetime.strptime(value, "%Y/%m/%d").date()
+                    if isinstance(received, (int, float)):
+                        if received == (expected_date - datetime.date(1899, 12, 30)).days:
+                            continue
+                    else:
+                        for date_format in ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y"):
+                            try:
+                                if datetime.datetime.strptime(str(received), date_format).date() == expected_date:
+                                    received = value
+                                    break
+                            except ValueError:
+                                pass
+                if str(received) != str(value):
+                    if not (isinstance(received, (int, float)) and isinstance(value, (int, float)) and received == value):
+                        raise ValueError(f"寫後核對不符：第 {st_r + row_index} 列，第 {col + 1} 欄")
         num_blocks = len(bulk_rows) // block_size
         for i in range(num_blocks):
             base_r = st_r + (i * block_size)
@@ -187,7 +241,11 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6):
                 )
         return True
     except Exception as e:
-        st.error(f"寫入雲端失敗:{e}")
+        get_all_sheets_data.clear()
+        if write_started:
+            st.error(f"資料可能已寫入，但核對或格式設定未完成。請先檢查目標分頁，不可直接重試新增。詳情：{e}")
+        else:
+            st.error(f"尚未寫入商品，存檔檢查失敗：{e}")
         return False
 
 def resolve_weight_inputs(carton_weight_kg, unit_weight_g, qty):
@@ -237,13 +295,25 @@ def build_cost_formulas(
     intl_rate,
     ex_rate,
     vendor="",
+    final_price=None,
+    blocked=False,
 ):
     """建立成本公式；沒有有效重量時，運費、成本與報價全部留白。"""
     weight_cell = f"H{v_r}"
     domestic_cell = f"I{v_r}"
     international_cell = f"J{v_r}"
     cost_cell = f"K{v_r}"
+    numeric_inputs = (carton_weight_kg, unit_weight_g, final_qty, final_dom, intl_rate, ex_rate)
+    blank = dict.fromkeys(("quote_10", "quote_13", "quote_15", "quote_20", "weight", "domestic", "international", "cost"), "")
+    if (not all(isinstance(v, (int, float)) and math.isfinite(v) for v in numeric_inputs)
+            or min(carton_weight_kg, unit_weight_g, final_dom, intl_rate) < 0
+            or ex_rate <= 0 or final_qty <= 0 or final_qty != int(final_qty)):
+        return blank
     weight_state = resolve_weight_inputs(carton_weight_kg, unit_weight_g, final_qty)
+    if (blocked or final_qty <= 0 or weight_state["source"] == "missing"
+            or weight_state["mismatch_ratio"] >= 0.2
+            or (final_price is not None and (not math.isfinite(final_price) or final_price <= 0))):
+        return blank
 
     if weight_state["source"] == "missing":
         weight_formula = ""
@@ -269,7 +339,7 @@ def build_cost_formulas(
             f'ROUNDUP(({weight_cell}/1000)*{final_dom},2))'
         )
 
-    return {
+    result = {
         "quote_10": f'=IF(OR({cost_cell}="",{cost_cell}<=0),"",ROUND({cost_cell}/0.9,1))',
         "quote_13": f'=IF(OR({cost_cell}="",{cost_cell}<=0),"",ROUND({cost_cell}/0.87,1))',
         "quote_15": f'=IF(OR({cost_cell}="",{cost_cell}<=0),"",ROUND({cost_cell}/0.85,1))',
@@ -281,13 +351,21 @@ def build_cost_formulas(
             f'ROUNDUP(({weight_cell}/1000)*{intl_rate},2))'
         ),
         "cost": (
-            f'=IF(OR({weight_cell}="",{weight_cell}<=0,'
+            f'=IF(OR(NOT(ISNUMBER(G{v_r})),G{v_r}<=0,{weight_cell}="",{weight_cell}<=0,'
             f'{domestic_cell}="",{international_cell}=""),"",'
             f'ROUND((G{v_r}+{domestic_cell}+{international_cell})*{ex_rate},1))'
         ),
     }
+    # A later manual deletion of G must also hide all derived numbers.
+    for key, formula in result.items():
+        if formula:
+            result[key] = f'=IFERROR(IF(OR(NOT(ISNUMBER(G{v_r})),G{v_r}<=0),"",{formula[1:]}),"")'
+    return result
 # --- 3. 側邊欄設定 ---
 settings = get_settings_cached()
+if settings is None:
+    st.error("成本設定讀取失敗，停止解析存檔；請重試，不套用其他匯率。")
+    st.stop()
 st.sidebar.header("⚙️ 成本參數設定")
 ex_rate = st.sidebar.number_input("匯率", value=settings["ex_rate"], step=0.05, format="%.2f")
 intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=settings["intl_rate"], step=0.5)
@@ -323,7 +401,7 @@ def clean_product_name(name):
     ).strip()
     return name
 
-def parse_text(text):
+def parse_text_legacy(text):
     common = {
         "price": 0.0,
         "qty": 0,
@@ -571,16 +649,165 @@ def parse_text(text):
         products.append({"code": single_code, "name": single_name})
 
     return common, products
+def canonical_unit(unit):
+    unit = (unit or "").lower()
+    return "個" if unit in ("pcs", "pc", "只", "隻", "个", "件") else unit
+
+
+def parse_text(text):
+    """單一報價的保守解析；不把多則獨立報價套用同一組數字。"""
+    normalized = zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw")
+    common, products = parse_text_legacy(normalized)
+    common = {**common, "raw_text": text or "", "issues": [], "price_unit": "", "qty_unit": ""}
+    if not normalized.strip():
+        return common, []
+    number = r"\d+(?:\.\d+)?"
+    units = r"pcs|個|隻|只|盒|套|瓶|罐|包|袋|件"
+    issues = common["issues"]
+    # Require a price or carton label, never use the count inside an OPP bag.
+    prices = list(re.finditer(
+        rf"(?:單(?P<unit>{units})價格|單價|價格|價錢|售價|都是|💰)\s*:?\s*(?:RMB|¥)?\s*(?P<value>{number})",
+        normalized, re.I))
+    if not prices:
+        prices = list(re.finditer(rf"(?P<value>{number})\s*元(?:\s*/\s*(?P<unit>{units}))?", normalized, re.I))
+        prices = [m for m in prices if not re.search(r"運費|木架|木框|包裝費|打包費|加工費", normalized[normalized.rfind("\n", 0, m.start()) + 1:m.start()])]
+    common["price"] = float(prices[0]["value"]) if prices else 0.0
+    if prices:
+        common["price_unit"] = canonical_unit(prices[0]["unit"])
+        tail = normalized[prices[0].end():]
+        suffix_unit = re.match(rf"\s*元\s*/\s*({units})", tail, re.I)
+        if suffix_unit:
+            common["price_unit"] = canonical_unit(suffix_unit[1])
+        if re.match(r"\s*[-~～,]\s*\d", tail):
+            issues.append("價格含範圍或不明數字格式，請確認單一進價")
+        if re.match(r"\s*元?\s*起", tail):
+            issues.append("價格僅為起價，須確認實際進價")
+    if re.search(r"(?:單價|價格|進價)\s*:?\s*(?:約|大約)|待定|待確認|另議|未定|以實際", normalized):
+        issues.append("原文含未確認條件，請先向來源確認")
+    if len(prices) > 1:
+        issues.append("存在多個價格，請一次貼一則報價並確認費用範圍")
+    qty_matches = list(re.finditer(
+        rf"(?:每箱數量|箱數|裝箱量|裝箱數|裝箱|一箱)\s*:?\s*(?P<value>\d+)\s*(?P<unit>{units})?",
+        normalized, re.I))
+    if not qty_matches:
+        qty_matches = list(re.finditer(rf"(?P<value>\d+)\s*(?P<unit>{units})\s*/\s*箱", normalized, re.I))
+    common["qty"] = int(qty_matches[0]["value"]) if qty_matches else 0
+    common["qty_unit"] = canonical_unit(qty_matches[0]["unit"]) if qty_matches else ""
+    if qty_matches and re.match(r"\s*[-~～.,]\s*\d", normalized[qty_matches[0].end():]):
+        issues.append("裝箱量含範圍或小數，請確認整數裝箱量")
+    if len(qty_matches) > 1:
+        issues.append("存在多個裝箱量，請拆開獨立報價")
+    # Explicit units and scope. Bare KG does not establish a carton weight.
+    weight_unit = r"kg|公斤|千克|g|公克|克"
+    prefix = rf"(?:單個重量|每個重量|單件重量|每件重量|單重)\s*:?\s*(?:約)?\s*({number})\s*({weight_unit})"
+    suffix = rf"重量\s*:?\s*(?:約)?\s*({number})\s*({weight_unit})\s*\(\s*(?:單個|每個|單件|每件)\s*\)"
+    unit_matches = list(re.finditer(prefix, normalized, re.I)) + list(re.finditer(suffix, normalized, re.I))
+    unit_values = [float(m[1]) * (1000 if m[2].lower() in ("kg", "公斤", "千克") else 1) for m in unit_matches]
+    common["unit_weight_g"] = unit_values[0] if unit_values else 0.0
+    carton_text = re.sub(prefix, "", normalized, flags=re.I)
+    carton_text = re.sub(suffix, "", carton_text, flags=re.I)
+    carton_matches = list(re.finditer(
+        rf"(?:整箱毛重|整箱重量|箱重|毛重|⚖️?)\s*:?\s*(?:約)?\s*({number})\s*({weight_unit})",
+        carton_text, re.I))
+    carton_values = [float(m[1]) / (1 if m[2].lower() in ("kg", "公斤", "千克") else 1000) for m in carton_matches]
+    pairs = list(re.finditer(rf"(?:整箱毛淨重|箱毛淨重|毛淨重)\s*:?\s*({number})\s*/\s*({number})\s*({weight_unit})", carton_text, re.I))
+    carton_values += [max(float(m[1]), float(m[2])) / (1 if m[3].lower() in ("kg", "公斤", "千克") else 1000) for m in pairs]
+    common["weight"] = carton_values[0] if carton_values else 0.0
+    if len(set(unit_values)) > 1 or len(set(carton_values)) > 1:
+        issues.append("存在互相衝突的重量，請核對來源後只保留正確值")
+    if re.search(r"木架|木框|另加|另計|不含運|運費另|附加費|(?:運費|打包費|包裝費|加工費)\s*:?\s*\d", normalized):
+        issues.append("有木架或額外費用，須確認是否已包含重量及費用")
+    codes = list(re.finditer(r"(?:型號|貨號|產品編號|編號)\s*:?\s*([A-Za-z0-9]+(?:[-/][A-Za-z0-9]+)*)", normalized))
+    if len(codes) > 1 or len(products) > 1:
+        issues.append("偵測到多款商品；目前請每款分別貼上解析，避免共用錯誤參數")
+    if codes and len(codes) == 1:
+        products = [{"code": normalize_code(codes[0][1]), "name": products[0]["name"] if products else ""}]
+    size = rf"({number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*\s*(?:cm|mm|公分|毫米)?)"
+    fields = {
+        "outer_box_size": r"^(?:外箱規格|外箱尺寸|外箱)\s*:?\s*",
+        "color_box_size": r"^(?:彩盒尺寸|彩盒|單個包裝尺寸|單個包裝|包裝盒尺寸|包裝盒|包裝尺寸|亞克力)\s*:?\s*",
+        "prod_size": r"^(?:產品尺寸|單個尺寸|尺寸|產品)\s*:?\s*",
+    }
+    for field, label in fields.items():
+        common[field] = ""
+        for line in normalized.splitlines():
+            cleaned = re.sub(EMOJI_PAT, "", line).strip()
+            match = re.search(label + size + r"\s*$", cleaned, re.I)
+            if match:
+                common[field] = match[1].strip()
+                break
+    # Named metadata must not be swallowed by the product name.
+    meta = r"^(?:型號|貨號|產品編號|編號|單價|單個價格|單盒價格|價格|每箱|箱數|裝箱|一箱|重量|單重|單個重量|每個重量|整箱|毛重|箱重|尺寸|產品尺寸|產品\s*:|彩盒|外箱|包裝|單個包裝|材質|材積|端盒|木架|木框|帶鐳|帶雷|USB|配件|電池|\d+\s*(?:個|款|種))"
+    if len(products) == 1 and codes:
+        name_lines = []
+        for line in normalized.splitlines():
+            line = re.sub(EMOJI_PAT, "", line).strip()
+            if re.match(meta, line, re.I):
+                continue
+            line = re.sub(r"^(?:新品\s*#?\s*)?(?:正版授權)\s*$", "", line)
+            if line:
+                name_lines.append(line)
+        products[0]["name"] = " ".join(name_lines[:3])
+    # Keep supplemental text verbatim (normalized), including units/approximation.
+    notes = []
+    for line in normalized.splitlines():
+        line = line.strip()
+        if re.search(r"帶[鐳雷]射|正版授權|材質|顏色|圖案|端盒|木架|木框|包裝|USB|充電|約.*(?:kg|公斤|克)|另加|另計|運費|打包費|加工費|待定|待確認", line, re.I):
+            notes.append(line)
+    common["extra_tags"] = "\n".join(dict.fromkeys(notes))
+    return common, products
+
+
+def cost_blockers(price, qty, carton_kg, unit_g, dom, intl, ex, issues=(), price_unit="", qty_unit=""):
+    reasons = list(issues)
+    values = (price, qty, carton_kg, unit_g, dom, intl, ex)
+    if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
+        return reasons + ["成本參數不是有效數字"]
+    if price <= 0:
+        reasons.append("缺少有效進價")
+    if qty <= 0 or qty != int(qty):
+        reasons.append("缺少有效整數裝箱量")
+    if min(carton_kg, unit_g, dom, intl) < 0 or ex <= 0:
+        reasons.append("重量、運費或匯率不合法")
+    weight = resolve_weight_inputs(carton_kg, unit_g, qty)
+    if weight["source"] == "missing":
+        reasons.append("缺少有效重量來源")
+    if weight["mismatch_ratio"] >= 0.2:
+        reasons.append("單個與整箱重量差異達20%，須先核對")
+    if not qty_unit:
+        reasons.append("裝箱單位未確認")
+    if price_unit and qty_unit and price_unit != qty_unit:
+        reasons.append("計價與裝箱單位不同，須先換算確認")
+    return list(dict.fromkeys(reasons))
+
+
+def duplicate_messages(incoming, sheets):
+    messages = []
+    existing = [(title, p) for title, rows in sheets.items() for p in extract_saved_products(rows)]
+    seen = []
+    for item in incoming:
+        code, name = normalize_code(item["code"]), normalize_name(item["name"])
+        for title, saved in existing + [("本批次", p) for p in seen]:
+            same_code = bool(code and code == saved["code"])
+            same_name = bool(name and name == saved["name"])
+            if same_code or same_name:
+                kind = "同貨號不同品名衝突" if same_code and not same_name else "重複或同品名待核對"
+                messages.append(f"{kind}：{code} {name} → {title} {saved.get('no', '')} {saved['name']}；停止新增，不自動覆蓋或跳過")
+        seen.append({"code": code, "name": name})
+    return messages
+
+
 # --- 5. 主畫面流程 ---
-user_input = st.text_area("📝 第一步:貼上廠商微信文案 (支援批量&單品&emoji 文案)", height=200)
+user_input = st.text_area("📝 第一步:每次貼上一款廠商完整文案（含補充費用）", height=200)
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
-common_data, products_data = parse_text(user_input_tw)
+common_data, products_data = parse_text(user_input)
 with st.expander("🔧 診斷資訊 (若解析有誤可展開查看)"):
     st.write(f"原始輸入長度: {len(user_input)}")
     st.write(f"轉繁後長度: {len(user_input_tw)}")
     st.write(f"抓到商品數: {len(products_data)}")
     st.write("共用參數:", common_data)
     st.write("商品清單:", products_data)
+    st.code(user_input, language=None)
 st.subheader("🔍 第二步:共用參數校正")
 c1, c2, c3, c4, c5 = st.columns(5)
 final_price = c1.number_input("進價(RMB)", value=common_data["price"], format="%.2f")
@@ -611,13 +838,30 @@ elif weight_state["source"] == "unit":
 elif weight_state["source"] == "both" and weight_state["mismatch_ratio"] >= 0.2:
     st.warning(
         "⚠️ 單個重量與整箱毛重換算差異超過 20%；"
-        f"將暫以較高的 {weight_state['base_weight_g']:.2f}g/pcs 計算，避免低估運費。"
+        "停止計算，請核對後修正重量來源；不再自動取較大值報價。"
     )
 c6, c7 = st.columns(2)
 final_prod_size = c6.text_input("產品尺寸 (沒抓到可手動輸入)", value=common_data["prod_size"])
 final_color_size = c7.text_input("彩盒尺寸 (亞克力/單個包裝也算)", value=common_data["color_box_size"])
 final_outer_size = st.text_input("外箱尺寸 (沒抓到可手動輸入)", value=common_data["outer_box_size"])
-final_extra = st.text_input("額外備註 (包裝資訊、雷射標等,可手動編輯)", value=common_data["extra_tags"])
+final_extra = st.text_area("額外備註（保留顏色、材質、端盒、木架等）", value=common_data["extra_tags"])
+unit_options = ["", "個", "盒", "套", "瓶", "罐", "包", "袋"]
+parsed_unit = common_data["qty_unit"]
+final_qty_unit = st.selectbox("装箱及計價單位（必須一致；不同時先人工換算）", unit_options,
+                                index=unit_options.index(parsed_unit) if parsed_unit in unit_options else 0)
+active_issues = list(common_data["issues"])
+if any("木架或額外費用" in issue for issue in active_issues):
+    st.warning("木架等附加項目未確認前不提供成本。若費用另加，先將每銷售單位進價及整箱重量校正為含附加項目的數值。")
+    confirmation_key = hashlib.sha256(repr((user_input, final_price, final_qty, final_unit_weight_g, final_carton_weight_kg)).encode()).hexdigest()
+    extra_basis = st.text_input("供應商確認依據／費用與重量換算說明", key="basis_" + confirmation_key)
+    if st.checkbox("已向來源確認：上述進價、重量已涵蓋全部附加費用，沒有未確認項目", key="extra_" + confirmation_key) and extra_basis.strip():
+        active_issues = [issue for issue in active_issues if "木架或額外費用" not in issue]
+        final_extra += "\n附加費用確認：" + extra_basis.strip()
+block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
+                             final_dom, intl_rate, ex_rate, active_issues, common_data["price_unit"], final_qty_unit)
+if block_reasons:
+    st.error("待確認：" + "；".join(block_reasons) + "。重量、運費、成本、報價全部留白；本次禁止存檔。")
+    st.write({key: "" for key in ("計費重量", "內陸運費", "國際運費", "到手成本", "10%報價", "13%報價", "15%報價", "20%報價")})
 st.markdown("---")
 st.subheader(f"📋 擷取到的商品清單 (共 {len(products_data)} 筆,可直接編輯、新增或刪除)")
 df_items = pd.DataFrame(products_data)
@@ -630,12 +874,12 @@ df_items = df_items.rename(columns={"code": "貨號", "name": "名稱"})
 edited_df = st.data_editor(df_items, num_rows="dynamic", width="stretch")
 if final_qty > 0:
     st.markdown("---")
-    st.subheader("📊 第三步:選擇分頁與批量存入")
+    st.subheader("📊 第三步:選擇分頁與逐款存入")
     category_col, vendor_col = st.columns([1, 1])
     with category_col:
         final_category = st.selectbox(
             "📂 確定存入的分頁:",
-            ["正版", "玩具", "生活用品", "娃娃", "吊飾"],
+            ["G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾"],
             index=0,
         )
     with vendor_col:
@@ -648,47 +892,26 @@ if final_qty > 0:
         st.success("✅ 此廠商廣州包郵")
     to_save_df = edited_df[(edited_df["寫入"] == True) & ((edited_df["貨號"] != "") | (edited_df["名稱"] != ""))]
     all_sheets_data = get_all_sheets_data()
-    duplicate_warnings = []
-    seen_batch = {}
-    if not to_save_df.empty:
-        for idx, row in to_save_df.iterrows():
-            check_code = normalize_code(row["貨號"])
-            check_name = normalize_name(row["名稱"])
-            if len(check_code) <= 2:
-                check_code = ""
-            if len(check_name) <= 2:
-                check_name = ""
-
-            # 同一批資料：有貨號時以貨號識別，沒有貨號才退回使用名稱。
-            batch_key = ("code", check_code) if check_code else ("name", check_name)
-            if batch_key in seen_batch:
-                duplicate_warnings.append(
-                    f"【{check_code or check_name}】本批次與第 {seen_batch[batch_key] + 1} 筆重複"
-                )
-            else:
-                seen_batch[batch_key] = idx
-
-            # 雲端既有資料：有貨號時只比貨號；沒有貨號時才比名稱。
-            if all_sheets_data and (check_code or check_name):
-                for sheet_title, sheet_rows in all_sheets_data.items():
-                    for existing in extract_saved_products(sheet_rows):
-                        if check_code:
-                            dup_found = existing["code"] == check_code
-                        else:
-                            dup_found = existing["name"] == check_name
-
-                        if dup_found:
-                            duplicate_warnings.append(
-                                f"【{check_code or check_name}】已存在於 "
-                                f"{sheet_title} (編號: {existing['no']})"
-                            )
-                            break
+    if all_sheets_data is None:
+        st.error("雲表讀取失敗，停止存檔；不可把讀取失敗當成空表。")
+        st.stop()
+    duplicate_warnings = duplicate_messages(
+        [{"code": row["貨號"], "name": row["名稱"]} for _, row in to_save_df.iterrows()], all_sheets_data)
+    if final_category not in all_sheets_data:
+        block_reasons.append("找不到指定分頁，禁止自動新建分頁")
+        st.error("找不到指定分頁，已停止存檔；請核對分頁名稱。")
     if duplicate_warnings:
         for warn in duplicate_warnings:
             st.error(f"🚨 **撞單雷達警告**:{warn}")
     if not to_save_df.empty:
-        final_confirm = st.checkbox(f"我已手動校對完成,確認寫入共 {len(to_save_df)} 款商品")
-        if st.button("💾 執行批量存檔", type="primary", disabled=not final_confirm):
+        review_key = hashlib.sha256(repr((user_input, to_save_df.to_dict(), final_price, final_qty,
+            final_qty_unit, final_carton_weight_kg, final_unit_weight_g, final_dom, intl_rate, ex_rate,
+            final_category, final_vendor, final_prod_size, final_color_size, final_outer_size, final_extra)).encode()).hexdigest()
+        final_confirm = st.checkbox(f"我已逐欄對照原文、補充資訊及廠商，確認寫入共 {len(to_save_df)} 款商品", key="review_" + review_key)
+        invalid_names = any(not normalize_name(row["名稱"]) for _, row in to_save_df.iterrows())
+        if invalid_names or len(to_save_df) != 1:
+            st.error("請每次選擇一款有完整品名的商品存檔。")
+        if st.button("💾 執行存檔", type="primary", disabled=bool(not final_confirm or block_reasons or duplicate_warnings or invalid_names or len(to_save_df) != 1)):
             target_data = all_sheets_data.get(final_category, [])
             true_last_row = len(target_data)
             max_no = 0
@@ -700,6 +923,7 @@ if final_qty > 0:
             st_r = true_last_row + 2 if true_last_row > 0 else 1
             bulk_rows = []
             info_lines = []
+            info_lines.append(f"計價單位：{final_qty_unit}")
             if final_prod_size:
                 info_lines.append(f"尺寸 {final_prod_size}")
             if final_color_size:
@@ -709,7 +933,8 @@ if final_qty > 0:
             if final_extra:
                 info_lines.append(final_extra)
             info_display = "\n".join(info_lines) if info_lines else "尺寸 (未提供)"
-            today_str = datetime.datetime.now().strftime("%Y/%-m/%-d")
+            today = datetime.datetime.now(ZoneInfo("Asia/Taipei"))
+            today_str = f"{today.year}/{today.month}/{today.day}"
             empty_row = [""] * 12
             for idx, row in to_save_df.iterrows():
                 max_no += 1
@@ -724,6 +949,8 @@ if final_qty > 0:
                     intl_rate,
                     ex_rate,
                     final_vendor,
+                    final_price=final_price,
+                    blocked=bool(block_reasons),
                 )
                 if final_carton_weight_kg > 0 and final_unit_weight_g > 0:
                     weight_note = (
@@ -737,7 +964,7 @@ if final_qty > 0:
                 else:
                     weight_note = "重量 未提供"
                 block = [
-                    [next_no, str(row['名稱']).strip(), "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/pcs", "大陸運費rmb", "國際運費", "預估到手成本", final_vendor],
+                    [next_no, str(row['名稱']).strip(), "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", f"重量g/{final_qty_unit}", "大陸運費rmb", "國際運費", "預估到手成本", final_vendor],
                     [
                         today_str,
                         info_display,
@@ -752,15 +979,15 @@ if final_qty > 0:
                         formulas["cost"],
                         "",
                     ],
-                    build_carton_note_row(final_qty, final_vendor),
+                    build_carton_note_row(final_qty, final_vendor, final_qty_unit),
                     ["", weight_note] + [""] * 10,
                     ["", f"貨號 {normalize_code(row['貨號'])}"] + [""] * 10,
                     empty_row
                 ]
                 bulk_rows.extend(block)
-            if save_bulk_to_worksheet(final_category, bulk_rows, st_r, block_size=6):
+            if save_bulk_to_worksheet(final_category, bulk_rows, st_r, block_size=6, expected_rows=target_data):
                 get_all_sheets_data.clear()
                 st.success(
-                    f"✅ 批量儲存成功!已一口氣將 {len(to_save_df)} 款商品存入【{final_category}】，"
+                    f"✅ 寫入並核對成功！已將 {len(to_save_df)} 款商品存入【{final_category}】，"
                     f"廠商【{final_vendor}】!"
                 )
