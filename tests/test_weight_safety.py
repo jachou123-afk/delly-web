@@ -43,10 +43,14 @@ class WeightSafetyTests(unittest.TestCase):
                 "clean_product_name",
                 "parse_text",
                 "parse_text_legacy",
+                "wooden_rack_context",
+                "wooden_rack_cost_basis_text",
+                "supplemental_uncertainty_issues",
                 "canonical_unit",
                 "is_free_shipping_vendor",
                 "build_carton_note_row",
                 "resolve_weight_inputs",
+                "formula_number",
                 "build_cost_formulas",
             },
             {"UNIT_PAT", "EMOJI_PAT"},
@@ -87,7 +91,7 @@ class WeightSafetyTests(unittest.TestCase):
     def test_unit_weight_keeps_cost_path_available(self):
         formulas = self.build_cost_formulas(18, 0.0, 150.0, 150, 1.5, 8.5, 4.85)
 
-        self.assertIn("ROUNDUP(150.0*1.05,2)", formulas["weight"])
+        self.assertIn("ROUNDUP(150*1.05,2)", formulas["weight"])
         self.assertIn("ISNUMBER(G18)", formulas["weight"])
         self.assertIn('H18=""', formulas["domestic"])
         self.assertIn('H18=""', formulas["international"])
@@ -136,7 +140,7 @@ class WeightSafetyTests(unittest.TestCase):
         formulas = self.build_cost_formulas(36, 26.0, 0.0, 240, 1.5, 8.5, 4.7)
 
         self.assertIn(
-            "ROUNDUP((26.0/240)*1000*1.05,2)",
+            "ROUNDUP((26/240)*1000*1.05,2)",
             formulas["weight"],
         )
         self.assertIn("ROUND((G36+I36+J36)*4.7,1)", formulas["cost"])
