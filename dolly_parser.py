@@ -12,8 +12,8 @@ from zoneinfo import ZoneInfo
 from line_ad_copy import CATEGORY_CODES, build_line_ad_copy_from_sheet_block
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V79")
-st.info("V79：新增 LINE 廣告文案唯讀產生器；代號固定 BGD-類別-NO，並只在廣告層排除重量、外箱尺寸及木架資訊。")
+st.title("🪐 半自動 - 採購報價彙整表 V80")
+st.info("V80：LINE 文案移除新品字樣、將正版授權置頂；有包裝尺寸時只顯示包裝尺寸，不重複產品尺寸。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
 SETTINGS_WS = "_設定"
@@ -1498,8 +1498,8 @@ def update_existing_product(
 # --- 5. LINE 廣告文案（只讀取既有雲表，不改動採購資料） ---
 with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
     st.caption(
-        "目前已確認 G正版與 S生活用品代號。廣告保留產品／彩盒尺寸、包裝、材質等，"
-        "並排除重量、外箱尺寸及所有木架資訊。"
+        "目前已確認 G正版與 S生活用品代號。文案移除新品字樣；正版授權置頂；"
+        "有彩盒／包裝／端盒尺寸時不顯示產品尺寸，並排除重量、外箱尺寸及所有木架資訊。"
     )
     if st.checkbox("載入雲表商品", key="load_line_ad_copy"):
         ad_sheets = get_all_sheets_data()

@@ -28,6 +28,17 @@ _WEIGHT_PREFIX = re.compile(
 )
 _WOOD_PATTERN = re.compile(r"(?:木架|木框)")
 _CARTON_PREFIX = re.compile(r"^裝箱\s*")
+_LICENSE_PATTERN = re.compile(r"正版(?:授權|授权)")
+_PRODUCT_SIZE_PREFIX = re.compile(r"^(?:(?:產品|产品)\s*)?尺寸\s*[：:]?")
+_PACKAGING_SIZE_PREFIX = re.compile(
+    r"^(彩盒尺寸|包裝尺寸|包装尺寸|端盒尺寸)\s*[：:]?\s*(.+)$"
+)
+_PACKAGING_SIZE_PRIORITY = {
+    "彩盒尺寸": 0,
+    "端盒尺寸": 1,
+    "包裝尺寸": 2,
+    "包装尺寸": 2,
+}
 _TRAILING_PRIVATE_FIELD = re.compile(
     r"\s+(?=(?:外箱尺寸|外箱規格|外箱规格|外箱|整箱毛重|整箱重量|箱重|毛重|"
     r"淨重|净重|單個重量|单个重量|每個重量|每个重量|單件重量|单件重量|"
@@ -37,6 +48,22 @@ _TRAILING_PRIVATE_FIELD = re.compile(
 
 def _clean_text(value):
     return str(value or "").replace("\r", "").strip()
+
+
+def _remove_ad_labels(value):
+    """Remove labels that are handled structurally in the LINE layout."""
+    text = str(value or "").replace("新品", "")
+    text = _LICENSE_PATTERN.sub("", text)
+    text = re.sub(r"^[\s#＃|｜/／、,，;；:：-]+", "", text)
+    text = re.sub(r"[\s#＃|｜/／、,，;；:：-]+$", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _dimension_signature(value):
+    """Normalize only the dimension value so equivalent package sizes dedupe."""
+    normalized = unicodedata.normalize("NFKC", value).lower()
+    normalized = normalized.replace("×", "*").replace("x", "*")
+    return re.sub(r"\s+", "", normalized).strip("，,；;")
 
 
 def build_bgd_code(category_name, no_value):
@@ -77,8 +104,7 @@ def _ad_detail_lines(details):
         for item in details or ():
             source_lines.extend(_clean_text(item).splitlines())
 
-    result = []
-    seen = set()
+    candidates = []
     for source_line in source_lines:
         line = source_line.strip()
         if not line:
@@ -98,7 +124,46 @@ def _ad_detail_lines(details):
         private_suffix = _TRAILING_PRIVATE_FIELD.search(normalized)
         if private_suffix:
             line = line[:private_suffix.start()].rstrip(" ，,；;")
-        if line and line not in seen:
+
+        line = _remove_ad_labels(line)
+        if line:
+            candidates.append(line)
+
+    packaging_dimensions = {}
+    for index, line in enumerate(candidates):
+        match = _PACKAGING_SIZE_PREFIX.match(unicodedata.normalize("NFKC", line))
+        if not match:
+            continue
+        signature = _dimension_signature(match.group(2))
+        if not signature:
+            continue
+        choice = (_PACKAGING_SIZE_PRIORITY[match.group(1)], index, line)
+        current = packaging_dimensions.get(signature)
+        if current is None or choice[:2] < current[:2]:
+            packaging_dimensions[signature] = choice
+
+    # Packaging methods such as "包裝:12個/opp袋" never enter this branch.
+    # Only an explicit packaging-dimension field suppresses the generic product
+    # dimension.  Distinct package levels remain visible; identical dimension
+    # values appear once, with 彩盒尺寸 preferred when present.
+    has_packaging_dimension = bool(packaging_dimensions)
+    emitted_dimensions = set()
+    result = []
+    seen = set()
+    for line in candidates:
+        normalized = unicodedata.normalize("NFKC", line)
+        if has_packaging_dimension and _PRODUCT_SIZE_PREFIX.match(normalized):
+            continue
+
+        package_match = _PACKAGING_SIZE_PREFIX.match(normalized)
+        if package_match:
+            signature = _dimension_signature(package_match.group(2))
+            if not signature or signature in emitted_dimensions:
+                continue
+            line = packaging_dimensions[signature][2]
+            emitted_dimensions.add(signature)
+
+        if line not in seen:
             seen.add(line)
             result.append(line)
     return result
@@ -139,7 +204,15 @@ def build_line_ad_copy(
     carton_text,
 ):
     """Build one complete customer-facing message, failing closed on gaps."""
-    product_name = re.sub(r"\s+", " ", _clean_text(name))
+    raw_name = re.sub(r"\s+", " ", _clean_text(name))
+    raw_details = details if isinstance(details, str) else "\n".join(
+        _clean_text(item) for item in (details or ())
+    )
+    is_licensed = bool(
+        _LICENSE_PATTERN.search(raw_name)
+        or _LICENSE_PATTERN.search(raw_details)
+    )
+    product_name = _remove_ad_labels(raw_name)
     if not product_name:
         raise ValueError("商品名稱不可空白")
 
@@ -149,6 +222,7 @@ def build_line_ad_copy(
         raise ValueError("裝箱單位與計價單位不一致，停止產生廣告")
 
     lines = [
+        *(["正版授權"] if is_licensed else []),
         product_name,
         build_bgd_code(category_name, no_value),
         *_ad_detail_lines(details),
