@@ -40,7 +40,7 @@ def test_a0081_exact_line_copy_omits_weight():
 
     assert build_line_ad_copy_from_sheet_block("S生活用品", block) == "\n".join(
         [
-            "新品蒙奇奇系列收納包",
+            "蒙奇奇系列收納包",
             "BGD-S-221",
             "尺寸 10*8.5*2.5cm",
             "6個圖案混",
@@ -76,6 +76,12 @@ def test_mc_z0001_omits_outer_box_weight_and_all_wooden_rack_notes():
 
     result = build_line_ad_copy_from_sheet_block("G正版", block)
 
+    assert result.splitlines()[:3] == [
+        "正版授權",
+        "三麗鷗浮雕系列茗芙4.5英寸飯碗",
+        "BGD-G-1155",
+    ]
+    assert "新品" not in result
     assert "BGD-G-1155" in result
     assert "尺寸 12*6.8cm" in result
     assert "帶鐳射標/2個顏色" in result
@@ -107,8 +113,109 @@ def test_color_box_is_retained_while_outer_box_is_omitted():
     result = build_line_ad_copy_from_sheet_block("G正版", block)
 
     assert "彩盒尺寸 7.6*7.6*23.8cm" in result
+    assert "尺寸 7.4*7.4*22.8cm" not in result
     assert "外箱尺寸" not in result
     assert "售價185元/個" in result
+
+
+def test_identical_packaging_dimensions_are_shown_once_and_prefer_color_box():
+    result = build_line_ad_copy(
+        name="正版授權 新品測試商品",
+        category_name="G正版",
+        no_value="no1136",
+        quote_10=60.2,
+        unit="盒",
+        details="\n".join(
+            [
+                "尺寸 12.5*17cm",
+                "包裝尺寸:19 x 6.5 x 4.5 CM",
+                "彩盒尺寸 19*6.5*4.5cm",
+            ]
+        ),
+        carton_text="裝箱 30盒/箱",
+    )
+
+    lines = result.splitlines()
+    assert lines[:3] == ["正版授權", "測試商品", "BGD-G-1136"]
+    assert "尺寸 12.5*17cm" not in lines
+    assert "彩盒尺寸 19*6.5*4.5cm" in lines
+    assert not any(line.startswith("包裝尺寸") for line in lines)
+
+
+def test_distinct_packaging_dimensions_are_both_retained():
+    result = build_line_ad_copy(
+        name="測試盲盒",
+        category_name="G正版",
+        no_value="no1147",
+        quote_10=52.6,
+        unit="個",
+        details="彩盒尺寸 8*8*11.5cm\n端盒尺寸 32.4*16.4*11.8cm",
+        carton_text="裝箱 96個/箱",
+    )
+
+    assert "彩盒尺寸 8*8*11.5cm" in result
+    assert "端盒尺寸 32.4*16.4*11.8cm" in result
+
+
+def test_packaging_method_does_not_suppress_product_size():
+    result = build_line_ad_copy(
+        name="新品蒙奇奇系列收納包",
+        category_name="S生活用品",
+        no_value="no221",
+        quote_10=52.9,
+        unit="個",
+        details="尺寸 10*8.5*2.5cm\n包裝:12個/opp袋",
+        carton_text="裝箱 300個/箱",
+    )
+
+    assert result.splitlines()[0] == "蒙奇奇系列收納包"
+    assert "尺寸 10*8.5*2.5cm" in result
+    assert "包裝:12個/opp袋" in result
+    assert "正版授權" not in result
+
+
+def test_category_name_alone_does_not_invent_license_label():
+    result = build_line_ad_copy(
+        name="測試商品",
+        category_name="G正版",
+        no_value="no1",
+        quote_10=10,
+        unit="個",
+        details="尺寸 1*1cm",
+        carton_text="裝箱 10個/箱",
+    )
+
+    assert result.splitlines()[0] == "測試商品"
+    assert "正版授權" not in result
+
+
+def test_simplified_license_marker_is_moved_to_traditional_first_line():
+    result = build_line_ad_copy(
+        name="新品測試商品",
+        category_name="G正版",
+        no_value="no2",
+        quote_10=10,
+        unit="個",
+        details="新品#正版授权\n產品尺寸:1*1cm",
+        carton_text="裝箱 10個/箱",
+    )
+
+    assert result.splitlines()[:3] == ["正版授權", "測試商品", "BGD-G-2"]
+    assert "新品" not in result
+    assert "正版授权" not in result
+
+
+def test_name_that_is_empty_after_removing_new_label_fails_closed():
+    with pytest.raises(ValueError, match="商品名稱不可空白"):
+        build_line_ad_copy(
+            name="新品",
+            category_name="S生活用品",
+            no_value="no3",
+            quote_10=10,
+            unit="個",
+            details="尺寸 1*1cm",
+            carton_text="裝箱 10個/箱",
+        )
 
 
 @pytest.mark.parametrize(
