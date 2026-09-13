@@ -1,5 +1,8 @@
 import ast
 import re
+import math
+import unicodedata
+import zhconv
 import unittest
 from pathlib import Path
 
@@ -22,7 +25,7 @@ def load_selected_code(function_names, assignment_names=()):
         elif isinstance(node, ast.FunctionDef) and node.name in function_names:
             body.append(node)
 
-    namespace = {"re": re}
+    namespace = {"re": re, "math": math, "unicodedata": unicodedata, "zhconv": zhconv}
     exec(
         compile(ast.Module(body=body, type_ignores=[]), str(SOURCE_PATH), "exec"),
         namespace,
@@ -39,6 +42,8 @@ class WeightSafetyTests(unittest.TestCase):
                 "normalize_name",
                 "clean_product_name",
                 "parse_text",
+                "parse_text_legacy",
+                "canonical_unit",
                 "is_free_shipping_vendor",
                 "build_carton_note_row",
                 "resolve_weight_inputs",
@@ -82,7 +87,8 @@ class WeightSafetyTests(unittest.TestCase):
     def test_unit_weight_keeps_cost_path_available(self):
         formulas = self.build_cost_formulas(18, 0.0, 150.0, 150, 1.5, 8.5, 4.85)
 
-        self.assertEqual(formulas["weight"], "=ROUNDUP(150.0*1.05,2)")
+        self.assertIn("ROUNDUP(150.0*1.05,2)", formulas["weight"])
+        self.assertIn("ISNUMBER(G18)", formulas["weight"])
         self.assertIn('H18=""', formulas["domestic"])
         self.assertIn('H18=""', formulas["international"])
         self.assertIn('H18=""', formulas["cost"])
@@ -93,17 +99,14 @@ class WeightSafetyTests(unittest.TestCase):
         formulas = self.build_cost_formulas(24, 0.0, 0.0, 72, 1.5, 8.5, 4.85)
 
         self.assertEqual(formulas["weight"], "")
-        for key in ("domestic", "international", "cost"):
-            self.assertIn('H24=""', formulas[key])
-        for key in ("quote_10", "quote_13", "quote_15", "quote_20"):
-            self.assertIn('K24=""', formulas[key])
+        self.assertEqual(set(formulas.values()), {""})
 
         free_shipping = self.build_cost_formulas(
             24, 0.0, 0.0, 72, 1.5, 8.5, 4.85, "v多品村"
         )
         self.assertEqual(
             free_shipping["domestic"],
-            '=IF(OR(H24="",H24<=0),"",0)',
+            '',
         )
 
     def test_duopincun_has_zero_domestic_freight_and_shipping_note(self):
@@ -115,25 +118,19 @@ class WeightSafetyTests(unittest.TestCase):
         self.assertTrue(self.is_free_shipping_vendor("多品村"))
         self.assertTrue(self.is_free_shipping_vendor("V多品村"))
         self.assertFalse(self.is_free_shipping_vendor("v菲凡"))
-        self.assertEqual(
-            formulas["domestic"],
-            '=IF(OR(H18="",H18<=0),"",0)',
-        )
+        self.assertIn('IF(OR(H18="",H18<=0),"",0)', formulas["domestic"])
         self.assertEqual(note_row[1], "裝箱 150個/箱")
         self.assertEqual(note_row[8], "廣州包郵")
         self.assertEqual(len(note_row), 12)
 
-    def test_both_weights_choose_the_higher_per_piece_value(self):
+    def test_conflicting_weights_block_all_calculations(self):
         state = self.resolve_weight_inputs(16.0, 150.0, 150)
         formulas = self.build_cost_formulas(30, 16.0, 150.0, 150, 1.5, 8.5, 4.85)
 
         self.assertEqual(state["source"], "both")
         self.assertEqual(state["base_weight_g"], 150.0)
         self.assertGreaterEqual(state["mismatch_ratio"], 0.2)
-        self.assertEqual(
-            formulas["weight"],
-            "=ROUNDUP(MAX((16.0/150)*1000,150.0)*1.05,2)",
-        )
+        self.assertEqual(set(formulas.values()), {""})
 
     def test_carton_weight_keeps_existing_calculation(self):
         formulas = self.build_cost_formulas(36, 26.0, 0.0, 240, 1.5, 8.5, 4.7)
