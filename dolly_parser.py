@@ -11,8 +11,8 @@ import hashlib
 from zoneinfo import ZoneInfo
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V75")
-st.info("V75：新增既有商品原位修正，先選定原 NO 並核對修改前後差異；保留原日期、NO、格式及圖片位置。V74 解析與成本防呆維持不變。")
+st.title("🪐 半自動 - 採購報價彙整表 V76")
+st.info("V76：木架／木框作為可選項目保留在備註，成本固定依無木架進價與重量計算；其他附加費用仍須先確認。原位修正保留原日期、NO、格式及圖片位置。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
 SETTINGS_WS = "_設定"
@@ -764,6 +764,11 @@ def canonical_unit(unit):
 def parse_text(text):
     """單一報價的保守解析；不把多則獨立報價套用同一組數字。"""
     normalized = zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw")
+    # 木架／木框是可選項目，該行的金額、重量不得成為商品本體成本輸入。
+    cost_basis_text = "\n".join(
+        line for line in normalized.splitlines()
+        if not re.search(r"木架|木框", line)
+    )
     common, products = parse_text_legacy(normalized)
     common = {**common, "raw_text": text or "", "issues": [], "price_unit": "", "qty_unit": ""}
     if not normalized.strip():
@@ -774,14 +779,14 @@ def parse_text(text):
     # Require a price or carton label, never use the count inside an OPP bag.
     prices = list(re.finditer(
         rf"(?:單(?P<unit>{units})價格|單價|價格|價錢|售價|都是|💰)\s*:?\s*(?:RMB|¥)?\s*(?P<value>{number})",
-        normalized, re.I))
+        cost_basis_text, re.I))
     if not prices:
-        prices = list(re.finditer(rf"(?P<value>{number})\s*元(?:\s*/\s*(?P<unit>{units}))?", normalized, re.I))
-        prices = [m for m in prices if not re.search(r"運費|木架|木框|包裝費|打包費|加工費", normalized[normalized.rfind("\n", 0, m.start()) + 1:m.start()])]
+        prices = list(re.finditer(rf"(?P<value>{number})\s*元(?:\s*/\s*(?P<unit>{units}))?", cost_basis_text, re.I))
+        prices = [m for m in prices if not re.search(r"運費|包裝費|打包費|加工費", cost_basis_text[cost_basis_text.rfind("\n", 0, m.start()) + 1:m.start()])]
     common["price"] = float(prices[0]["value"]) if prices else 0.0
     if prices:
         common["price_unit"] = canonical_unit(prices[0]["unit"])
-        tail = normalized[prices[0].end():]
+        tail = cost_basis_text[prices[0].end():]
         suffix_unit = re.match(rf"\s*元\s*/\s*({units})", tail, re.I)
         if suffix_unit:
             common["price_unit"] = canonical_unit(suffix_unit[1])
@@ -789,18 +794,18 @@ def parse_text(text):
             issues.append("價格含範圍或不明數字格式，請確認單一進價")
         if re.match(r"\s*元?\s*起", tail):
             issues.append("價格僅為起價，須確認實際進價")
-    if re.search(r"(?:單價|價格|進價)\s*:?\s*(?:約|大約)|待定|待確認|另議|未定|以實際", normalized):
+    if re.search(r"(?:單價|價格|進價)\s*:?\s*(?:約|大約)|待定|待確認|另議|未定|以實際", cost_basis_text):
         issues.append("原文含未確認條件，請先向來源確認")
     if len(prices) > 1:
         issues.append("存在多個價格，請一次貼一則報價並確認費用範圍")
     qty_matches = list(re.finditer(
         rf"(?:每箱數量|箱數|裝箱量|裝箱數|裝箱|一箱)\s*:?\s*(?P<value>\d+)\s*(?P<unit>{units})?",
-        normalized, re.I))
+        cost_basis_text, re.I))
     if not qty_matches:
-        qty_matches = list(re.finditer(rf"(?P<value>\d+)\s*(?P<unit>{units})\s*/\s*箱", normalized, re.I))
+        qty_matches = list(re.finditer(rf"(?P<value>\d+)\s*(?P<unit>{units})\s*/\s*箱", cost_basis_text, re.I))
     common["qty"] = int(qty_matches[0]["value"]) if qty_matches else 0
     common["qty_unit"] = canonical_unit(qty_matches[0]["unit"]) if qty_matches else ""
-    if qty_matches and re.match(r"\s*[-~～.,]\s*\d", normalized[qty_matches[0].end():]):
+    if qty_matches and re.match(r"\s*[-~～.,]\s*\d", cost_basis_text[qty_matches[0].end():]):
         issues.append("裝箱量含範圍或小數，請確認整數裝箱量")
     if len(qty_matches) > 1:
         issues.append("存在多個裝箱量，請拆開獨立報價")
@@ -808,10 +813,10 @@ def parse_text(text):
     weight_unit = r"kg|公斤|千克|g|公克|克"
     prefix = rf"(?:單個重量|每個重量|單件重量|每件重量|單重)\s*:?\s*(?:約)?\s*({number})\s*({weight_unit})"
     suffix = rf"重量\s*:?\s*(?:約)?\s*({number})\s*({weight_unit})\s*\(\s*(?:單個|每個|單件|每件)\s*\)"
-    unit_matches = list(re.finditer(prefix, normalized, re.I)) + list(re.finditer(suffix, normalized, re.I))
+    unit_matches = list(re.finditer(prefix, cost_basis_text, re.I)) + list(re.finditer(suffix, cost_basis_text, re.I))
     unit_values = [float(m[1]) * (1000 if m[2].lower() in ("kg", "公斤", "千克") else 1) for m in unit_matches]
     common["unit_weight_g"] = unit_values[0] if unit_values else 0.0
-    carton_text = re.sub(prefix, "", normalized, flags=re.I)
+    carton_text = re.sub(prefix, "", cost_basis_text, flags=re.I)
     carton_text = re.sub(suffix, "", carton_text, flags=re.I)
     carton_matches = list(re.finditer(
         rf"(?:整箱毛重|整箱重量|箱重|毛重|⚖️?)\s*:?\s*(?:約)?\s*({number})\s*({weight_unit})",
@@ -822,8 +827,9 @@ def parse_text(text):
     common["weight"] = carton_values[0] if carton_values else 0.0
     if len(set(unit_values)) > 1 or len(set(carton_values)) > 1:
         issues.append("存在互相衝突的重量，請核對來源後只保留正確值")
-    if re.search(r"木架|木框|另加|另計|不含運|運費另|附加費|(?:運費|打包費|包裝費|加工費)\s*:?\s*\d", normalized):
-        issues.append("有木架或額外費用，須確認是否已包含重量及費用")
+    for issue in supplemental_uncertainty_issues(normalized):
+        if issue not in issues:
+            issues.append(issue)
     codes = list(re.finditer(r"(?:型號|貨號|產品編號|編號)\s*:?\s*([A-Za-z0-9]+(?:[-/][A-Za-z0-9]+)*)", normalized))
     if len(codes) > 1 or len(products) > 1:
         issues.append("偵測到多款商品；目前請每款分別貼上解析，避免共用錯誤參數")
@@ -861,6 +867,8 @@ def parse_text(text):
         line = line.strip()
         if re.search(r"帶[鐳雷]射|正版授權|材質|顏色|圖案|端盒|木架|木框|包裝|USB|充電|約.*(?:kg|公斤|克)|另加|另計|運費|打包費|加工費|待定|待確認", line, re.I):
             notes.append(line)
+    if re.search(r"木架|木框", normalized):
+        notes.append("可加木架；成本按無木架的進價及重量計算")
     common["extra_tags"] = "\n".join(dict.fromkeys(notes))
     return common, products
 
@@ -894,12 +902,24 @@ def supplemental_uncertainty_issues(text):
     issues = []
     if re.search(r"待定|待確認|另議|未定|以實際", normalized):
         issues.append("補充欄含未確認條件，請先向來源確認")
-    if re.search(
-        r"木架|木框|另加|另計|不含運|運費另|附加費|"
-        r"(?:運費|打包費|包裝費|加工費)\s*:?[\s約]*\d",
+
+    # 木架／木框是可選項目：保留原文備註，但不把費用或重量加入成本。
+    # 先只移除木架子句，同一行若還有運費、包裝費等仍會被下方規則擋住。
+    non_rack_text = re.sub(
+        r"(?:木架|木框)\s*(?:費用?)?\s*(?:大約|約|另加|另計|可加)?\s*[:：]?\s*"
+        r"(?:\d+(?:\.\d+)?(?:\s*[-~～]\s*\d+(?:\.\d+)?)?\s*(?:kg|公斤|千克|g|公克|克))?\s*"
+        r"(?:[\(（]\s*\d+(?:\.\d+)?\s*元\s*[\)）])?\s*"
+        r"(?:\d+(?:\.\d+)?\s*元)?",
+        "",
         normalized,
+        flags=re.I,
+    )
+    if re.search(
+        r"另加|另計|不含運|運費另|附加費|"
+        r"(?:運費|打包費|包裝費|加工費)\s*:?[\s約]*\d",
+        non_rack_text,
     ):
-        issues.append("有木架或額外費用，須確認是否已包含重量及費用")
+        issues.append("有非木架額外費用，須確認是否已包含重量及費用")
     return issues
 
 
@@ -1334,8 +1354,8 @@ final_qty_unit = st.selectbox("装箱及計價單位（必須一致；不同時�
 active_issues = list(common_data["issues"])
 active_issues.extend(supplemental_uncertainty_issues(final_extra))
 active_issues = list(dict.fromkeys(active_issues))
-if any("木架或額外費用" in issue for issue in active_issues):
-    st.warning("木架等附加項目未確認前不提供成本。若費用另加，先將每銷售單位進價及整箱重量校正為含附加項目的數值。")
+if any("非木架額外費用" in issue for issue in active_issues):
+    st.warning("非木架附加項目未確認前不提供成本。若費用另加，先將每銷售單位進價及整箱重量校正為含附加項目的數值；木架／木框依固定規則不列入。")
     confirmation_key = hashlib.sha256(
         repr((
             user_input,
@@ -1348,7 +1368,7 @@ if any("木架或額外費用" in issue for issue in active_issues):
     ).hexdigest()
     extra_basis = st.text_input("供應商確認依據／費用與重量換算說明", key="basis_" + confirmation_key)
     if st.checkbox("已向來源確認：上述進價、重量已涵蓋全部附加費用，沒有未確認項目", key="extra_" + confirmation_key) and extra_basis.strip():
-        active_issues = [issue for issue in active_issues if "木架或額外費用" not in issue]
+        active_issues = [issue for issue in active_issues if "非木架額外費用" not in issue]
         final_extra += "\n附加費用確認：" + extra_basis.strip()
 block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
                              final_dom, intl_rate, ex_rate, active_issues, common_data["price_unit"], final_qty_unit)
