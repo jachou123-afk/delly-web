@@ -370,6 +370,17 @@ def resolve_weight_inputs(carton_weight_kg, unit_weight_g, qty):
     }
 
 
+def formula_number(value):
+    """輸出 Sheets 會保留的數字常值，避免 68.0 被正規化成 68 後誤判。"""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+    ):
+        raise ValueError("公式數字不是有效有限值")
+    return format(float(value), ".15g")
+
+
 def build_cost_formulas(
     v_r,
     carton_weight_kg,
@@ -389,7 +400,12 @@ def build_cost_formulas(
     cost_cell = f"K{v_r}"
     numeric_inputs = (carton_weight_kg, unit_weight_g, final_qty, final_dom, intl_rate, ex_rate)
     blank = dict.fromkeys(("quote_10", "quote_13", "quote_15", "quote_20", "weight", "domestic", "international", "cost"), "")
-    if (not all(isinstance(v, (int, float)) and math.isfinite(v) for v in numeric_inputs)
+    if (not all(
+            isinstance(v, (int, float))
+            and not isinstance(v, bool)
+            and math.isfinite(v)
+            for v in numeric_inputs
+        )
             or min(carton_weight_kg, unit_weight_g, final_dom, intl_rate) < 0
             or ex_rate <= 0 or final_qty <= 0 or final_qty != int(final_qty)):
         return blank
@@ -399,18 +415,25 @@ def build_cost_formulas(
             or (final_price is not None and (not math.isfinite(final_price) or final_price <= 0))):
         return blank
 
+    carton_literal = formula_number(carton_weight_kg)
+    unit_literal = formula_number(unit_weight_g)
+    qty_literal = formula_number(final_qty)
+    domestic_rate_literal = formula_number(final_dom)
+    international_rate_literal = formula_number(intl_rate)
+    exchange_rate_literal = formula_number(ex_rate)
+
     if weight_state["source"] == "missing":
         weight_formula = ""
     elif weight_state["source"] == "unit":
-        weight_formula = f"=ROUNDUP({unit_weight_g}*1.05,2)"
+        weight_formula = f"=ROUNDUP({unit_literal}*1.05,2)"
     elif weight_state["source"] == "carton":
         weight_formula = (
-            f"=ROUNDUP(({carton_weight_kg}/{final_qty})*1000*1.05,2)"
+            f"=ROUNDUP(({carton_literal}/{qty_literal})*1000*1.05,2)"
         )
     else:
         weight_formula = (
-            f"=ROUNDUP(MAX(({carton_weight_kg}/{final_qty})*1000,"
-            f"{unit_weight_g})*1.05,2)"
+            f"=ROUNDUP(MAX(({carton_literal}/{qty_literal})*1000,"
+            f"{unit_literal})*1.05,2)"
         )
 
     if is_free_shipping_vendor(vendor):
@@ -420,7 +443,7 @@ def build_cost_formulas(
     else:
         domestic_formula = (
             f'=IF(OR({weight_cell}="",{weight_cell}<=0),"",'
-            f'ROUNDUP(({weight_cell}/1000)*{final_dom},2))'
+            f'ROUNDUP(({weight_cell}/1000)*{domestic_rate_literal},2))'
         )
 
     result = {
@@ -432,12 +455,12 @@ def build_cost_formulas(
         "domestic": domestic_formula,
         "international": (
             f'=IF(OR({weight_cell}="",{weight_cell}<=0),"",'
-            f'ROUNDUP(({weight_cell}/1000)*{intl_rate},2))'
+            f'ROUNDUP(({weight_cell}/1000)*{international_rate_literal},2))'
         ),
         "cost": (
             f'=IF(OR(NOT(ISNUMBER(G{v_r})),G{v_r}<=0,{weight_cell}="",{weight_cell}<=0,'
             f'{domestic_cell}="",{international_cell}=""),"",'
-            f'ROUND((G{v_r}+{domestic_cell}+{international_cell})*{ex_rate},1))'
+            f'ROUND((G{v_r}+{domestic_cell}+{international_cell})*{exchange_rate_literal},1))'
         ),
     }
     # A later manual deletion of G must also hide all derived numbers.
