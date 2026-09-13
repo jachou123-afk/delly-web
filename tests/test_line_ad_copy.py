@@ -1,0 +1,194 @@
+import copy
+
+import pytest
+
+from line_ad_copy import (
+    build_bgd_code,
+    build_line_ad_copy,
+    build_line_ad_copy_from_sheet_block,
+    ceil_ad_price,
+)
+
+
+def sheet_block(no, name, info, quote_10, carton, weight=""):
+    return [
+        [no, name, "10%報價", "13%報價", "15%報價", "20%報價"],
+        ["2026/9/12", info, quote_10],
+        ["", carton],
+        ["", weight],
+        ["", "貨號 TEST"],
+        [""],
+    ]
+
+
+def test_a0081_exact_line_copy_omits_weight():
+    block = sheet_block(
+        "no221",
+        "新品蒙奇奇系列收納包",
+        "\n".join(
+            [
+                "計價單位：個",
+                "尺寸 10*8.5*2.5cm",
+                "6個圖案混",
+                "包裝:12個/opp袋",
+            ]
+        ),
+        "52.9",
+        "裝箱 300個/箱",
+        "單個重量 68g",
+    )
+
+    assert build_line_ad_copy_from_sheet_block("S生活用品", block) == "\n".join(
+        [
+            "新品蒙奇奇系列收納包",
+            "BGD-S-221",
+            "尺寸 10*8.5*2.5cm",
+            "6個圖案混",
+            "包裝:12個/opp袋",
+            "裝箱 300個/箱",
+            "售價53元/個",
+            "交貨2-3週",
+        ]
+    )
+
+
+def test_mc_z0001_omits_outer_box_weight_and_all_wooden_rack_notes():
+    block = sheet_block(
+        "no1155",
+        "三麗鷗浮雕系列茗芙4.5英寸飯碗",
+        "\n".join(
+            [
+                "計價單位：個",
+                "尺寸 12*6.8cm",
+                "外箱尺寸 50.5*34*50cm",
+                "新品#正版授權",
+                "帶鐳射標/2個顏色",
+                "整箱重量:約20.5kg",
+                "包裝:牛皮紙盒",
+                "木架大約:4-7kg(15元)",
+                "可加木架；成本按無木架的進價及重量計算",
+            ]
+        ),
+        84.3,
+        "裝箱 48個/箱",
+        "整箱毛重 20.5KG",
+    )
+
+    result = build_line_ad_copy_from_sheet_block("G正版", block)
+
+    assert "BGD-G-1155" in result
+    assert "尺寸 12*6.8cm" in result
+    assert "帶鐳射標/2個顏色" in result
+    assert "包裝:牛皮紙盒" in result
+    assert "外箱" not in result
+    assert "重量" not in result
+    assert "木架" not in result
+    assert "木框" not in result
+
+
+def test_color_box_is_retained_while_outer_box_is_omitted():
+    block = sheet_block(
+        "no1137",
+        "三麗鷗家族系列輕享雙飲保溫杯530ml",
+        "\n".join(
+            [
+                "計價單位：個",
+                "尺寸 7.4*7.4*22.8cm",
+                "彩盒尺寸 7.6*7.6*23.8cm",
+                "外箱尺寸 67*38.5*42.5",
+                "材質:內316外304",
+            ]
+        ),
+        184.9,
+        "裝箱 48個/箱",
+        "整箱毛重 17KG",
+    )
+
+    result = build_line_ad_copy_from_sheet_block("G正版", block)
+
+    assert "彩盒尺寸 7.6*7.6*23.8cm" in result
+    assert "外箱尺寸" not in result
+    assert "售價185元/個" in result
+
+
+@pytest.mark.parametrize(
+    ("quote_10", "expected"),
+    [(52, 52), ("52.0", 52), (52.1, 53), ("52.9", 53)],
+)
+def test_quote_10_always_rounds_up(quote_10, expected):
+    assert ceil_ad_price(quote_10) == expected
+
+
+@pytest.mark.parametrize("quote_10", ["", 0, -1, True, "待補", float("nan")])
+def test_invalid_quote_10_fails_closed(quote_10):
+    with pytest.raises(ValueError):
+        ceil_ad_price(quote_10)
+
+
+def test_bgd_identifier_has_two_hyphens_and_does_not_guess_categories():
+    assert build_bgd_code("G正版", "no1136") == "BGD-G-1136"
+    assert build_bgd_code("S生活用品", "NO221") == "BGD-S-221"
+    with pytest.raises(ValueError):
+        build_bgd_code("W玩具", "no1")
+    with pytest.raises(ValueError):
+        build_bgd_code("G正版", "no11A")
+
+
+def test_k8141_uses_box_as_the_price_unit():
+    result = build_line_ad_copy(
+        name="三麗鷗庫洛米雙鏈密實袋(小號)",
+        category_name="G正版",
+        no_value="no1136",
+        quote_10=60.2,
+        unit="盒",
+        details="計價單位：盒\n尺寸 12.5*17cm\n包裝尺寸:19*6.5*4.5cm",
+        carton_text="裝箱 30盒/箱",
+    )
+
+    assert "BGD-G-1136" in result
+    assert "售價61元/盒" in result
+    assert "售價61元/個" not in result
+
+
+def test_carton_weight_suffix_is_removed_without_losing_carton_quantity():
+    result = build_line_ad_copy(
+        name="新品蒙奇奇系列收納包",
+        category_name="S生活用品",
+        no_value="no221",
+        quote_10=52.9,
+        unit="個",
+        details="尺寸 10*8.5*2.5cm",
+        carton_text="裝箱 300個/箱 單個重量 68g",
+    )
+    assert "裝箱 300個/箱" in result
+    assert "重量" not in result
+
+
+def test_unit_mismatch_fails_closed():
+    with pytest.raises(ValueError, match="不一致"):
+        build_line_ad_copy(
+            name="測試商品",
+            category_name="G正版",
+            no_value="no1",
+            quote_10=10,
+            unit="盒",
+            details="尺寸 1*1cm",
+            carton_text="裝箱 30個/箱",
+        )
+
+
+def test_ad_formatter_does_not_mutate_the_sheet_block():
+    block = sheet_block(
+        "no1155",
+        "測試商品",
+        "計價單位：個\n外箱尺寸 10*10*10cm\n木架另加15元",
+        10,
+        "裝箱 10個/箱",
+        "整箱毛重 10KG",
+    )
+    original = copy.deepcopy(block)
+
+    result = build_line_ad_copy_from_sheet_block("G正版", block)
+
+    assert block == original
+    assert "外箱" not in result and "木架" not in result and "重量" not in result

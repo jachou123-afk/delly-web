@@ -14,7 +14,7 @@ def app_source(existing=False, failure=False, same_identity=False):
     existing_name = "新品測試收納包" if same_identity else "別款商品"
     rows = [
         ["no1", existing_name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/個", "大陸運費rmb", "國際運費", "預估到手成本", "v多品村"],
-        ["2026/9/12", "舊商品資訊", 60, 62, 64, 68, 9.3, 71.4, 0, 0.61, 47.6, ""],
+        ["2026/9/12", "計價單位：個\n尺寸 10*8.5*2.5cm\n外箱尺寸 20*20*20cm\n木架另加15元", 60, 62, 64, 68, 9.3, 71.4, 0, 0.61, 47.6, ""],
         ["", "裝箱 300個/箱", "", "", "", "", "", "", "廣州包郵", "", "", ""],
         ["", "單個重量 68g", "", "", "", "", "", "", "", "", "", ""],
         ["", "貨號 A0081", "", "", "", "", "", "", "", "", "", ""],
@@ -78,6 +78,26 @@ def choose_target(app):
     assert target.value == ""
     target.set_value("1|no1").run()
     return app
+
+
+def test_line_ad_preview_reads_saved_block_and_filters_internal_fields():
+    app = AppTest.from_string(app_source(existing=True), default_timeout=15).run()
+    loader = next(c for c in app.checkbox if c.label == "載入雲表商品")
+    loader.check().run()
+    product = next(
+        s for s in app.selectbox
+        if s.label.startswith("選擇商品（可搜尋")
+    )
+    product.set_value("1|no1").run()
+
+    assert not app.exception
+    copy_text = next(code.value for code in app.code if "BGD-G-1" in code.value)
+    assert "尺寸 10*8.5*2.5cm" in copy_text
+    assert "外箱" not in copy_text
+    assert "重量" not in copy_text
+    assert "木架" not in copy_text
+    assert "售價60元/個" in copy_text
+    assert copy_text.endswith("交貨2-3週")
 
 
 def test_manual_paste_review_then_save():
