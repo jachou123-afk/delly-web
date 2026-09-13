@@ -9,10 +9,11 @@ import math
 import unicodedata
 import hashlib
 from zoneinfo import ZoneInfo
+from line_ad_copy import CATEGORY_CODES, build_line_ad_copy_from_sheet_block
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V78")
-st.info("V78：支援廠商『一箱30只，27.5KG』行內箱重格式；只有緊接明確裝箱量的 KG 才視為整箱重量，其他裸 KG 仍維持防呆。")
+st.title("🪐 半自動 - 採購報價彙整表 V79")
+st.info("V79：新增 LINE 廣告文案唯讀產生器；代號固定 BGD-類別-NO，並只在廣告層排除重量、外箱尺寸及木架資訊。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
 SETTINGS_WS = "_設定"
@@ -1494,7 +1495,67 @@ def update_existing_product(
         return False
 
 
-# --- 5. 主畫面流程 ---
+# --- 5. LINE 廣告文案（只讀取既有雲表，不改動採購資料） ---
+with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
+    st.caption(
+        "目前已確認 G正版與 S生活用品代號。廣告保留產品／彩盒尺寸、包裝、材質等，"
+        "並排除重量、外箱尺寸及所有木架資訊。"
+    )
+    if st.checkbox("載入雲表商品", key="load_line_ad_copy"):
+        ad_sheets = get_all_sheets_data()
+        if ad_sheets is None:
+            st.error("無法讀取雲表，停止產生廣告文案。")
+        else:
+            ad_categories = [
+                category for category in CATEGORY_CODES
+                if category in ad_sheets
+            ]
+            if not ad_categories:
+                st.error("找不到已設定廣告代號的分頁。")
+            else:
+                ad_category = st.selectbox(
+                    "廣告分頁",
+                    ad_categories,
+                    key="line_ad_category",
+                )
+                ad_products = extract_saved_products(ad_sheets[ad_category])
+                ad_product_map = {
+                    f"{item['row_index']}|{item['no']}": item
+                    for item in ad_products
+                }
+                ad_selected = st.selectbox(
+                    "選擇商品（可搜尋 NO、貨號或名稱）",
+                    [""] + list(ad_product_map),
+                    format_func=lambda key: (
+                        "請選擇商品"
+                        if not key else
+                        f"{ad_product_map[key]['no']}｜"
+                        f"{ad_product_map[key]['code'] or '無貨號'}｜"
+                        f"{ad_product_map[key]['name']}"
+                    ),
+                    key="line_ad_product",
+                )
+                if ad_selected:
+                    ad_product = ad_product_map[ad_selected]
+                    ad_block = get_saved_block(
+                        ad_sheets[ad_category],
+                        ad_product["row_index"],
+                    )
+                    try:
+                        ad_copy = build_line_ad_copy_from_sheet_block(
+                            ad_category,
+                            ad_block,
+                        )
+                    except ValueError as error:
+                        st.error(f"停止產生廣告文案：{error}")
+                    else:
+                        st.code(ad_copy, language=None)
+                        st.caption(
+                            "售價取雲表 10% 報價並無條件進位；交期固定 2-3 週。"
+                        )
+
+
+# --- 6. 主畫面流程 ---
 user_input = st.text_area("📝 第一步:每次貼上一款廠商完整文案（含補充費用）", height=200)
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 common_data, products_data = parse_text(user_input)
