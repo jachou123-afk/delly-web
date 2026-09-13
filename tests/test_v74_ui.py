@@ -52,6 +52,9 @@ def paste(raw, **kwargs):
 
 
 VALID = "新品測試收納包\n编号：A0081\n箱数：300pcs\n单价：9.3元\n尺寸：10*8.5*2.5cm\n重量：68g(单个)\n包装：12个/opp袋"
+VENDOR_INLINE_CARTON = """FF806274，不带电 线控起重机是[Fireworks]24.6元，一箱30只，27.5KG
+彩盒尺寸46.5*6.3*40.2CM
+外箱规格98.5*48*83.5CM"""
 
 
 def save_button(app):
@@ -88,6 +91,20 @@ def test_manual_paste_review_then_save():
     assert rows[4][1] == "貨號 A0081"
     assert "68*1.05" in rows[1][7] or "68.0*1.05" in rows[1][7]
     assert rows[2][1] == "裝箱 300個/箱"
+
+
+def test_vendor_inline_carton_weight_renders_and_can_save():
+    app = paste(VENDOR_INLINE_CARTON)
+    values = {item.label: item.value for item in app.number_input}
+    assert values["進價(RMB)"] == 24.6
+    assert values["裝箱量"] == 30
+    assert values["整箱毛重(kg)"] == 27.5
+    assert not app.error
+    app.checkbox[-1].check().run()
+    assert not save_button(app).disabled
+    save_button(app).click().run()
+    rows = app.session_state["test_saved_rows"]
+    assert "(27.5/30)*1000*1.05" in rows[1][7]
 
 
 @pytest.mark.parametrize("raw", [VALID.replace("单价：9.3元\n", ""), VALID.replace("重量：68g(单个)", ""), VALID+"\n包裝費另加:15元", VALID+"\n整箱重量:90kg"])

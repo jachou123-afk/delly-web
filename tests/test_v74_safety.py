@@ -254,6 +254,20 @@ def test_units_and_metadata():
     assert "內316外304" in c["extra_tags"] and "4個顏色" in c["extra_tags"]
 
 
+def test_vendor_inline_carton_weight_after_explicit_carton_quantity():
+    raw = """FF806274，不带电 线控起重机是[Fireworks]24.6元，一箱30只，27.5KG
+彩盒尺寸46.5*6.3*40.2CM
+外箱规格98.5*48*83.5CM"""
+    c, p = ns["parse_text"](raw)
+    assert (p[0]["code"], c["price"], c["qty"], c["qty_unit"]) == (
+        "FF806274", 24.6, 30, "個"
+    )
+    assert (c["weight"], c["color_box_size"], c["outer_box_size"]) == (
+        27.5, "46.5*6.3*40.2CM", "98.5*48*83.5CM"
+    )
+    assert c["issues"] == []
+
+
 @pytest.mark.parametrize("line,kg,g", [("毛重:500克",0.5,0), ("單重:0.068kg",0,68), ("重量:68g(單個)",0,68), ("15kg",0,0), ("木架:4-7kg(15元)",0,0), ("毛淨重:12/10kg",12,0)])
 def test_weight_scope(line,kg,g):
     c, _ = ns["parse_text"](line)

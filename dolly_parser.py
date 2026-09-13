@@ -11,8 +11,8 @@ import hashlib
 from zoneinfo import ZoneInfo
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V77")
-st.info("V77：只有明確可加／選配的木架會按無木架進價與重量計算，並強制保留原文及成本規則備註；已含或語意不明的木架會停止成本，其他附加費用仍須確認。")
+st.title("🪐 半自動 - 採購報價彙整表 V78")
+st.info("V78：支援廠商『一箱30只，27.5KG』行內箱重格式；只有緊接明確裝箱量的 KG 才視為整箱重量，其他裸 KG 仍維持防呆。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
 SETTINGS_WS = "_設定"
@@ -946,8 +946,16 @@ def parse_text(text):
         qty_matches = list(re.finditer(rf"(?P<value>\d+)\s*(?P<unit>{units})\s*/\s*箱", cost_basis_text, re.I))
     common["qty"] = int(qty_matches[0]["value"]) if qty_matches else 0
     common["qty_unit"] = canonical_unit(qty_matches[0]["unit"]) if qty_matches else ""
-    if qty_matches and re.match(r"\s*[-~～.,]\s*\d", cost_basis_text[qty_matches[0].end():]):
-        issues.append("裝箱量含範圍或小數，請確認整數裝箱量")
+    if qty_matches:
+        qty_tail = cost_basis_text[qty_matches[0].end():]
+        has_qty_unit = bool(qty_matches[0]["unit"])
+        has_range_suffix = re.match(r"\s*[-~～]\s*\d", qty_tail)
+        has_decimal_suffix = (
+            not has_qty_unit
+            and re.match(r"\s*[.,]\s*\d", qty_tail)
+        )
+        if has_range_suffix or has_decimal_suffix:
+            issues.append("裝箱量含範圍或小數，請確認整數裝箱量")
     if len(qty_matches) > 1:
         issues.append("存在多個裝箱量，請拆開獨立報價")
     # Explicit units and scope. Bare KG does not establish a carton weight.
@@ -965,6 +973,17 @@ def parse_text(text):
     carton_values = [float(m[1]) / (1 if m[2].lower() in ("kg", "公斤", "千克") else 1000) for m in carton_matches]
     pairs = list(re.finditer(rf"(?:整箱毛淨重|箱毛淨重|毛淨重)\s*:?\s*({number})\s*/\s*({number})\s*({weight_unit})", carton_text, re.I))
     carton_values += [max(float(m[1]), float(m[2])) / (1 if m[3].lower() in ("kg", "公斤", "千克") else 1000) for m in pairs]
+    # 部分廠商把箱重緊接在明確裝箱量後，例如「一箱30只，27.5KG」。
+    # 只接受此窄範圍句型，不恢復把任意裸 KG 當箱重的高風險兜底。
+    if not carton_values:
+        inline_carton_matches = list(re.finditer(
+            rf"(?:每箱數量|箱數|裝箱量|裝箱數|裝箱|一箱)\s*:?\s*"
+            rf"\d+\s*(?:{units})\s*[,，、;；]\s*(?:約)?\s*"
+            rf"({number})\s*(kg|公斤|千克)(?=$|[\s，,。.;；）)])",
+            carton_text,
+            re.I,
+        ))
+        carton_values = [float(m[1]) for m in inline_carton_matches]
     common["weight"] = carton_values[0] if carton_values else 0.0
     if len(set(unit_values)) > 1 or len(set(carton_values)) > 1:
         issues.append("存在互相衝突的重量，請核對來源後只保留正確值")
