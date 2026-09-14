@@ -18,7 +18,7 @@ from dispatch_storage import CloudDispatchStore
 from dispatch_ui import render_dispatch_manager
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V82")
+st.title("🪐 半自動 - 採購報價彙整表 V83")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"

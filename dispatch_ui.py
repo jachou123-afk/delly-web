@@ -11,6 +11,7 @@ from dispatch_manager import (
     reconciliation, record_observation, sequence_gaps, source_changes,
 )
 from dispatch_storage import asset_bytes, validate_image
+from dispatch_review import comparison_rows, hydrate_draft, unit_confirmed
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -135,25 +136,85 @@ def _create(store, history):
             st.error(str(exc))
 
 
-def _draft_item(store, batch, item, history):
+def _source_image_tools(store, batch):
+    cache_key = "dispatch_source_images_" + batch["id"]
+    st.caption("原圖只在畫面提出配對候選；按下儲存本款後，才保存採用的圖片。不更改原報價表。")
+    if st.button("載入原報價表圖片（整批）", key="source_images_load_" + batch["id"]):
+        try:
+            with st.spinner("讀取原表圖片並比對品號、品名與圖片位置…"):
+                result = store.source_images([i["source"] for i in batch["items"]])
+            st.session_state[cache_key] = result
+            st.rerun()
+        except Exception as exc:
+            st.warning("原表圖片暫時無法匯出，並不代表原表沒有圖片。可用下方圖片包，或開啟單款原表核對。")
+            with st.expander("圖片讀取原因"):
+                st.text(str(exc))
+    with st.expander("一次匯入原圖 ZIP／原報價表 Excel（原表圖片讀不到時）"):
+        st.caption("ZIP 圖片檔名需等於貨號或 BGD 品號，例如 A0081.jpg；只配對唯一相符的檔名。Excel 依原表品號、品名和圖片錨點比對。")
+        uploaded = st.file_uploader("原圖圖片包或原表 Excel", type=["zip", "xlsx"], max_upload_size=50,
+                                    key="source_pack_" + batch["id"])
+        if st.button("讀取圖片包並預覽配對", key="source_pack_read_" + batch["id"], disabled=uploaded is None):
+            try:
+                from dispatch_images import extract_sheet_images, match_image_pack
+                reader = extract_sheet_images if uploaded.name.lower().endswith(".xlsx") else match_image_pack
+                st.session_state[cache_key] = reader(uploaded.getvalue(), [i["source"] for i in batch["items"]])
+                st.rerun()
+            except Exception as exc:
+                st.error(f"圖片包未套用：{exc}")
+    result = st.session_state.get(cache_key, {})
+    if result:
+        count = sum(bool(images) for images in result["images"].values())
+        st.info(f"找到 {count} 款的圖片候選。未配對的商品會保留在清單，不會略過。")
+        if result["warnings"]:
+            with st.expander("未配對／需人工處理的圖片"):
+                for warning in result["warnings"]:
+                    st.write(warning)
+    return result.get("images", {})
+
+
+def _draft_item(store, batch, item, history, source_images=None):
     prefix = f"di_{batch['id']}_{item['id']}_{batch.get('_revision', '')}"
-    st.subheader(item["source"]["name"])
-    st.caption(f"{item['source']['code'] or item['id']} · {item['source']['vendor']} · {item['source']['category']}!A{item['source']['row']}")
+    source = item["source"]
+    fresh_problems = source_changes({**batch, "items": [item]}, st.session_state.get("dispatch_review_catalog", []))
+    st.subheader(f"第 {item['order']} 款｜{source['code'] or item['id']}")
+    st.write(source["name"])
+    st.caption(f"{source['vendor']} · {source['category']}!A{source['row']} · 儲存後才計入已核對")
     hits = prior_activity(batch, item, history)
     if hits:
         st.warning("這款在同一聊天室已有安排／發送紀錄：" + "、".join(hits))
-    if item["source"]["errors"]:
-        st.error("來源資料需處理：" + "；".join(item["source"]["errors"]))
+    if source["errors"]:
+        for problem in source["errors"]:
+            st.error("原表需處理：" + problem)
+        st.info("下方保留原始資料供核對。先修正原報價表，再按「更新本款來源與文案」；不會把尚未產生的文案誤判成品號錯誤。")
+    if fresh_problems:
+        st.warning("原報價表與這份草稿不同，請先按下方「更新本款來源與文案」，再重新核對。")
+    candidates = {a["sha256"]: a for a in source_images or []}
+    image_ok = True
     left, right = st.columns([1, 1.4])
     with left:
-        st.write("商品圖片")
-        image_ok = _show_images(store, item["images"], prefix)
+        st.markdown("#### 原始資料／原圖")
+        if source.get("source_url"):
+            st.link_button("開啟這款原報價表（含原圖）", source["source_url"])
+        st.caption("以下是原報價表保存的內容，不是完整廠商聊天原文。")
+        st.text(source.get("details") or "此舊草稿尚無原始備註，請更新本款來源。")
+        st.text(source.get("carton") or "裝箱資訊尚未讀取")
+        if candidates:
+            for candidate in candidates.values():
+                st.image(asset_bytes(candidate), caption=candidate.get("reference", candidate["name"]), width="stretch")
+        elif item["images"]:
+            st.caption("本批先前保存的核對圖片；可開啟原表再次對照。")
+            image_ok = _show_images(store, item["images"], prefix)
+        else:
+            st.info("尚未載入這款原圖。可先按上方「載入原報價表圖片」，或在此加入原圖。")
         keep = st.multiselect("保留的圖片", item["images"], default=item["images"],
                               format_func=lambda h: f"圖片 {item['images'].index(h) + 1}", key=prefix + "_keep") if item["images"] else []
+        use_candidates = st.multiselect("採用的原表／圖片包圖片", list(candidates),
+                                        default=list(candidates) if len(candidates) == 1 and not keep else [],
+                                        format_func=lambda h: candidates[h]["name"], key=prefix + "_candidates_" + digest(list(candidates))[:12]) if candidates else []
         uploads = st.file_uploader("加入商品圖片", type=["jpg", "jpeg", "png", "webp"],
                                    accept_multiple_files=True, max_upload_size=2, key=prefix + "_uploads",
-                                   help="每張最多 2 MB、每款最多 5 張。報價表的浮動圖片不會自動配對，請加入並核對本款原圖。")
-        prepared = []
+                                   help="每張最多 2 MB、每款最多 5 張。加入後仍須核對圖片中的款式、品名與本款相符。")
+        prepared = [(asset_bytes(candidates[h]), candidates[h]) for h in use_candidates]
         for upload in uploads or []:
             try:
                 data = upload.getvalue()
@@ -163,35 +224,73 @@ def _draft_item(store, batch, item, history):
             except Exception as exc:
                 image_ok = False
                 st.error(str(exc))
-        if not keep and not prepared:
-            st.info("尚未加入圖片；請加入對應商品原圖。")
     with right:
+        st.markdown("#### 準備發出的圖片與文案")
+        for asset_id in keep:
+            image_ok = _show_images(store, [asset_id], prefix + "_out") and image_ok
+        for data, asset in prepared:
+            st.image(data, caption="將採用 · " + asset["name"], width="stretch")
+        if not keep and not prepared:
+            st.caption("圖片待加入；不代表原報價表缺圖。")
+        if source.get("unit_mode") == "legacy" and not unit_confirmed(item):
+            st.warning("以下為預覽：計價單位尚待確認，不能直接列為可發送。")
         text = st.text_area("LINE 文案", item["copy"], height=300, key=prefix + "_copy")
         st.caption("售價與裝箱單位需和報價表一致。修改後請重新核對。")
-        excluded = st.checkbox("本批暫緩／排除這款", value=item["excluded"], key=prefix + "_exclude")
-        reason = st.text_input("暫緩／排除原因", value=item["reason"], key=prefix + "_reason") if excluded else ""
-        duplicate_note = st.text_input("再次安排原因", value=item["duplicate_note"], key=prefix + "_again") if hits else item["duplicate_note"]
-        image_ids = list(dict.fromkeys(keep + [a["sha256"] for _, a in prepared]))
-        signature = digest((text.strip(), image_ids, excluded, reason, duplicate_note, item["source"]["source_hash"]))
-        unchanged = (text.strip() == item["copy"] and image_ids == item["images"] and excluded == item["excluded"] and reason == item["reason"])
-        reviewed = st.checkbox("我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品",
-                               value=bool(unchanged and item.get("review") and item["review"]["digest"] == content_digest(item)),
-                               key=prefix + "_review_" + signature, disabled=excluded or not image_ok or not image_ids)
-        actor = st.text_input("本次核對人", value=batch["actor"], key=prefix + "_actor")
-        if st.button("儲存本款核對", type="primary", key=prefix + "_save",
-                     disabled=not actor.strip() or (not excluded and (not image_ok or len(image_ids) > 5))):
-            try:
-                # Validate first; only then persist image assets and batch revision.
-                updated = edit_item(batch, item["id"], text=text, images=image_ids,
-                                    excluded=excluded, reason=reason, reviewed=reviewed,
-                                    actor=actor, duplicate_note=duplicate_note)
-                for data, asset in prepared:
-                    store.put_asset(data, asset["name"])
-                _save(store, updated, batch)
-            except Exception as exc:
-                st.error(str(exc))
-        if len(image_ids) > 5:
-            st.error("每款最多 5 張圖片。")
+    st.markdown("#### 逐欄核對表")
+    st.table(comparison_rows(item, text))
+    actor = st.text_input("本次核對人", value=batch["actor"], key=prefix + "_actor")
+    unit_value, unit_note, unit_change = None, "", False
+    if source.get("unit_mode") == "legacy":
+        st.info(f"舊資料未明示計價單位。原表寫「{source.get('unit_evidence') or '未提供裝箱'}」，僅能提出候選「{source.get('unit') or '待確認'}」，不能證明售價按此單位計算。")
+        previous = item.get("unit_confirmation") or {}
+        agreed = st.checkbox(f"我已確認售價按「每{source.get('unit') or '？'}」計價，與裝箱單位相同",
+                             value=unit_confirmed(item), disabled=not source.get("unit"), key=prefix + "_unit_confirm")
+        unit_note = st.text_input("單位確認依據", value=previous.get("evidence", ""),
+                                  placeholder="例如：已對照廠商原文，每盒售價與每箱盒數一致", key=prefix + "_unit_evidence")
+        st.caption("若售價按套、裝箱按個等不同單位，請先回原報價表換算；不能只改這裡的文字。")
+        unit_change = agreed != unit_confirmed(item) or unit_note.strip() != previous.get("evidence", "")
+        if unit_change:
+            unit_value = source.get("unit", "") if agreed else ""
+    excluded = st.checkbox("本批暫緩／排除這款", value=item["excluded"], key=prefix + "_exclude")
+    reason = st.text_input("暫緩／排除原因", value=item["reason"], key=prefix + "_reason") if excluded else ""
+    duplicate_note = st.text_input("再次安排原因", value=item["duplicate_note"], key=prefix + "_again") if hits else item["duplicate_note"]
+    image_ids = list(dict.fromkeys(keep + [a["sha256"] for _, a in prepared]))
+    signature = digest((text.strip(), image_ids, excluded, reason, duplicate_note, source["source_hash"], unit_value, unit_note))
+    unchanged = (text.strip() == item["copy"] and image_ids == item["images"] and excluded == item["excluded"] and reason == item["reason"] and not unit_change)
+    pending = deepcopy(item)
+    pending.update(copy=text.strip(), images=image_ids)
+    if unit_change:
+        pending["unit_confirmation"] = {"unit": unit_value, "source_hash": source["source_hash"], "actor": actor, "evidence": unit_note.strip()}
+    substantive_errors = [error for error in item_errors(pending) if "尚未逐款核對" not in error]
+    substantive_errors.extend(fresh_problems)
+    if len(image_ids) > 5:
+        substantive_errors.append("每款最多 5 張圖片")
+    can_review = not excluded and image_ok and not substantive_errors
+    reviewed = st.checkbox("我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品",
+                           value=bool(can_review and unchanged and item.get("review") and item["review"]["digest"] == content_digest(item)),
+                           key=prefix + "_review_" + signature,
+                           disabled=not can_review)
+    if substantive_errors and not excluded:
+        st.caption("本款尚需：" + "；".join(substantive_errors))
+    save_col, next_col = st.columns(2)
+    save = save_col.button("儲存本款核對", type="primary", key=prefix + "_save",
+                           disabled=not actor.strip() or (not excluded and (not image_ok or len(image_ids) > 5)))
+    advance = next_col.button("確認並下一款", key=prefix + "_next", disabled=not reviewed or not can_review or not actor.strip())
+    if save or advance:
+        try:
+            updated = edit_item(batch, item["id"], text=text, images=image_ids,
+                                excluded=excluded, reason=reason, reviewed=reviewed and can_review, actor=actor,
+                                duplicate_note=duplicate_note, confirmed_unit=unit_value, unit_evidence=unit_note)
+            for data, asset in prepared:
+                store.put_asset(data, asset["name"])
+            if advance:
+                following = sorted((i for i in updated["items"] if i["id"] != item["id"] and not i["excluded"] and item_errors(i)),
+                                   key=lambda i: (i["order"] <= item["order"], i["order"]))
+                if following:
+                    st.session_state["dispatch_focus_draft_" + batch["id"]] = following[0]["id"]
+            _save(store, updated, batch)
+        except Exception as exc:
+            st.error(str(exc))
     with st.expander("來源已修改？重新載入本款"):
         st.caption("會改用最新報價表文案並清除本款確認；已配對的圖片保留，仍需重新核對。")
         if st.button("更新本款來源與文案", key=prefix + "_refresh"):
@@ -201,8 +300,11 @@ def _draft_item(store, batch, item, history):
                     raise DispatchError("來源已刪除或 NO 不唯一，請先檢查報價表")
                 updated = deepcopy(batch)
                 chosen = next(i for i in updated["items"] if i["id"] == item["id"])
-                chosen.update(source={k: v for k, v in matches[0].items() if k != "block"},
+                chosen.update(source=deepcopy(matches[0]),
                               copy=matches[0]["copy"], review=None)
+                chosen.pop("unit_confirmation", None)
+                st.session_state.pop("dispatch_review_catalog", None)
+                st.session_state.pop("dispatch_source_images_" + batch["id"], None)
                 updated["audit"].append({"at": now(), "actor": actor, "action": "更新本款來源", "item": item["id"]})
                 _save(store, updated, batch)
             except Exception as exc:
@@ -212,7 +314,15 @@ def _draft_item(store, batch, item, history):
 
 
 def _draft(store, batch, history):
-    st.info("草稿階段：逐款加入圖片並核對。全部就緒後，才能確認本批內容。")
+    st.info("先點表格左側方框選一款，或用下方「逐款核對」選單；再對照原資料、圖片與待發文案。選取方框不代表已完成核對。")
+    try:
+        if "dispatch_review_catalog" not in st.session_state:
+            with st.spinner("讀取原報價資料供左右對照…"):
+                st.session_state["dispatch_review_catalog"] = store.catalog()
+        batch = hydrate_draft(batch, st.session_state["dispatch_review_catalog"])
+    except Exception as exc:
+        st.error(f"原資料讀取失敗，暫停核對：{exc}")
+        return
     items = sorted(batch["items"], key=lambda i: i["order"])
     with st.expander("修改批次名稱或目標聊天室"):
         with st.form("dispatch_details_" + batch["id"] + batch.get("_revision", "")):
@@ -230,14 +340,45 @@ def _draft(store, batch, history):
                             i["duplicate_note"] = ""
                     updated["audit"].append({"at": now(), "actor": actor.strip(), "action": "修改批次設定"})
                     _save(store, updated, batch)
-    st.dataframe([{"順序": i["order"], "品號": i["source"]["code"] or i["id"],
-                   "商品": i["source"]["name"], "狀態": "已排除" if i["excluded"] else ("待處理" if item_errors(i) else "可發送"),
-                   "需處理／原因": i["reason"] if i["excluded"] else "；".join(item_errors(i))} for i in items],
-                 hide_index=True, width="stretch")
+    search = st.text_input("搜尋本批品號／品名", key="dispatch_review_search_" + batch["id"])
+    visible = [i for i in items if search.strip().lower() in (i["source"]["code"] + " " + i["source"]["name"] + " " + i["source"].get("supplier_code", "")).lower()]
+    def row_state(item):
+        if item["excluded"]:
+            return "暫緩／排除"
+        if source_changes({**batch, "items": [item]}, st.session_state["dispatch_review_catalog"]):
+            return "來源已變動"
+        if item["source"]["errors"]:
+            return "原表待修正"
+        if not unit_confirmed(item):
+            return "請確認單位"
+        return "待核對" if item_errors(item) else "已核對"
+    table_key = "dispatch_review_table_" + batch["id"] + batch.get("_revision", "") + digest(search)[:8]
+    cached_candidates = st.session_state.get("dispatch_source_images_" + batch["id"], {}).get("images", {})
+    selection = st.dataframe([{"順序": i["order"], "品號": i["source"]["code"] or i["source"]["no"],
+                               "商品": i["source"]["name"], "售價": i["source"].get("price", "待確認"),
+                               "單位": i["source"].get("unit") or "待確認",
+                               "圖片": f"{len(i['images'])} 張已存" if i["images"] else (f"{len(cached_candidates[i['id']])} 張候選" if cached_candidates.get(i["id"]) else "待載入"),
+                               "核對": row_state(i)} for i in visible],
+                             hide_index=True, width="stretch", height=320, row_height=42,
+                             on_select="rerun", selection_mode="single-row", key=table_key,
+                             column_config={"順序": st.column_config.NumberColumn(width="small"),
+                                            "商品": st.column_config.TextColumn(width="large"),
+                                            "售價": st.column_config.TextColumn(width="small"),
+                                            "單位": st.column_config.TextColumn(width="small")})
+    selected_rows = selection.selection.rows
+    if selected_rows:
+        click_token = (table_key, tuple(selected_rows))
+        if st.session_state.get("dispatch_review_click") != click_token:
+            focus = "dispatch_focus_draft_" + batch["id"]
+            st.session_state[focus] = visible[selected_rows[0]]["id"]
+            st.session_state.pop(focus + batch.get("_revision", ""), None)
+            st.session_state["dispatch_review_click"] = click_token
+    st.caption("表格只顯示每款目前要處理的階段；詳細原因與修改入口在下方，不把尚未產生的文案列成多個錯誤。")
+    source_images = _source_image_tools(store, batch)
     selected = _select_item("逐款核對", items, batch, "draft",
                             lambda k: next(f"{i['order']}. {i['source']['code'] or i['id']}｜{i['source']['name']}" for i in items if i["id"] == k))
     item = next(i for i in items if i["id"] == selected)
-    unsaved = _draft_item(store, batch, item, history)
+    unsaved = _draft_item(store, batch, item, history, source_images.get(item["id"], []))
     if unsaved:
         st.warning("本款有尚未儲存的修改，請先按「儲存本款核對」，再確認整批。")
     with st.expander("調整發送順序"):
@@ -267,7 +408,8 @@ def _draft(store, batch, history):
             with preview_right:
                 st.code(i["copy"], language=None)
             st.divider()
-    ready = sum(not i["excluded"] and not item_errors(i) for i in items)
+    ready = sum(not i["excluded"] and not item_errors(i)
+                and not source_changes({**batch, "items": [i]}, st.session_state["dispatch_review_catalog"]) for i in items)
     excluded = sum(i["excluded"] for i in items)
     blocked = len(items) - ready - excluded
     st.write(f"確認發送到：**{batch['target']}**")
@@ -420,6 +562,10 @@ def render_dispatch_manager(store_factory):
     if st.button("重新載入雲端", key="dispatch_reload"):
         st.session_state.pop("dispatch_history", None)
         st.session_state.pop("dispatch_catalog", None)
+        st.session_state.pop("dispatch_review_catalog", None)
+        for key in list(st.session_state):
+            if key.startswith("dispatch_source_images_"):
+                st.session_state.pop(key, None)
         st.rerun()
     try:
         store = store_factory()

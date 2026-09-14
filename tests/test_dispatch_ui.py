@@ -30,6 +30,67 @@ def widget(app, kind, label):
     return next(w for w in getattr(app, kind) if w.label == label)
 
 
+def legacy_app_source():
+    return '''
+import streamlit as st
+from dispatch_ui import render_dispatch_manager
+from dispatch_storage import CloudDispatchStore, validate_image
+from dispatch_manager import new_batch
+from dispatch_fakes import FakeSpreadsheet, image_data, product_rows
+if "test_spreadsheet" not in st.session_state:
+    rows = product_rows((1126, 1127))
+    for offset in (1, 7):
+        rows["G正版"][offset][1] = "包裝:彩盒\\n材質:陶瓷"
+    spreadsheet = FakeSpreadsheet(rows)
+    st.session_state["test_spreadsheet"] = spreadsheet
+    store = CloudDispatchStore(spreadsheet)
+    batch = new_batch("舊資料核對", "測試群組", store.catalog(), "測試人")
+    for item in batch["items"]:
+        source = item["source"]
+        item["source"] = {k: v for k, v in source.items() if k in ("key", "identity", "category", "row", "no", "number", "code", "name", "vendor", "date", "supplier_code", "source_hash")}
+        item["source"].update(errors=["雲表中的計價單位缺失或不唯一"], copy="")
+        item["copy"] = ""
+    store.save_batch(batch)
+    st.session_state["dispatch_active"] = batch["id"]
+    asset = validate_image(image_data(), "測試原圖.png")
+    st.session_state["dispatch_source_images_" + batch["id"]] = {"images": {i["id"]: [asset] for i in batch["items"]}, "warnings": []}
+render_dispatch_manager(lambda: CloudDispatchStore(st.session_state["test_spreadsheet"]))
+'''
+
+
+def test_old_draft_can_compare_source_confirm_unit_and_save_then_advance():
+    from copy import deepcopy
+    from dispatch_storage import CloudDispatchStore
+    from dispatch_manager import item_errors
+    app = AppTest.from_string(legacy_app_source(), default_timeout=15).run()
+    assert not app.exception
+    before = deepcopy(app.session_state["test_spreadsheet"].sheets["G正版"].rows)
+    assert "售價53元/個" in widget(app, "text_area", "LINE 文案").value
+    assert any("逐欄核對表" in value.value for value in app.markdown)
+    assert widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").disabled
+    widget(app, "checkbox", "我已確認售價按「每個」計價，與裝箱單位相同").check().run()
+    widget(app, "text_input", "單位確認依據").set_value("已對照廠商原文，售價與装箱均以個計算").run()
+    widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").check().run()
+    widget(app, "button", "確認並下一款").click().run()
+    assert not app.exception
+    assert "1127" in widget(app, "selectbox", "逐款核對").value
+    saved = CloudDispatchStore(app.session_state["test_spreadsheet"]).list_batches()[0]
+    assert not item_errors(saved["items"][0])
+    assert saved["status"] == "draft" and saved["items"][0]["image_receipts"] == []
+    assert app.session_state["test_spreadsheet"].sheets["G正版"].rows == before
+
+
+def test_source_change_is_visible_and_prevents_review_until_refresh():
+    app = AppTest.from_string(app_source(ready=True), default_timeout=15).run()
+    app.session_state["test_spreadsheet"].sheets["G正版"].rows[0][1] = "來源改為另一規格"
+    widget(app, "button", "重新載入雲端").click().run()
+    assert not app.exception
+    assert any("原報價表與這份草稿不同" in value.value for value in app.warning)
+    assert widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").disabled
+    assert widget(app, "button", "確認並下一款").disabled
+    assert widget(app, "button", "確認本批內容，建立待發清單").disabled
+
+
 def test_management_landing_is_read_only_and_read_error_does_not_look_empty():
     app = AppTest.from_string(app_source()).run()
     assert not app.exception
