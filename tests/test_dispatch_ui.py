@@ -36,7 +36,7 @@ import streamlit as st
 from dispatch_ui import render_dispatch_manager
 from dispatch_storage import CloudDispatchStore, validate_image
 from dispatch_manager import new_batch
-from dispatch_fakes import FakeSpreadsheet, image_data, product_rows
+from dispatch_fakes import FakeSpreadsheet, image_data, product_rows, seed_evidence
 if "test_spreadsheet" not in st.session_state:
     rows = product_rows((1126, 1127))
     for offset in (1, 7):
@@ -44,6 +44,7 @@ if "test_spreadsheet" not in st.session_state:
     spreadsheet = FakeSpreadsheet(rows)
     st.session_state["test_spreadsheet"] = spreadsheet
     store = CloudDispatchStore(spreadsheet)
+    seed_evidence(store)
     batch = new_batch("舊資料核對", "測試群組", store.catalog(), "測試人")
     for item in batch["items"]:
         source = item["source"]
@@ -89,6 +90,40 @@ def test_source_change_is_visible_and_prevents_review_until_refresh():
     assert widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").disabled
     assert widget(app, "button", "確認並下一款").disabled
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
+
+
+def test_v84_cost_panel_exposes_amounts_and_missing_original_blocks_review():
+    from dispatch_storage import EVIDENCE_SHEET
+    app = AppTest.from_string(app_source(ready=True), default_timeout=15).run()
+    assert {m.label: m.value for m in app.metric}["原表到手成本（TWD）"] == "47.6"
+    assert {m.label: m.value for m in app.metric}["獨立重算成本（TWD）"] == "47.6"
+    evidence_ws = app.session_state["test_spreadsheet"].sheets[EVIDENCE_SHEET]
+    evidence_ws.rows = evidence_ws.rows[:1]
+    widget(app, "button", "重新載入雲端").click().run()
+    assert not app.exception
+    assert any("沒有這版商品的完整依據" in w.value for w in app.warning)
+    assert widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").disabled
+    assert widget(app, "button", "確認並下一款").disabled
+
+
+def test_v84_can_supplement_original_once_without_overwriting_quote_or_marking_review():
+    from copy import deepcopy
+    from dispatch_storage import CloudDispatchStore, EVIDENCE_SHEET
+    app = AppTest.from_string(app_source(ready=True), default_timeout=15).run()
+    spreadsheet = app.session_state["test_spreadsheet"]
+    spreadsheet.sheets[EVIDENCE_SHEET].rows = spreadsheet.sheets[EVIDENCE_SHEET].rows[:1]
+    before = deepcopy(spreadsheet.sheets["G正版"].rows)
+    widget(app, "button", "重新載入雲端").click().run()
+    widget(app, "text_area", "本款廠商完整原文（含補充費用）").set_value("合成原文：測試收納商品1126，進價9.3元，單重68g，300個/箱")
+    widget(app, "text_area", "原文核對／參數來源／額外費用處理依據").set_value("合成歷史記錄：匯率4.8，國際費率8.5，內陸費率0；沒有附加費")
+    widget(app, "checkbox", "我確認以上是這款商品的來源及參數，不是由售價倒推").check()
+    widget(app, "button", "保存依據並重新驗算").click().run()
+    assert not app.exception
+    assert spreadsheet.sheets["G正版"].rows == before
+    assert "合成原文" in widget(app, "text_area", "本款廠商完整原文（含補充費用）").value
+    assert not widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").value
+    assert widget(app, "button", "確認本批內容，建立待發清單").disabled
+    assert CloudDispatchStore(spreadsheet).list_batches()[0]["status"] == "draft"
 
 
 def test_management_landing_is_read_only_and_read_error_does_not_look_empty():

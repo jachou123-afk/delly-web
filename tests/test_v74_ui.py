@@ -28,6 +28,7 @@ def app_source(existing=False, failure=False, same_identity=False, ad_failure=Fa
             formula_rows[1][col] = f"=OLD_{col}"
     fake_sheets = {title: rows if title == "G正版" else [] for title in ("G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾")}
     replacements = {
+        "persist_quote_evidence": "st.session_state['test_evidence'] = dict(raw=raw_source, inputs=inputs, parsed=parsed, notes=notes)\nreturn True",
         "get_settings_cached": "return dict(ex_rate=4.8, intl_rate=8.5, dom_rate=1.5)",
         "get_all_sheets_data": f"return {None if failure else fake_sheets!r}",
         "get_target_formula_block": f"return {{'worksheet_id': 123, 'block': {formula_rows!r}}}",
@@ -123,6 +124,9 @@ def test_manual_paste_review_then_save():
     assert rows[4][1] == "貨號 A0081"
     assert "68*1.05" in rows[1][7] or "68.0*1.05" in rows[1][7]
     assert rows[2][1] == "裝箱 300個/箱"
+    assert app.session_state["test_evidence"]["raw"] == VALID
+    assert app.session_state["test_evidence"]["inputs"]["ex_rate"] == 4.8
+    assert app.session_state["test_evidence"]["parsed"]["price"] == 9.3
 
 
 def test_vendor_inline_carton_weight_renders_and_can_save():

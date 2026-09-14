@@ -12,6 +12,7 @@ from dispatch_manager import (
 )
 from dispatch_storage import asset_bytes, validate_image
 from dispatch_review import comparison_rows, hydrate_draft, unit_confirmed
+from cost_audit_ui import render_cost_review
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -188,6 +189,7 @@ def _draft_item(store, batch, item, history, source_images=None):
         st.info("下方保留原始資料供核對。先修正原報價表，再按「更新本款來源與文案」；不會把尚未產生的文案誤判成品號錯誤。")
     if fresh_problems:
         st.warning("原報價表與這份草稿不同，請先按下方「更新本款來源與文案」，再重新核對。")
+    cost_report = render_cost_review(store, source, prefix, batch["actor"]) if source.get("cost_audit_required") else None
     candidates = {a["sha256"]: a for a in source_images or []}
     image_ok = True
     left, right = st.columns([1, 1.4])
@@ -255,10 +257,13 @@ def _draft_item(store, batch, item, history, source_images=None):
     reason = st.text_input("暫緩／排除原因", value=item["reason"], key=prefix + "_reason") if excluded else ""
     duplicate_note = st.text_input("再次安排原因", value=item["duplicate_note"], key=prefix + "_again") if hits else item["duplicate_note"]
     image_ids = list(dict.fromkeys(keep + [a["sha256"] for _, a in prepared]))
-    signature = digest((text.strip(), image_ids, excluded, reason, duplicate_note, source["source_hash"], unit_value, unit_note))
-    unchanged = (text.strip() == item["copy"] and image_ids == item["images"] and excluded == item["excluded"] and reason == item["reason"] and not unit_change)
+    signature = digest((text.strip(), image_ids, excluded, reason, duplicate_note, source["source_hash"], unit_value, unit_note, cost_report))
+    unchanged = (text.strip() == item["copy"] and image_ids == item["images"] and excluded == item["excluded"] and reason == item["reason"] and not unit_change
+                 and (not source.get("cost_audit_required") or cost_report == item.get("cost_audit")))
     pending = deepcopy(item)
     pending.update(copy=text.strip(), images=image_ids)
+    if source.get("cost_audit_required"):
+        pending["cost_audit"] = cost_report
     if unit_change:
         pending["unit_confirmation"] = {"unit": unit_value, "source_hash": source["source_hash"], "actor": actor, "evidence": unit_note.strip()}
     substantive_errors = [error for error in item_errors(pending) if "尚未逐款核對" not in error]
@@ -266,6 +271,8 @@ def _draft_item(store, batch, item, history, source_images=None):
     if len(image_ids) > 5:
         substantive_errors.append("每款最多 5 張圖片")
     can_review = not excluded and image_ok and not substantive_errors
+    if source.get("cost_audit_required"):
+        st.caption("下方本款確認也包含：已對照廠商原文的進價、重量、單位、費用處理，以及上方成本驗算結果。")
     reviewed = st.checkbox("我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品",
                            value=bool(can_review and unchanged and item.get("review") and item["review"]["digest"] == content_digest(item)),
                            key=prefix + "_review_" + signature,
@@ -280,7 +287,10 @@ def _draft_item(store, batch, item, history, source_images=None):
         try:
             updated = edit_item(batch, item["id"], text=text, images=image_ids,
                                 excluded=excluded, reason=reason, reviewed=reviewed and can_review, actor=actor,
-                                duplicate_note=duplicate_note, confirmed_unit=unit_value, unit_evidence=unit_note)
+                                duplicate_note=duplicate_note, confirmed_unit=unit_value, unit_evidence=unit_note,
+                                cost_audit=cost_report)
+            if reviewed and can_review and source.get("cost_audit_required"):
+                store.verify_cost_checks({**updated, "items": [next(i for i in updated["items"] if i["id"] == item["id"])]})
             for data, asset in prepared:
                 store.put_asset(data, asset["name"])
             if advance:
@@ -303,6 +313,7 @@ def _draft_item(store, batch, item, history, source_images=None):
                 chosen.update(source=deepcopy(matches[0]),
                               copy=matches[0]["copy"], review=None)
                 chosen.pop("unit_confirmation", None)
+                chosen.pop("cost_audit", None)
                 st.session_state.pop("dispatch_review_catalog", None)
                 st.session_state.pop("dispatch_source_images_" + batch["id"], None)
                 updated["audit"].append({"at": now(), "actor": actor, "action": "更新本款來源", "item": item["id"]})
@@ -351,11 +362,15 @@ def _draft(store, batch, history):
             return "原表待修正"
         if not unit_confirmed(item):
             return "請確認單位"
+        if item["source"].get("cost_audit_required"):
+            from cost_audit import blockers
+            if blockers(item["source"], item.get("cost_audit")):
+                return "請核對成本／來源"
         return "待核對" if item_errors(item) else "已核對"
     table_key = "dispatch_review_table_" + batch["id"] + batch.get("_revision", "") + digest(search)[:8]
     cached_candidates = st.session_state.get("dispatch_source_images_" + batch["id"], {}).get("images", {})
     selection = st.dataframe([{"順序": i["order"], "品號": i["source"]["code"] or i["source"]["no"],
-                               "商品": i["source"]["name"], "售價": i["source"].get("price", "待確認"),
+                               "商品": i["source"]["name"], "成本": i["source"].get("block", [[""] * 12] * 6)[1][10] or "缺資料", "售價": i["source"].get("price", "待確認"),
                                "單位": i["source"].get("unit") or "待確認",
                                "圖片": f"{len(i['images'])} 張已存" if i["images"] else (f"{len(cached_candidates[i['id']])} 張候選" if cached_candidates.get(i["id"]) else "待載入"),
                                "核對": row_state(i)} for i in visible],
@@ -364,6 +379,7 @@ def _draft(store, batch, history):
                              column_config={"順序": st.column_config.NumberColumn(width="small"),
                                             "商品": st.column_config.TextColumn(width="large"),
                                             "售價": st.column_config.TextColumn(width="small"),
+                                            "成本": st.column_config.TextColumn(width="small"),
                                             "單位": st.column_config.TextColumn(width="small")})
     selected_rows = selection.selection.rows
     if selected_rows:
@@ -426,6 +442,7 @@ def _draft(store, batch, history):
             else:
                 try:
                     fresh_products = store.catalog()
+                    store.verify_cost_checks(batch)
                     store.get_assets([h for i in items if not i["excluded"] for h in i["images"]])
                     approved = approve_batch(batch, fresh_products, store.list_batches(), actor)
                     _save(store, approved, batch)
@@ -557,14 +574,15 @@ def _progress(store, batch):
 def render_dispatch_manager(store_factory):
     st.header("📣 發送管理")
     st.caption("選商品 → 預覽與核對 → 確認待發清單 → 登記 LINE 結果 → 逐款對帳")
-    if st.session_state.pop("dispatch_notice", ""):
-        st.success("已儲存到雲端。")
+    notice = st.session_state.pop("dispatch_notice", "")
+    if notice:
+        st.success(notice)
     if st.button("重新載入雲端", key="dispatch_reload"):
         st.session_state.pop("dispatch_history", None)
         st.session_state.pop("dispatch_catalog", None)
         st.session_state.pop("dispatch_review_catalog", None)
         for key in list(st.session_state):
-            if key.startswith("dispatch_source_images_"):
+            if key.startswith(("dispatch_source_images_", "dispatch_cost_")):
                 st.session_state.pop(key, None)
         st.rerun()
     try:

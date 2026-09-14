@@ -1,4 +1,4 @@
-# Release V83: rebuild the cloud process so imported review modules update together.
+# Release V84: rebuild the cloud process so cost verification modules update together.
 streamlit==1.63.0
 pandas
 gspread==6.2.1
