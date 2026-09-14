@@ -52,6 +52,8 @@ def test_formats(raw, code, price, qty, kg, g, size):
     "price_line,qty_line,expected_price,expected_unit",
     [
         ("單套價格:19.8元", "每箱數量:20套", 19.8, "套"),
+        ("單 套 價格:19.8元", "每箱數量:20套", 19.8, "套"),
+        ("單pc價格:11元", "每箱數量:20pcs", 11, "個"),
         ("單盒價格:9.9元", "每箱數量:30盒", 9.9, "盒"),
         ("單個價格:12元", "每箱數量:48個", 12, "個"),
         ("單件價格:7.5元", "每箱數量:60件", 7.5, "個"),
@@ -91,6 +93,33 @@ def test_unit_price_line_is_not_name_even_without_product_code():
 
     assert products == [{"code": "", "name": "史努比家族豎紋陶瓷碗4件套"}]
     assert (common["price"], common["price_unit"]) == (19.8, "套")
+
+
+def test_unknown_unit_price_line_is_not_name_and_blocks_cost():
+    common, products = ns["parse_text"](
+        "測試商品\n型號:T-1\n每箱數量:20pcs\n單組價格:19.8元\n整箱重量:20kg"
+    )
+
+    assert products == [{"code": "T-1", "name": "測試商品"}]
+    assert (common["price"], common["price_unit"], common["qty_unit"]) == (
+        19.8,
+        "",
+        "個",
+    )
+    assert any("不支援的計價單位" in issue for issue in common["issues"])
+    blockers = ns["cost_blockers"](
+        common["price"],
+        common["qty"],
+        common["weight"],
+        common["unit_weight_g"],
+        0,
+        0,
+        4.8,
+        common["issues"],
+        common["price_unit"],
+        common["qty_unit"],
+    )
+    assert any("不支援的計價單位" in reason for reason in blockers)
 
 
 def test_nine_original_clipboards():
