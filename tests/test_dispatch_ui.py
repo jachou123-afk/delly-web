@@ -65,6 +65,20 @@ def test_draft_cannot_approve_unsaved_copy_changes_or_reuse_review_checkbox():
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
 
 
+def test_default_batch_name_follows_date_but_preserves_custom_name():
+    app = AppTest.from_string(app_source(), default_timeout=15).run()
+    app.session_state["test_spreadsheet"].sheets["G正版"].rows[1][0] = "2026/9/13"
+    widget(app, "button", "載入報價表商品").click().run()
+    assert widget(app, "text_input", "批次名稱").value == "2026-09-13 廣告"
+    widget(app, "multiselect", "商品日期").set_value(["2026-09-12"]).run()
+    assert widget(app, "text_input", "批次名稱").value == "2026-09-12 廣告"
+    widget(app, "text_input", "批次名稱").set_value("週末精選・第一批").run()
+    widget(app, "multiselect", "商品日期").set_value(["2026-09-13"]).run()
+    assert widget(app, "text_input", "批次名稱").value == "週末精選・第一批"
+    assert not app.exception
+    assert set(app.session_state["test_spreadsheet"].sheets) == {"G正版"}
+
+
 def test_ready_draft_can_be_approved_but_no_item_becomes_sent():
     app = AppTest.from_string(app_source(ready=True), default_timeout=15).run()
     widget(app, "checkbox", "我已確認整批商品、圖文內容、順序及目標聊天室").check()

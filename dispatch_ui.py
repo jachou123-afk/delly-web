@@ -111,7 +111,12 @@ def _create(store, history):
     excluded_reason = ""
     if len(selected) < len(scope):
         excluded_reason = st.text_input("未選取商品的本批排除原因", key="dispatch_scope_reason")
-    name = st.text_input("批次名稱", value=f"{dates_selected[0] if len(dates_selected) == 1 else '商品'} 廣告", key="dispatch_name")
+    automatic_name = f"{dates_selected[0] if len(dates_selected) == 1 else '商品'} 廣告"
+    if ("dispatch_name" not in st.session_state
+            or st.session_state["dispatch_name"] == st.session_state.get("dispatch_auto_name")):
+        st.session_state["dispatch_name"] = automatic_name
+    st.session_state["dispatch_auto_name"] = automatic_name
+    name = st.text_input("批次名稱", key="dispatch_name")
     target_options = list(dict.fromkeys(["【自動排廣告群組】", "周俊安"] + [b["target"] for b in history]))
     destination = st.selectbox("目標聊天室", [""] + target_options + ["自行輸入"],
                                format_func=lambda x: x or "請選擇目標聊天室", key="dispatch_destination")
