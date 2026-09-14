@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from batch_cost_audit import batch_signature, merge_selection, run_batch_audit
+from batch_cost_audit import batch_signature, merge_selection, result_row, run_batch_audit
 from batch_cost_ui import _table_changed
 from dispatch_fakes import FakeSpreadsheet, product_rows
 from dispatch_manager import DispatchError, new_batch
@@ -163,3 +163,15 @@ def test_signature_expires_when_source_or_revision_changes():
     assert batch_signature(other) != signature
     batch["_revision"] = "new revision"
     assert batch_signature(batch) != signature
+
+
+def test_unavailable_ad_price_exposes_source_blocker_not_false_missing_sheet_price():
+    _, _, batch = fixture(range(1, 2))
+    item = deepcopy(batch["items"][0])
+    item["source"].update(price="", code="", errors=["測試分類尚未設定品號代碼"])
+    row = result_row(item, {"report": {"errors": ["廣告售價（TWD）與獨立驗算不一致或原表缺值"]}})
+    assert row["原廣告售價"] == "尚未產生"
+    assert row["計算結果"] == "資料／公式待處理"
+    assert "分類尚未設定品號代碼" in row["需處理"]
+    assert "原廣告售價尚未產生" in row["需處理"]
+    assert "原表缺值" not in row["需處理"]

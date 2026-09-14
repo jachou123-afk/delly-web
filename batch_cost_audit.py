@@ -24,7 +24,10 @@ def result_row(item, checked):
     rows = {r["項目"]: r for r in report.get("rows", [])}
     cost = rows.get("到手成本（TWD）", {})
     sale = rows.get("廣告售價（TWD）", {})
-    issues = list(report.get("errors", []))
+    issues = list(source.get("errors", [])) + list(report.get("errors", []))
+    if not source.get("price"):
+        issues = ["原廣告售價尚未產生，無法比對；請先處理來源／文案阻擋原因"
+                  if issue == "廣告售價（TWD）與獨立驗算不一致或原表缺值" else issue for issue in issues]
     if checked.get("error"):
         issues.insert(0, checked["error"])
         status = checked.get("status", "讀取失敗")
@@ -41,7 +44,7 @@ def result_row(item, checked):
     return {"順序": item["order"], "品號": source.get("code") or item["id"],
             "商品": source["name"], "原成本": block(source.get("block", []))[1][10] or "缺資料",
             "重算成本": cost.get("重算結果", "—"), "成本差額": cost.get("差額（原表−重算）", "—"),
-            "原表售價": source.get("price") or "缺資料", "重算售價": sale.get("重算結果", "—"),
+            "原廣告售價": source.get("price") or "尚未產生", "重算售價": sale.get("重算結果", "—"),
             "售價差額": sale.get("差額（原表−重算）", "—"), "計算結果": status,
             "來源依據": "已保存・待人工核對" if report.get("source_ready") else "待補資料",
             "需處理": "；".join(dict.fromkeys(issues)) or "仍需逐款核對原文、圖片、單位與文案"}
