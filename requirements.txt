@@ -3,3 +3,4 @@ pandas
 gspread==6.2.1
 oauth2client
 zhconv
+Pillow>=10,<13

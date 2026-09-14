@@ -1,4 +1,5 @@
 import copy
+from decimal import Decimal, ROUND_HALF_UP
 
 import pytest
 
@@ -11,9 +12,12 @@ from line_ad_copy import (
 
 
 def sheet_block(no, name, info, quote_10, carton, weight=""):
+    # Complete, internally consistent displayed costing cells. These are
+    # synthetic formatter fixtures, not additional audited supplier products.
+    cost = (Decimal(str(quote_10)) * Decimal("0.9")).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     return [
-        [no, name, "10%報價", "13%報價", "15%報價", "20%報價"],
-        ["2026/9/12", info, quote_10],
+        [no, name, "10%報價", "13%報價", "15%報價", "20%報價", "", "", "", "", "", "v多品村"],
+        ["2026/9/12", info, quote_10, "", "", "", "9.3", "71.4", "0", "0.61", str(cost)],
         ["", carton],
         ["", weight],
         ["", "貨號 TEST"],
@@ -405,3 +409,61 @@ def test_ad_formatter_does_not_mutate_the_sheet_block():
 
     assert block == original
     assert "外箱" not in result and "木架" not in result and "重量" not in result
+
+
+@pytest.mark.parametrize("raw,public,private", [
+    ("正版授權，材質:內316外304", "材質:內316外304", "unused"),
+    ("包裝:牛皮紙盒，木架另加15元", "包裝:牛皮紙盒", "木架"),
+    ("重量68g，4個顏色", "4個顏色", "重量"),
+    ("4個顏色，重量68g", "4個顏色", "重量"),
+    ("尺寸10㎝ 單個重量68g", "尺寸10cm", "單個"),
+    ("單個重量68g；材質:ABS；外箱尺寸20*20*20cm", "材質:ABS", "外箱"),
+    ("包裝:盒裝，成本按無木架計算", "包裝:盒裝", "成本"),
+    ("附加費用確認：供應商确认每個另加2元，確認完成\n包裝:紙盒", "包裝:紙盒", "確認"),
+])
+def test_mixed_line_fields_keep_public_details(raw, public, private):
+    result = build_line_ad_copy(name="測試商品", category_name="G正版", no_value="no1", quote_10=10,
+                                unit="個", details=raw, carton_text="裝箱 10個/箱")
+    assert public in result
+    assert private not in result
+    if raw.startswith("正版授權"):
+        assert result.splitlines()[0] == "正版授權"
+
+
+@pytest.mark.parametrize("raw", ["1,2", "52,9", "1,000,00", "NaN", "Infinity", "=10", True])
+def test_malformed_display_numbers_are_not_guessed(raw):
+    with pytest.raises(ValueError):
+        ceil_ad_price(raw)
+
+
+def test_valid_thousands_grouping_is_accepted():
+    assert ceil_ad_price("1,234.5") == 1235
+
+
+def test_zero_carton_is_blocked():
+    with pytest.raises(ValueError, match="大於零"):
+        build_line_ad_copy(name="測試商品", category_name="G正版", no_value="no1", quote_10=10,
+                           unit="個", details="", carton_text="裝箱 0個/箱")
+
+
+@pytest.mark.parametrize("col", [6, 7, 8, 9, 10])
+@pytest.mark.parametrize("bad", ["", "#ERROR!", -1, True])
+def test_incomplete_costing_blocks_ad_even_when_quote_exists(col, bad):
+    block = sheet_block("no1", "測試商品", "計價單位：個", 52.9, "裝箱 300個/箱")
+    block[1][col] = bad
+    with pytest.raises(ValueError):
+        build_line_ad_copy_from_sheet_block("G正版", block)
+
+
+def test_stale_or_overwritten_quote_blocks_ad():
+    block = sheet_block("no1", "測試商品", "計價單位：個", 52.9, "裝箱 300個/箱")
+    block[1][2] = "60"
+    with pytest.raises(ValueError, match="不一致"):
+        build_line_ad_copy_from_sheet_block("G正版", block)
+
+
+def test_missing_vendor_blocks_ad():
+    block = sheet_block("no1", "測試商品", "計價單位：個", 52.9, "裝箱 300個/箱")
+    block[0][11] = ""
+    with pytest.raises(ValueError, match="廠商"):
+        build_line_ad_copy_from_sheet_block("G正版", block)

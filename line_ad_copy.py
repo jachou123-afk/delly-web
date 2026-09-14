@@ -4,8 +4,7 @@ This module intentionally does not alter purchasing or costing data.  It only
 controls which already-saved fields are exposed in outbound advertising copy.
 """
 
-from decimal import Decimal, InvalidOperation, ROUND_CEILING
-import math
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 import re
 import unicodedata
 
@@ -26,6 +25,10 @@ _NO_PATTERN = re.compile(r"(?:NO)?\s*(\d+)", re.IGNORECASE)
 _UNIT_PATTERN = re.compile(r"^[^\s/：:]+$")
 _PRICE_UNITS = {"個", "盒", "套", "瓶", "罐", "包", "袋"}
 _INTERNAL_PREFIX = re.compile(r"^計價單位\s*[：:]")
+_COST_NOTE_PATTERN = re.compile(
+    r"附加費用確認|附加费用确认|成本|進價|进价|運費|运费|"
+    r"(?:包裝|包装|打包|附加|額外|额外)費|(?:另加|另計|另计).*\d+.*元"
+)
 _OUTER_BOX_PREFIX = re.compile(
     r"^(?:外箱尺寸|外箱規格|外箱规格|外箱|箱規|箱规)\s*[：:]?"
 )
@@ -105,18 +108,48 @@ def build_bgd_code(category_name, no_value):
 
 def ceil_ad_price(quote_10):
     """Round a valid 10% quote upward to the integer shown to customers."""
-    if isinstance(quote_10, bool):
-        raise ValueError("10%報價不是有效數字")
-    if isinstance(quote_10, float) and not math.isfinite(quote_10):
-        raise ValueError("10%報價不是有效有限值")
-    raw = _clean_text(quote_10).replace(",", "")
-    try:
-        value = Decimal(raw)
-    except (InvalidOperation, ValueError):
-        raise ValueError("10%報價不是有效數字") from None
-    if not value.is_finite() or value <= 0:
-        raise ValueError("10%報價缺失或不是正數")
+    value = _sheet_number(quote_10, "10%報價")
     return int(value.to_integral_value(rounding=ROUND_CEILING))
+
+
+def _sheet_number(raw_value, label, *, allow_zero=False):
+    """Accept displayed numbers, not formulas, booleans or malformed grouping."""
+    raw = unicodedata.normalize("NFKC", "" if raw_value is None else str(raw_value).strip())
+    if isinstance(raw_value, bool) or not re.fullmatch(
+        r"[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?", raw
+    ):
+        raise ValueError(f"{label}缺失或不是有效數字")
+    try:
+        value = Decimal(raw.replace(",", ""))
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"{label}不是有效數字") from None
+    if not value.is_finite() or value < 0 or (value == 0 and not allow_zero):
+        raise ValueError(f"{label}必須是{'非負數' if allow_zero else '正數'}")
+    return value
+
+
+def _public_clause(clause):
+    line = _remove_ad_labels(clause)
+    normalized = unicodedata.normalize("NFKC", line)
+    # An internal field following whitespace must not swallow the public
+    # prefix. Punctuation-separated fields are handled independently below.
+    private_suffix = _TRAILING_PRIVATE_FIELD.search(normalized)
+    if private_suffix:
+        # NFKC can change character count (e.g. ㎝ -> cm). Slice the matched
+        # string itself, or a shifted index can retain private-field text.
+        line = normalized[:private_suffix.start()].rstrip(" ，,；;")
+        normalized = unicodedata.normalize("NFKC", line)
+    if (
+        _INTERNAL_PREFIX.match(normalized)
+        or _OUTER_BOX_PREFIX.match(normalized)
+        or _WEIGHT_PREFIX.match(normalized)
+        or _UNKNOWN_WEIGHT_PREFIX.match(normalized)
+        or _WOOD_PATTERN.search(normalized)
+        or _COST_NOTE_PATTERN.search(normalized)
+        or _CARTON_PREFIX.match(normalized)
+    ):
+        return ""
+    return line
 
 
 def _ad_detail_lines(details):
@@ -133,26 +166,22 @@ def _ad_detail_lines(details):
         line = source_line.strip()
         if not line:
             continue
-        if has_affirmative_license_marker(line):
+        if re.match(r"^附加(?:費用確認|费用确认)\s*[：:]", line):
+            # This is an audit/evidence note appended by the purchasing UI,
+            # including any comma-separated continuation supplied by a user.
             continue
-        normalized = unicodedata.normalize("NFKC", line)
-        if (
-            _INTERNAL_PREFIX.match(normalized)
-            or _OUTER_BOX_PREFIX.match(normalized)
-            or _WEIGHT_PREFIX.match(normalized)
-            or _UNKNOWN_WEIGHT_PREFIX.match(normalized)
-            or _WOOD_PATTERN.search(normalized)
-            or _CARTON_PREFIX.match(normalized)
-        ):
-            continue
-
-        # Preserve a customer-facing clause that precedes an internal field on
-        # the same line, e.g. "6個圖案混 單個重量 68g".
-        private_suffix = _TRAILING_PRIVATE_FIELD.search(normalized)
-        if private_suffix:
-            line = line[:private_suffix.start()].rstrip(" ，,；;")
-
-        line = _remove_ad_labels(line)
+        # Suppliers mix fields on one line. Keep adjacent public clauses and
+        # their punctuation; never discard material/packaging with a private
+        # clause or a standalone licensing marker on the same line.
+        parts = re.split(r"([，,；;。]+)", line)
+        public = []
+        separator = ""
+        for index in range(0, len(parts), 2):
+            clause = _public_clause(parts[index])
+            if clause:
+                public.append((separator if public else "") + clause)
+            separator = parts[index + 1] if index + 1 < len(parts) else ""
+        line = "".join(public)
         if line:
             candidates.append(line)
 
@@ -212,11 +241,13 @@ def _carton_line_and_unit(carton_text):
     normalized = unicodedata.normalize("NFKC", line)
     private_suffix = _TRAILING_PRIVATE_FIELD.search(normalized)
     if private_suffix:
-        line = line[:private_suffix.start()].rstrip(" ，,；;")
+        line = normalized[:private_suffix.start()].rstrip(" ，,；;")
         normalized = unicodedata.normalize("NFKC", line)
     match = re.fullmatch(r"裝箱\s*([0-9]+)\s*([^\s/]+)\s*/\s*箱", normalized)
     if not match:
         raise ValueError("裝箱資訊必須是『裝箱 數量單位/箱』")
+    if int(match.group(1)) <= 0:
+        raise ValueError("裝箱數量必須大於零")
     return f"裝箱 {match.group(1)}{match.group(2)}/箱", _validated_unit(match.group(2))
 
 
@@ -265,6 +296,19 @@ def build_line_ad_copy_from_sheet_block(category_name, rows):
     block = [list(row or []) + [""] * (12 - len(row or [])) for row in list(rows or [])[:6]]
     while len(block) < 6:
         block.append([""] * 12)
+
+    # These checks apply to every supplier, independently of source grammar.
+    # They establish internal consistency, not that the source was audited or
+    # that historical FX/freight rates still match today's settings.
+    for col, label in ((6, "進價"), (7, "計費重量"), (8, "大陸運費"), (9, "國際運費")):
+        _sheet_number(block[1][col], label, allow_zero=col in (8, 9))
+    cost = _sheet_number(block[1][10], "預估到手成本")
+    quote = _sheet_number(block[1][2], "10%報價")
+    expected_quote = (cost / Decimal("0.9")).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    if quote != expected_quote:
+        raise ValueError("10%報價與預估到手成本不一致，請先核對雲表公式")
+    if not _clean_text(block[0][11]):
+        raise ValueError("雲表缺少廠商，請先確認來源")
 
     info_text = _clean_text(block[1][1])
     unit_matches = re.findall(
