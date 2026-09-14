@@ -14,6 +14,7 @@ from dispatch_storage import asset_bytes, validate_image
 from dispatch_review import comparison_rows, hydrate_draft, unit_confirmed
 from cost_audit_ui import render_cost_review
 from supplier_names import vendor_filter_label
+from batch_cost_ui import render_batch_cost_tools
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -326,7 +327,7 @@ def _draft_item(store, batch, item, history, source_images=None):
 
 
 def _draft(store, batch, history):
-    st.info("先點表格左側方框選一款，或用下方「逐款核對」選單；再對照原資料、圖片與待發文案。選取方框不代表已完成核對。")
+    st.info("先多選／全選商品做整批驗算，再點品號查看明細與人工核對。勾選範圍、計算一致都不代表已完成核對。")
     try:
         if "dispatch_review_catalog" not in st.session_state:
             with st.spinner("讀取原報價資料供左右對照…"):
@@ -336,6 +337,10 @@ def _draft(store, batch, history):
         st.error(f"原資料讀取失敗，暫停核對：{exc}")
         return
     items = sorted(batch["items"], key=lambda i: i["order"])
+    # Legacy drafts must still expose cost checks when a stale source prevented
+    # hydration; do not silently hide the panel or relax confirmation gates.
+    for item in items:
+        item["source"]["cost_audit_required"] = True
     with st.expander("修改批次名稱或目標聊天室"):
         with st.form("dispatch_details_" + batch["id"] + batch.get("_revision", "")):
             name = st.text_input("批次名稱", value=batch["name"])
@@ -368,29 +373,10 @@ def _draft(store, batch, history):
             if blockers(item["source"], item.get("cost_audit")):
                 return "請核對成本／來源"
         return "待核對" if item_errors(item) else "已核對"
-    table_key = "dispatch_review_table_" + batch["id"] + batch.get("_revision", "") + digest(search)[:8]
     cached_candidates = st.session_state.get("dispatch_source_images_" + batch["id"], {}).get("images", {})
-    selection = st.dataframe([{"順序": i["order"], "品號": i["source"]["code"] or i["source"]["no"],
-                               "商品": i["source"]["name"], "成本": i["source"].get("block", [[""] * 12] * 6)[1][10] or "缺資料", "售價": i["source"].get("price", "待確認"),
-                               "單位": i["source"].get("unit") or "待確認",
-                               "圖片": f"{len(i['images'])} 張已存" if i["images"] else (f"{len(cached_candidates[i['id']])} 張候選" if cached_candidates.get(i["id"]) else "待載入"),
-                               "核對": row_state(i)} for i in visible],
-                             hide_index=True, width="stretch", height=320, row_height=42,
-                             on_select="rerun", selection_mode="single-row", key=table_key,
-                             column_config={"順序": st.column_config.NumberColumn(width="small"),
-                                            "商品": st.column_config.TextColumn(width="large"),
-                                            "售價": st.column_config.TextColumn(width="small"),
-                                            "成本": st.column_config.TextColumn(width="small"),
-                                            "單位": st.column_config.TextColumn(width="small")})
-    selected_rows = selection.selection.rows
-    if selected_rows:
-        click_token = (table_key, tuple(selected_rows))
-        if st.session_state.get("dispatch_review_click") != click_token:
-            focus = "dispatch_focus_draft_" + batch["id"]
-            st.session_state[focus] = visible[selected_rows[0]]["id"]
-            st.session_state.pop(focus + batch.get("_revision", ""), None)
-            st.session_state["dispatch_review_click"] = click_token
-    st.caption("表格只顯示每款目前要處理的階段；詳細原因與修改入口在下方，不把尚未產生的文案列成多個錯誤。")
+    render_batch_cost_tools(store, batch, items, visible, row_state, cached_candidates)
+    st.subheader("③ 單款明細與人工核對")
+    st.caption("此區只顯示目前查看的一款。切換明細不改變上方勾選的整批驗算範圍。")
     source_images = _source_image_tools(store, batch)
     selected = _select_item("逐款核對", items, batch, "draft",
                             lambda k: next(f"{i['order']}. {i['source']['code'] or i['id']}｜{i['source']['name']}" for i in items if i["id"] == k))
@@ -583,7 +569,7 @@ def render_dispatch_manager(store_factory):
         st.session_state.pop("dispatch_catalog", None)
         st.session_state.pop("dispatch_review_catalog", None)
         for key in list(st.session_state):
-            if key.startswith(("dispatch_source_images_", "dispatch_cost_")):
+            if key.startswith(("dispatch_source_images_", "dispatch_cost_", "dispatch_bulk_result_")):
                 st.session_state.pop(key, None)
         st.rerun()
     try:

@@ -276,6 +276,48 @@ class CloudDispatchStore:
         formulas = self.read_cost_source(source)
         return audit(source, formulas, self._evidence(source["identity"])), formulas
 
+    def cost_audits(self, sources, on_progress=None):
+        """Read-only, bounded bulk verifier. One failure never drops other rows."""
+        from collections import defaultdict
+        from cost_audit import audit, block, fingerprint
+        if len(sources) > 150 or len({s["identity"] for s in sources}) != len(sources):
+            raise DispatchError("整批驗算範圍重複或超過 150 款")
+        self._evidence_index = None
+        self._evidence_row_index = None
+        self._load_evidence([s["identity"] for s in sources])
+        groups, results = defaultdict(list), {}
+        for source in sources:
+            groups[source["category"]].append(source)
+        for category, items in groups.items():
+            for offset in range(0, len(items), 20):
+                chosen = items[offset:offset + 20]
+                try:
+                    ws = self.spreadsheet.worksheet(category)
+                    ranges = [f"A{s['row']}:L{s['row'] + 5}" for s in chosen]
+                    values = ws.batch_get(ranges, value_render_option="FORMATTED_VALUE")
+                    formulas = ws.batch_get(ranges, value_render_option="FORMULA")
+                    after = ws.batch_get(ranges, value_render_option="FORMATTED_VALUE")
+                    if any(len(groups_read) != len(chosen) for groups_read in (values, formulas, after)):
+                        raise DispatchError("本段資料讀取不完整，未以部分結果判定通過")
+                except Exception as exc:
+                    for source in chosen:
+                        results[source["identity"]] = {"error": f"雲表讀取失敗：{exc}", "status": "讀取失敗"}
+                else:
+                    for source, before, formula, current in zip(chosen, values, formulas, after):
+                        identity = source["identity"]
+                        if any(fingerprint(block(v)) != source["source_hash"] for v in (before, current)):
+                            results[identity] = {"error": "讀取期間原表已變更，請重新載入再驗算", "status": "來源已變動"}
+                            continue
+                        try:
+                            formula = block(formula)
+                            results[identity] = {"report": audit(source, formula, self._evidence(identity)),
+                                                 "formulas": formula, "error": ""}
+                        except Exception as exc:
+                            results[identity] = {"error": f"本款驗算失敗：{exc}", "status": "資料／公式待處理"}
+                if on_progress:
+                    on_progress(len(results), len(sources))
+        return results
+
     def put_quote_evidence(self, source, formulas, raw_source, inputs, *, notes, origin, parsed=None):
         from cost_audit import block, fingerprint, make_evidence
         evidence = make_evidence(source, formulas, raw_source, inputs, notes=notes, origin=origin, parsed=parsed)
