@@ -10,6 +10,11 @@ from unittest.mock import Mock
 
 import pytest
 import zhconv
+from license_markers import (
+    has_affirmative_license_marker,
+    is_standalone_license_marker,
+    strip_affirmative_license_markers,
+)
 
 SOURCE = Path(__file__).parents[1] / "dolly_parser.py"
 tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
@@ -20,7 +25,16 @@ for node in tree.body:
         nodes.append(node)
     elif isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in ("UNIT_PAT", "EMOJI_PAT") for t in node.targets):
         nodes.append(node)
-ns = dict(re=re, math=math, unicodedata=unicodedata, zhconv=zhconv, datetime=datetime)
+ns = dict(
+    re=re,
+    math=math,
+    unicodedata=unicodedata,
+    zhconv=zhconv,
+    datetime=datetime,
+    has_affirmative_license_marker=has_affirmative_license_marker,
+    is_standalone_license_marker=is_standalone_license_marker,
+    strip_affirmative_license_markers=strip_affirmative_license_markers,
+)
 exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), "exec"), ns)
 
 
@@ -94,6 +108,108 @@ def test_unit_price_line_is_not_name_even_without_product_code():
 
     assert products == [{"code": "", "name": "史努比家族豎紋陶瓷碗4件套"}]
     assert (common["price"], common["price_unit"]) == (19.8, "套")
+
+
+def test_rwshm_0004_plain_authorization_marker_is_not_product_name():
+    raw = """新品#授权
+海绵宝宝网格随身手机包盲盒
+带镭射标（4个/端盒）
+型号:RWSHM-0004
+每箱数量:48个
+单个价格:27元
+彩盒尺寸:15*5*24.5cm
+端盒尺寸:30.5*10.5*24.7cm
+外箱尺寸:66*32*51cm
+整箱重量:9.5kg"""
+
+    common, products = ns["parse_text"](raw)
+
+    assert products == [{
+        "code": "RWSHM-0004",
+        "name": "海綿寶寶網格隨身手機包盲盒",
+    }]
+    assert "正版授權" in common["extra_tags"].splitlines()
+    assert "新品" not in products[0]["name"]
+    assert "授權" not in products[0]["name"]
+
+
+def test_mn202450_exact_source_marker_is_removed_but_miniso_is_kept():
+    raw = """爆品#正版授权MINISO
+猫福珊迪系列毛茸茸派对手办盲盒
+带镭射标（6个/端盒）
+型号:MN202450
+每箱数量:108个
+单个价格:18.8元（特价）
+彩盒尺寸:7*7*10cm
+端盒尺寸:21.5*14.5*10.5cm
+外箱尺寸:45*45*35cm
+整箱重量:13kg"""
+
+    common, products = ns["parse_text"](raw)
+
+    assert products[0]["code"] == "MN202450"
+    assert products[0]["name"].replace(" ", "") == (
+        "MINISO貓福珊迪系列毛茸茸派對手辦盲盒"
+    )
+    assert "爆品" not in products[0]["name"]
+    assert "授權" not in products[0]["name"]
+    assert common["extra_tags"].splitlines().count("正版授權") == 1
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "未授權",
+        "未經授權",
+        "非正版授權",
+        "無正版授權",
+        "沒有正版授權",
+        "不是正版授權",
+        "並非正版授權",
+        "未獲正版授權",
+        "未取得正版授權",
+        "未經正版授權",
+        "未经正版授权",
+        "未經官方正版授權",
+        "未獲官方正版授權",
+        "未得到正版授權",
+        "未有正版授權",
+        "尚未有正版授權",
+        "不具正版授權",
+        "不具有正版授權",
+        "不含正版授權",
+        "正版授權待確認",
+        "是否正版授權",
+        "需取得正版授權",
+        "尚未獲得正版授權",
+        "尚未得到正版授權",
+        "未曾獲得正版授權",
+        "未能取得正版授權",
+        "無法取得正版授權",
+        "無法確認正版授權",
+        "不能取得正版授權",
+        "不能確認正版授權",
+        "缺乏正版授權",
+        "缺少正版授權",
+        "未提供正版授權",
+        "尚未提供正版授權",
+        "正版授權已失效",
+        "已失效的正版授權",
+        "正版授權被撤銷",
+        "未確認正版授權",
+        "非屬正版授權",
+        "不屬於正版授權",
+        "需正版授權",
+        "本款為正版授權",
+    ],
+)
+def test_negative_authorization_statement_is_not_a_license_marker(marker):
+    common, _ = ns["parse_text"](
+        f"測試商品\n型號:T-NEG\n每箱數量:10個\n單個價格:2元\n"
+        f"整箱重量:1kg\n{marker}"
+    )
+
+    assert "正版授權" not in common["extra_tags"].splitlines()
 
 
 @pytest.mark.parametrize(

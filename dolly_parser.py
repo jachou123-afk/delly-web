@@ -9,6 +9,10 @@ import math
 import unicodedata
 import hashlib
 from zoneinfo import ZoneInfo
+from license_markers import (
+    has_affirmative_license_marker,
+    strip_affirmative_license_markers,
+)
 from line_ad_copy import CATEGORY_CODES, build_line_ad_copy_from_sheet_block
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
@@ -509,6 +513,7 @@ def clean_product_name(name):
     ).strip()
     return name
 
+
 def parse_text_legacy(text):
     common = {
         "price": 0.0,
@@ -658,7 +663,7 @@ def parse_text_legacy(text):
             extra_items.append(f"包裝: {m_pkg.group(1).strip()}")
     if re.search(r'帶[鐳雷]射標|帶[鐳雷]射|镭射', text_n):
         extra_items.append("帶雷射標")
-    if re.search(r'正版授權|正版授权', text_n):
+    if has_affirmative_license_marker(text_n):
         extra_items.append("正版授權")
     common["extra_tags"] = "\n".join(extra_items)
 
@@ -715,6 +720,11 @@ def parse_text_legacy(text):
         name_lines = []
         for line in lines:
             line_s = line.strip()
+            license_stripped = strip_affirmative_license_markers(line_s)
+            if license_stripped != line_s:
+                line_s = license_stripped.strip()
+                if not line_s:
+                    continue
             line_s = re.sub(r'^[#＃【】\[\]]+', '', line_s).strip()
             line_s = re.sub(EMOJI_PAT, '', line_s).strip()
             line_s = re.sub(r'\[[^\]]{1,20}\]', '', line_s).strip()
@@ -1049,13 +1059,17 @@ def parse_text(text):
         name_lines = []
         for line in normalized.splitlines():
             line = re.sub(EMOJI_PAT, "", line).strip()
+            license_stripped = strip_affirmative_license_markers(line)
+            if license_stripped != line:
+                line = license_stripped.strip()
+                if not line:
+                    continue
             if (
                 re.match(meta, line, re.I)
                 or re.search(r"木架|木框", line)
                 or supplemental_uncertainty_issues(line)
             ):
                 continue
-            line = re.sub(r"^(?:新品\s*#?\s*)?(?:正版授權)\s*$", "", line)
             if line:
                 name_lines.append(line)
         products[0]["name"] = " ".join(name_lines[:3])
@@ -1063,6 +1077,9 @@ def parse_text(text):
     notes = []
     for line in normalized.splitlines():
         line = line.strip()
+        if has_affirmative_license_marker(line):
+            notes.append("正版授權")
+            continue
         if (
             re.search(r"帶[鐳雷]射|正版授權|材質|顏色|圖案|端盒|木架|木框|包裝|USB|充電|約.*(?:kg|公斤|克)|另加|另計|加收|另收|額外收費|附加費|運費|物流費|快遞費|郵費|配送費|打包費|包裝費|加工費|手工費|貼標費|印刷費|組裝費|開模費|版費|配件費|稅費|稅點|服務費|搬運費|裝卸費|差價|待定|待確認", line, re.I)
             or supplemental_uncertainty_issues(line)

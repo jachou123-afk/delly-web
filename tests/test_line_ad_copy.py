@@ -205,6 +205,112 @@ def test_simplified_license_marker_is_moved_to_traditional_first_line():
     assert "正版授权" not in result
 
 
+def test_rwshm_0004_plain_authorization_marker_is_moved_to_first_line():
+    result = build_line_ad_copy(
+        name="海綿寶寶網格隨身手機包盲盒",
+        category_name="G正版",
+        no_value="no1116",
+        quote_10=153.4,
+        unit="個",
+        details="新品#授权\n帶鐳射標（4個/端盒）\n彩盒尺寸:15*5*24.5cm\n端盒尺寸:30.5*10.5*24.7cm",
+        carton_text="裝箱 48個/箱",
+    )
+
+    lines = result.splitlines()
+    assert lines[:3] == [
+        "正版授權",
+        "海綿寶寶網格隨身手機包盲盒",
+        "BGD-G-1116",
+    ]
+    assert "新品#授权" not in lines
+    assert lines.count("正版授權") == 1
+
+
+def test_mn202450_source_marker_adds_license_without_leaking_marker_detail():
+    result = build_line_ad_copy(
+        name="MINISO貓福珊迪系列毛茸茸派對手辦盲盒",
+        category_name="G正版",
+        no_value="no1124",
+        quote_10=106,
+        unit="個",
+        details="爆品#正版授权MINISO\n帶鐳射標（6個/端盒）\n彩盒尺寸:7*7*10cm\n端盒尺寸:21.5*14.5*10.5cm",
+        carton_text="裝箱 108個/箱",
+    )
+
+    lines = result.splitlines()
+    assert lines[:3] == [
+        "正版授權",
+        "MINISO貓福珊迪系列毛茸茸派對手辦盲盒",
+        "BGD-G-1124",
+    ]
+    assert not any("爆品#正版" in line for line in lines)
+    assert lines.count("正版授權") == 1
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "未授權",
+        "未經授權",
+        "未经授权",
+        "非正版授權",
+        "無正版授權",
+        "沒有正版授權",
+        "不是正版授權",
+        "並非正版授權",
+        "未獲正版授權",
+        "未取得正版授權",
+        "未經正版授權",
+        "未经正版授权",
+        "未經官方正版授權",
+        "未獲官方正版授權",
+        "未得到正版授權",
+        "未有正版授權",
+        "尚未有正版授權",
+        "不具正版授權",
+        "不具有正版授權",
+        "不含正版授權",
+        "正版授權待確認",
+        "是否正版授權",
+        "需取得正版授權",
+        "尚未獲得正版授權",
+        "尚未得到正版授權",
+        "未曾獲得正版授權",
+        "未能取得正版授權",
+        "無法取得正版授權",
+        "無法確認正版授權",
+        "不能取得正版授權",
+        "不能確認正版授權",
+        "缺乏正版授權",
+        "缺少正版授權",
+        "未提供正版授權",
+        "尚未提供正版授權",
+        "正版授權已失效",
+        "已失效的正版授權",
+        "正版授權被撤銷",
+        "未確認正版授權",
+        "非屬正版授權",
+        "不屬於正版授權",
+        "需正版授權",
+        "本款為正版授權",
+    ],
+)
+def test_negative_authorization_statement_does_not_add_license_label(statement):
+    result = build_line_ad_copy(
+        name="測試商品",
+        category_name="G正版",
+        no_value="no2",
+        quote_10=10,
+        unit="個",
+        details=statement,
+        carton_text="裝箱 10個/箱",
+    )
+
+    assert result.splitlines()[0] == "測試商品"
+    assert result.splitlines().count("正版授權") == 0
+    assert statement in result.splitlines()
+
+
 def test_name_that_is_empty_after_removing_new_label_fails_closed():
     with pytest.raises(ValueError, match="商品名稱不可空白"):
         build_line_ad_copy(

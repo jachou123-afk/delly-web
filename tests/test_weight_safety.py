@@ -6,6 +6,12 @@ import zhconv
 import unittest
 from pathlib import Path
 
+from license_markers import (
+    has_affirmative_license_marker,
+    is_standalone_license_marker,
+    strip_affirmative_license_markers,
+)
+
 
 SOURCE_PATH = Path(__file__).parents[1] / "dolly_parser.py"
 SOURCE_TEXT = SOURCE_PATH.read_text(encoding="utf-8")
@@ -25,7 +31,15 @@ def load_selected_code(function_names, assignment_names=()):
         elif isinstance(node, ast.FunctionDef) and node.name in function_names:
             body.append(node)
 
-    namespace = {"re": re, "math": math, "unicodedata": unicodedata, "zhconv": zhconv}
+    namespace = {
+        "re": re,
+        "math": math,
+        "unicodedata": unicodedata,
+        "zhconv": zhconv,
+        "has_affirmative_license_marker": has_affirmative_license_marker,
+        "is_standalone_license_marker": is_standalone_license_marker,
+        "strip_affirmative_license_markers": strip_affirmative_license_markers,
+    }
     exec(
         compile(ast.Module(body=body, type_ignores=[]), str(SOURCE_PATH), "exec"),
         namespace,

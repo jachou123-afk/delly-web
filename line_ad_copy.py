@@ -9,6 +9,11 @@ import math
 import re
 import unicodedata
 
+from license_markers import (
+    has_affirmative_license_marker,
+    strip_affirmative_license_markers,
+)
+
 
 CATEGORY_CODES = {
     "G正版": "G",
@@ -28,7 +33,6 @@ _WEIGHT_PREFIX = re.compile(
 )
 _WOOD_PATTERN = re.compile(r"(?:木架|木框)")
 _CARTON_PREFIX = re.compile(r"^裝箱\s*")
-_LICENSE_PATTERN = re.compile(r"正版(?:授權|授权)")
 _PRODUCT_SIZE_PREFIX = re.compile(r"^(?:(?:產品|产品)\s*)?尺寸\s*[：:]?")
 _PACKAGING_SIZE_PREFIX = re.compile(
     r"^(彩盒尺寸|包裝尺寸|包装尺寸|端盒尺寸)\s*[：:]?\s*(.+)$"
@@ -52,8 +56,9 @@ def _clean_text(value):
 
 def _remove_ad_labels(value):
     """Remove labels that are handled structurally in the LINE layout."""
-    text = str(value or "").replace("新品", "")
-    text = _LICENSE_PATTERN.sub("", text)
+    text = str(value or "")
+    text = strip_affirmative_license_markers(text)
+    text = text.replace("新品", "")
     text = re.sub(r"^[\s#＃|｜/／、,，;；:：-]+", "", text)
     text = re.sub(r"[\s#＃|｜/／、,，;；:：-]+$", "", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -108,6 +113,8 @@ def _ad_detail_lines(details):
     for source_line in source_lines:
         line = source_line.strip()
         if not line:
+            continue
+        if has_affirmative_license_marker(line):
             continue
         normalized = unicodedata.normalize("NFKC", line)
         if (
@@ -209,8 +216,8 @@ def build_line_ad_copy(
         _clean_text(item) for item in (details or ())
     )
     is_licensed = bool(
-        _LICENSE_PATTERN.search(raw_name)
-        or _LICENSE_PATTERN.search(raw_details)
+        has_affirmative_license_marker(raw_name)
+        or has_affirmative_license_marker(raw_details)
     )
     product_name = _remove_ad_labels(raw_name)
     if not product_name:
