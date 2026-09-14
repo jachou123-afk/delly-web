@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from supplier_names import normalize_vendor
 
 RULE_VERSION = "cost-check-v1"
 UNITS = {"個", "盒", "套", "瓶", "罐", "包", "袋"}
@@ -44,7 +45,7 @@ def fmt(value):
 
 
 def free_shipping(vendor):
-    return re.sub(r"\s+", "", str(vendor)).lower() in {"多品村", "v多品村"}
+    return normalize_vendor(vendor) == "v多品村"
 
 
 def calculate(inputs, vendor):

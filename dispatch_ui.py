@@ -13,6 +13,7 @@ from dispatch_manager import (
 from dispatch_storage import asset_bytes, validate_image
 from dispatch_review import comparison_rows, hydrate_draft, unit_confirmed
 from cost_audit_ui import render_cost_review
+from supplier_names import vendor_filter_label
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -83,12 +84,12 @@ def _create(store, history):
     c1, c2, c3 = st.columns(3)
     dates = sorted({p["date"] for p in products}, reverse=True)
     dates_selected = c1.multiselect("商品日期", dates, default=dates[:1], key="dispatch_dates")
-    vendors = sorted({p["vendor"] or "（未填廠商）" for p in products})
+    vendors = sorted({vendor_filter_label(p["vendor"]) for p in products})
     vendors_selected = c2.multiselect("供應商", vendors, key="dispatch_vendors", placeholder="全部供應商")
     categories = sorted({p["category"] for p in products})
     categories_selected = c3.multiselect("商品分頁", categories, key="dispatch_categories", placeholder="全部分頁")
     scope = [p for p in products if (not dates_selected or p["date"] in dates_selected)
-             and (not vendors_selected or (p["vendor"] or "（未填廠商）") in vendors_selected)
+             and (not vendors_selected or vendor_filter_label(p["vendor"]) in vendors_selected)
              and (not categories_selected or p["category"] in categories_selected)]
     if not scope:
         st.info("這組篩選條件沒有商品。")
@@ -97,7 +98,7 @@ def _create(store, history):
     if len(scope) > 150:
         st.warning("每批最多 150 款，請先縮小日期、供應商或分頁範圍。")
         return
-    st.dataframe([{"品號": p["code"] or p["no"], "商品": p["name"], "供應商": p["vendor"],
+    st.dataframe([{"品號": p["code"] or p["no"], "商品": p["name"], "供應商": vendor_filter_label(p["vendor"]),
                    "日期": p["date"], "來源": f"{p['category']}!A{p['row']}",
                    "資料檢查": "；".join(p["errors"]) or "通過，仍需核對原文及圖片"} for p in scope],
                  hide_index=True, width="stretch")

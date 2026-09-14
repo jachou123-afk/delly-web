@@ -16,9 +16,10 @@ from license_markers import (
 from line_ad_copy import CATEGORY_CODES, build_line_ad_copy_from_sheet_block
 from dispatch_storage import CloudDispatchStore
 from dispatch_ui import render_dispatch_manager
+from supplier_names import normalize_vendor, vendor_options as canonical_vendor_options
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V84")
+st.title("🪐 半自動 - 採購報價彙整表 V85")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
@@ -132,8 +133,7 @@ def normalize_name(value):
 
 def is_free_shipping_vendor(vendor):
     """多品村由廣州出貨，陸運費固定包郵。"""
-    normalized = re.sub(r"\s+", "", str(vendor or "")).lower()
-    return normalized in ("多品村", "v多品村")
+    return normalize_vendor(vendor) == "v多品村"
 
 def build_carton_note_row(final_qty, vendor, qty_unit="個"):
     """建立裝箱備註列，並把多品村包郵註記放在大陸運費欄下方。"""
@@ -1471,6 +1471,7 @@ def build_product_block(
     blocked=False,
 ):
     """建立同一套 6x12 商品區塊，新增與原位修正共用。"""
+    vendor = normalize_vendor(vendor)
     formulas = build_cost_formulas(
         value_row,
         carton_weight_kg,
@@ -2140,13 +2141,10 @@ if user_input.strip():
         else:
             hard_reasons.append("尚未選定要修正的原 NO")
 
-    vendor_options = ["", "v菲凡", "v多品村", "v優娜卡樂星"]
-    existing_vendor = (
+    vendor_options, existing_vendor = canonical_vendor_options(
         target_display_block[0][11]
         if target_display_block else ""
     )
-    if existing_vendor and existing_vendor not in vendor_options:
-        vendor_options.append(existing_vendor)
     vendor_default = (
         vendor_options.index(existing_vendor)
         if existing_vendor in vendor_options else 0
@@ -2162,6 +2160,8 @@ if user_input.strip():
         key=vendor_key,
         disabled=bool(operation == "修正既有商品" and block_reasons),
     )
+    final_vendor = normalize_vendor(final_vendor)
+    st.caption("廠商名稱統一為小寫 v＋名稱；已確認的舊別名會自動合併。")
     if not final_vendor and not (operation == "修正既有商品" and block_reasons):
         hard_reasons.append("尚未選擇本款廠商")
     if is_free_shipping_vendor(final_vendor):

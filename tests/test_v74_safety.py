@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 import zhconv
+from supplier_names import normalize_vendor
 from license_markers import (
     has_affirmative_license_marker,
     is_standalone_license_marker,
@@ -31,6 +32,7 @@ ns = dict(
     unicodedata=unicodedata,
     zhconv=zhconv,
     datetime=datetime,
+    normalize_vendor=normalize_vendor,
     has_affirmative_license_marker=has_affirmative_license_marker,
     is_standalone_license_marker=is_standalone_license_marker,
     strip_affirmative_license_markers=strip_affirmative_license_markers,

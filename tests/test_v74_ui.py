@@ -8,12 +8,12 @@ pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest
 
 
-def app_source(existing=False, failure=False, same_identity=False, ad_failure=False, ad_invalid=False):
+def app_source(existing=False, failure=False, same_identity=False, ad_failure=False, ad_invalid=False, existing_vendor="v多品村"):
     source = Path(__file__).parents[1] / "dolly_parser.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
     existing_name = "新品測試收納包" if same_identity else "別款商品"
     rows = [
-        ["no1", existing_name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/個", "大陸運費rmb", "國際運費", "預估到手成本", "v多品村"],
+        ["no1", existing_name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/個", "大陸運費rmb", "國際運費", "預估到手成本", existing_vendor],
         ["2026/9/12", "計價單位：個\n尺寸 10*8.5*2.5cm\n外箱尺寸 20*20*20cm\n木架另加15元", 52.9, 54.7, 56, 59.5, 9.3, 71.4, 0, 0.61, 47.6, ""],
         ["", "裝箱 300個/箱", "", "", "", "", "", "", "廣州包郵", "", "", ""],
         ["", "單個重量 68g", "", "", "", "", "", "", "", "", "", ""],

@@ -5,6 +5,7 @@ import unicodedata
 import zhconv
 import unittest
 from pathlib import Path
+from supplier_names import normalize_vendor
 
 from license_markers import (
     has_affirmative_license_marker,
@@ -32,6 +33,7 @@ def load_selected_code(function_names, assignment_names=()):
             body.append(node)
 
     namespace = {
+        "normalize_vendor": normalize_vendor,
         "re": re,
         "math": math,
         "unicodedata": unicodedata,
