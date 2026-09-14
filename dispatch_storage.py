@@ -13,7 +13,8 @@ from dispatch_manager import DispatchError, now
 
 BATCH_SHEET = "_發送批次"
 IMAGE_SHEET = "_發送圖片"
-INTERNAL_SHEETS = {BATCH_SHEET, IMAGE_SHEET}
+EVIDENCE_SHEET = "_報價依據"
+INTERNAL_SHEETS = {BATCH_SHEET, IMAGE_SHEET, EVIDENCE_SHEET}
 HEADER = ["record_id", "entity_id", "parent", "part", "total", "sha256", "payload", "created_at"]
 CHUNK_SIZE = 20000  # Also below 50k UTF-16 units for all-emoji content.
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
@@ -103,6 +104,8 @@ class CloudDispatchStore:
         self.spreadsheet = spreadsheet
         self._worksheets = {}
         self._image_index = None
+        self._evidence_index = None
+        self._evidence_row_index = None
 
     def _sheet(self, title, create=False):
         if title in self._worksheets:
@@ -222,10 +225,101 @@ class CloudDispatchStore:
         sheet_ids = {ws.title: getattr(ws, "id", "") for ws in sheets}
         spreadsheet_id = getattr(self.spreadsheet, "id", "")
         for product in products:
+            product["cost_audit_required"] = True
             product["source_url"] = (f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
                                      f"#gid={sheet_ids[product['category']]}&range=A{product['row']}:T{product['row'] + 5}"
                                      if spreadsheet_id else "")
         return products
+
+    def _evidence(self, identity):
+        self._load_evidence([identity])
+        return self._evidence_index.get(identity)
+
+    def _load_evidence(self, identities):
+        if self._evidence_index is None:
+            self._evidence_index = {}
+        wanted = set(identities) - self._evidence_index.keys()
+        if not wanted:
+            return
+        ws = self._sheet(EVIDENCE_SHEET)
+        rows, ranges = [], []
+        if ws:
+            if self._evidence_row_index is None:
+                self._evidence_row_index = ws.get("A2:B")
+            for row_number, row in enumerate(self._evidence_row_index, 2):
+                if len(row) > 1 and row[1] in wanted:
+                    if ranges and ranges[-1][1] == row_number - 1:
+                        ranges[-1][1] = row_number
+                    else:
+                        ranges.append([row_number, row_number])
+            for offset in range(0, len(ranges), 20):
+                rows.extend(row for group in ws.batch_get([f"A{a}:H{b}" for a, b in ranges[offset:offset + 20]]) for row in group)
+        found = dict.fromkeys(wanted)
+        for record in decode_records(rows):
+            value = record["value"]
+            if value.get("schema") != 1 or value.get("identity") != record["entity"]:
+                raise DispatchError("報價依據識別碼或版本不符，停止驗算")
+            found[record["entity"]] = value
+        self._evidence_index.update(found)
+
+    def read_cost_source(self, source):
+        from cost_audit import block, fingerprint
+        ws = self.spreadsheet.worksheet(source["category"])
+        area = f"A{source['row']}:L{source['row'] + 5}"
+        values = block(ws.get(area, value_render_option="FORMATTED_VALUE"))
+        if fingerprint(values) != source["source_hash"]:
+            raise DispatchError("原表已變動，請重新載入雲端再驗算")
+        return block(ws.get(area, value_render_option="FORMULA"))
+
+    def cost_audit(self, source):
+        from cost_audit import audit
+        formulas = self.read_cost_source(source)
+        return audit(source, formulas, self._evidence(source["identity"])), formulas
+
+    def put_quote_evidence(self, source, formulas, raw_source, inputs, *, notes, origin, parsed=None):
+        from cost_audit import block, fingerprint, make_evidence
+        evidence = make_evidence(source, formulas, raw_source, inputs, notes=notes, origin=origin, parsed=parsed)
+        # The source and its formulas must still be exactly the inspected version.
+        if fingerprint(self.read_cost_source(source)) != fingerprint(block(formulas)):
+            raise DispatchError("原公式已變更，本次依據未保存，請重新載入")
+        if self._evidence(source["identity"]) == evidence:
+            return evidence
+        ws = self._sheet(EVIDENCE_SHEET, create=True)
+        try:
+            ws.append_rows(encode_record(source["identity"], evidence), value_input_option="RAW", table_range="A:H")
+        except Exception as exc:
+            self._evidence_index = None
+            self._evidence_row_index = None
+            raise DispatchError("報價依據保存結果待確認；請重新載入，不要重複新增商品") from exc
+        self._evidence_index = None
+        self._evidence_row_index = None
+        if self._evidence(source["identity"]) != evidence:
+            raise DispatchError("報價依據寫後核對未完成；請重新載入，不要重複新增商品")
+        return evidence
+
+    def verify_cost_checks(self, batch):
+        """Re-read all active formula blocks in bounded requests before approval."""
+        from collections import defaultdict
+        from cost_audit import audit, blockers, fingerprint
+        groups = defaultdict(list)
+        self._evidence_index = None
+        self._evidence_row_index = None
+        for item in batch["items"]:
+            if not item["excluded"] and item["source"].get("cost_audit_required"):
+                groups[item["source"]["category"]].append(item)
+        self._load_evidence([i["id"] for items in groups.values() for i in items])
+        for category, items in groups.items():
+            ws = self.spreadsheet.worksheet(category)
+            for offset in range(0, len(items), 20):
+                chosen = items[offset:offset + 20]
+                ranges = [f"A{i['source']['row']}:L{i['source']['row'] + 5}" for i in chosen]
+                blocks = ws.batch_get(ranges, value_render_option="FORMULA")
+                if len(blocks) != len(chosen):
+                    raise DispatchError("成本公式讀取不完整，停止確認")
+                for item, formulas in zip(chosen, blocks):
+                    report = audit(item["source"], formulas, self._evidence(item["id"]))
+                    if blockers(item["source"], report) or fingerprint(report) != fingerprint(item.get("cost_audit")):
+                        raise DispatchError(f"{item['source']['code']}：成本公式或原始依據已變更／尚未核對，請重新驗算")
 
     def source_images(self, products):
         from dispatch_images import extract_sheet_images

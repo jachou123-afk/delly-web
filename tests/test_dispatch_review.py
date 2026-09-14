@@ -97,4 +97,5 @@ def test_comparison_has_source_and_outbound_values_and_preserves_old_digest_shap
     assert all({"核對項目", "報價表／依據", "準備發出的內容", "檢查結果"} == set(row) for row in rows)
     assert "52.9" in rows[2]["報價表／依據"] and rows[2]["準備發出的內容"] == "售價53元/個"
     from dispatch_manager import digest
+    item.pop("cost_audit", None)  # A historical V83 record retains its digest shape.
     assert content_digest(item) == digest({k: item[k] for k in ("source", "copy", "images", "excluded", "reason")})

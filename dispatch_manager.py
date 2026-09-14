@@ -116,6 +116,8 @@ def content_digest(item):
     content = {k: item[k] for k in ("source", "copy", "images", "excluded", "reason")}
     if item.get("unit_confirmation"):
         content["unit_confirmation"] = item["unit_confirmation"]
+    if item.get("cost_audit"):
+        content["cost_audit"] = item["cost_audit"]
     return digest(content)
 
 
@@ -129,6 +131,9 @@ def item_errors(item):
     if item["excluded"]:
         return [] if item["reason"].strip() else ["排除商品需填寫原因"]
     errors = list(item["source"]["errors"])
+    if item["source"].get("cost_audit_required"):
+        from cost_audit import blockers
+        errors.extend(blockers(item["source"], item.get("cost_audit")))
     if item["source"].get("unit_mode") == "legacy" and item["source"].get("copy") and not unit_confirmed(item):
         errors.append("待確認計價單位：裝箱單位不等於已確認的售價單位")
     if not item["images"]:
@@ -157,7 +162,7 @@ def item_errors(item):
 
 
 def edit_item(batch, item_id, *, text, images, excluded, reason, reviewed, actor, duplicate_note="",
-              confirmed_unit=None, unit_evidence=""):
+              confirmed_unit=None, unit_evidence="", cost_audit=None):
     result = deepcopy(batch)
     if result["status"] != "draft":
         raise DispatchError("已確認批次內容已鎖定，請建立新草稿後重新核對")
@@ -166,6 +171,8 @@ def edit_item(batch, item_id, *, text, images, excluded, reason, reviewed, actor
     item = next(i for i in result["items"] if i["id"] == item_id)
     item.update(copy=text.strip(), images=list(dict.fromkeys(images)), excluded=bool(excluded),
                 reason=reason.strip(), duplicate_note=duplicate_note.strip(), review=None)
+    if cost_audit is not None:
+        item["cost_audit"] = deepcopy(cost_audit)
     if confirmed_unit is not None:
         if confirmed_unit:
             if confirmed_unit != item["source"].get("unit") or not unit_evidence.strip():
