@@ -8,18 +8,20 @@ pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest
 
 
-def app_source(existing=False, failure=False, same_identity=False):
+def app_source(existing=False, failure=False, same_identity=False, ad_failure=False, ad_invalid=False):
     source = Path(__file__).parents[1] / "dolly_parser.py"
     tree = ast.parse(source.read_text(encoding="utf-8"))
     existing_name = "新品測試收納包" if same_identity else "別款商品"
     rows = [
         ["no1", existing_name, "10%報價", "13%報價", "15%報價", "20%報價", "進價rmb", "重量g/個", "大陸運費rmb", "國際運費", "預估到手成本", "v多品村"],
-        ["2026/9/12", "計價單位：個\n尺寸 10*8.5*2.5cm\n外箱尺寸 20*20*20cm\n木架另加15元", 60, 62, 64, 68, 9.3, 71.4, 0, 0.61, 47.6, ""],
+        ["2026/9/12", "計價單位：個\n尺寸 10*8.5*2.5cm\n外箱尺寸 20*20*20cm\n木架另加15元", 52.9, 54.7, 56, 59.5, 9.3, 71.4, 0, 0.61, 47.6, ""],
         ["", "裝箱 300個/箱", "", "", "", "", "", "", "廣州包郵", "", "", ""],
         ["", "單個重量 68g", "", "", "", "", "", "", "", "", "", ""],
         ["", "貨號 A0081", "", "", "", "", "", "", "", "", "", ""],
         ["", "", "", "", "", "", "", "", "", "", "", ""],
     ] if (existing or same_identity) else []
+    if ad_invalid:
+        rows[1][10] = ""
     formula_rows = [row[:] for row in rows]
     if formula_rows:
         for col in (2, 3, 4, 5, 7, 8, 9, 10):
@@ -29,6 +31,7 @@ def app_source(existing=False, failure=False, same_identity=False):
         "get_settings_cached": "return dict(ex_rate=4.8, intl_rate=8.5, dom_rate=1.5)",
         "get_all_sheets_data": f"return {None if failure else fake_sheets!r}",
         "get_target_formula_block": f"return {{'worksheet_id': 123, 'block': {formula_rows!r}}}",
+        "get_fresh_line_ad_block": "raise ValueError('雲表商品已變更')" if ad_failure else f"return {rows!r}",
         "save_bulk_to_worksheet": "st.session_state['test_saved_rows'] = bulk_rows\nreturn True",
         "update_existing_product": (
             "st.session_state['test_updated'] = {"
@@ -44,9 +47,13 @@ def app_source(existing=False, failure=False, same_identity=False):
     return ast.unparse(tree)
 
 
-def paste(raw, **kwargs):
+def paste(raw, select_source=True, **kwargs):
     app = AppTest.from_string(app_source(**kwargs), default_timeout=15).run()
     app.text_area[0].set_value(raw).run()
+    if select_source:
+        next(s for s in app.selectbox if s.label == "📂 分頁").set_value("G正版").run()
+        if not kwargs.get("failure"):
+            next(s for s in app.selectbox if s.label == "🏷️ 廠商").set_value("v菲凡").run()
     assert not app.exception
     return app
 
@@ -89,6 +96,11 @@ def test_line_ad_preview_reads_saved_block_and_filters_internal_fields():
         if s.label.startswith("選擇商品（可搜尋")
     )
     product.set_value("1|no1").run()
+    button = next(b for b in app.button if b.label == "檢查並產生 LINE 文案")
+    assert button.disabled
+    assert not any("BGD-G-1" in code.value for code in app.code)
+    next(c for c in app.checkbox if c.label.startswith("我已逐欄對照本款完整原文")).check().run()
+    next(b for b in app.button if b.label == "檢查並產生 LINE 文案").click().run()
 
     assert not app.exception
     copy_text = next(code.value for code in app.code if "BGD-G-1" in code.value)
@@ -96,7 +108,7 @@ def test_line_ad_preview_reads_saved_block_and_filters_internal_fields():
     assert "外箱" not in copy_text
     assert "重量" not in copy_text
     assert "木架" not in copy_text
-    assert "售價60元/個" in copy_text
+    assert "售價53元/個" in copy_text
     assert copy_text.endswith("交貨2-3週")
 
 
@@ -266,3 +278,75 @@ def test_incomplete_correction_can_only_clear_derived_cells():
     assert result["safety_only"] is True
     assert result["new_block"][1][6] == 9.3
     assert all(result["new_block"][1][col] == "" for col in (2, 3, 4, 5, 7, 8, 9, 10))
+
+
+def test_new_product_never_guesses_supplier_or_category():
+    app = paste(VALID, select_source=False)
+    assert next(s for s in app.selectbox if s.label == "📂 分頁").value == ""
+    assert next(s for s in app.selectbox if s.label == "🏷️ 廠商").value == ""
+    app.checkbox[-1].check().run()
+    assert save_button(app).disabled
+    next(s for s in app.selectbox if s.label == "📂 分頁").set_value("S生活用品").run()
+    app.checkbox[-1].check().run()
+    assert save_button(app).disabled
+
+
+def test_switch_supplier_format_clears_draft_and_confirmation():
+    app = paste(VALID)
+    next(s for s in app.selectbox if s.label == "📂 分頁").set_value("S生活用品").run()
+    next(s for s in app.selectbox if s.label == "🏷️ 廠商").set_value("v多品村").run()
+    next(n for n in app.number_input if n.label == "內陸運費(R/kg)").set_value(0.0).run()
+    app.checkbox[-1].check().run()
+    assert not save_button(app).disabled
+    app.text_area[0].set_value(VENDOR_INLINE_CARTON).run()
+    assert not app.exception
+    assert next(s for s in app.selectbox if s.label == "📂 分頁").value == ""
+    assert next(s for s in app.selectbox if s.label == "🏷️ 廠商").value == ""
+    assert next(n for n in app.number_input if n.label == "內陸運費(R/kg)").value == 1.5
+    assert next(n for n in app.number_input if n.label == "整箱毛重(kg)").value == 27.5
+    assert not app.checkbox[-1].value
+    assert save_button(app).disabled
+    next(s for s in app.selectbox if s.label == "📂 分頁").set_value("S生活用品").run()
+    next(s for s in app.selectbox if s.label == "🏷️ 廠商").set_value("v菲凡").run()
+    app.checkbox[-1].check().run()
+    save_button(app).click().run()
+    rows = app.session_state["test_saved_rows"]
+    assert rows[0][11] == "v菲凡"
+    assert "*1.5" in rows[1][8]
+    assert rows[2][8] == ""
+
+
+def test_same_parsed_values_and_return_to_old_source_do_not_restore_manual_edits():
+    app = paste(VALID)
+    next(n for n in app.number_input if n.label == "進價(RMB)").set_value(10.0).run()
+    next(t for t in app.text_input if t.label.startswith("產品尺寸")).set_value("99cm").run()
+    next(t for t in app.text_area if t.label.startswith("額外備註")).set_value("上一款手動備註").run()
+    for raw in (VALID.replace("A0081", "A0082"), VALID):
+        app.text_area[0].set_value(raw).run()
+        assert not app.exception
+        assert next(n for n in app.number_input if n.label == "進價(RMB)").value == 9.3
+        assert next(t for t in app.text_input if t.label.startswith("產品尺寸")).value == "10*8.5*2.5cm"
+        assert "上一款" not in next(t for t in app.text_area if t.label.startswith("額外備註")).value
+        assert next(s for s in app.selectbox if s.label == "🏷️ 廠商").value == ""
+
+
+def test_changed_cloud_data_does_not_leave_a_copy_on_screen():
+    app = AppTest.from_string(app_source(existing=True, ad_failure=True), default_timeout=15).run()
+    next(c for c in app.checkbox if c.label == "載入雲表商品").check().run()
+    next(s for s in app.selectbox if s.label.startswith("選擇商品（可搜尋")).set_value("1|no1").run()
+    next(c for c in app.checkbox if c.label.startswith("我已逐欄對照本款完整原文")).check().run()
+    next(b for b in app.button if b.label == "檢查並產生 LINE 文案").click().run()
+    assert not app.exception
+    assert any("雲表商品已變更" in error.value for error in app.error)
+    assert not any("BGD-G-1" in code.value for code in app.code)
+
+
+def test_program_checks_run_before_human_ad_review():
+    app = AppTest.from_string(app_source(existing=True, ad_invalid=True), default_timeout=15).run()
+    next(c for c in app.checkbox if c.label == "載入雲表商品").check().run()
+    next(s for s in app.selectbox if s.label.startswith("選擇商品（可搜尋")).set_value("1|no1").run()
+    assert not app.exception
+    assert any("程式檢查未通過" in error.value for error in app.error)
+    assert next(c for c in app.checkbox if c.label.startswith("我已逐欄對照本款完整原文")).disabled
+    assert next(b for b in app.button if b.label == "檢查並產生 LINE 文案").disabled
+    assert not any("BGD-G-1" in code.value for code in app.code)

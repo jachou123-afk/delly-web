@@ -14,10 +14,12 @@ from license_markers import (
     strip_affirmative_license_markers,
 )
 from line_ad_copy import CATEGORY_CODES, build_line_ad_copy_from_sheet_block
+from dispatch_storage import CloudDispatchStore
+from dispatch_ui import render_dispatch_manager
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V80")
-st.info("V80：LINE 文案移除新品字樣、將正版授權置頂；有包裝尺寸時只顯示包裝尺寸，不重複產品尺寸。")
+st.title("🪐 半自動 - 採購報價彙整表 V82")
+st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
 SETTINGS_WS = "_設定"
@@ -66,6 +68,8 @@ def get_all_sheets_data():
         spreadsheet = open_spreadsheet(client)
         all_data = {}
         for ws in spreadsheet.worksheets():
+            if ws.title in ("_發送批次", "_發送圖片"):
+                continue
             all_data[ws.title] = ws.get_all_values()
         return all_data
     except Exception as e:
@@ -268,7 +272,8 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
         if not bulk_rows or len(bulk_rows) % block_size:
             raise ValueError("商品區塊不完整")
         incoming = extract_saved_products(bulk_rows)
-        live_sheets = {ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()}
+        live_sheets = {ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()
+                       if ws.title not in ("_發送批次", "_發送圖片")}
         conflicts = duplicate_messages(incoming, live_sheets)
         if conflicts:
             st.error("；".join(conflicts))
@@ -473,7 +478,20 @@ def build_cost_formulas(
         if formula:
             result[key] = f'=IFERROR(IF(OR(NOT(ISNUMBER(G{v_r})),G{v_r}<=0),"",{formula[1:]}),"")'
     return result
-# --- 3. 側邊欄設定 ---
+# --- 3. 工具頁籤；發送管理只使用整理完成的商品資料 ---
+def get_dispatch_store():
+    return CloudDispatchStore(open_spreadsheet(gspread.authorize(get_credentials())))
+
+
+quote_tab, dispatch_tab = st.tabs(
+    ["📝 報價整理", "📣 發送管理"], key="tool_page", on_change="rerun"
+)
+if dispatch_tab.open:
+    with dispatch_tab:
+        render_dispatch_manager(get_dispatch_store)
+    st.stop()
+
+# --- 側邊欄設定 ---
 settings = get_settings_cached()
 if settings is None:
     st.error("成本設定讀取失敗，停止解析存檔；請重試，不套用其他匯率。")
@@ -1666,7 +1684,8 @@ def update_existing_product(
             return False
 
         if not safety_only:
-            live_sheets = {ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()}
+            live_sheets = {ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()
+                           if ws.title not in ("_發送批次", "_發送圖片")}
             planned_product = extract_saved_products(planned)[0]
             conflicts = duplicate_messages(
                 [{"code": planned_product["code"], "name": planned_product["name"]}],
@@ -1681,6 +1700,7 @@ def update_existing_product(
         # 同時再次掃描全部分頁，把跨分頁撞單的競態窗口縮到最小。
         final_live_sheets = {
             ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()
+            if ws.title not in ("_發送批次", "_發送圖片")
         }
         if final_live_sheets.get(category_name) != expected_rows or pad_block(sheet.get(
             f"A{base_row}:L{base_row + 5}",
@@ -1743,6 +1763,24 @@ def update_existing_product(
         return False
 
 
+def get_fresh_line_ad_block(category_name, base_row, expected_block):
+    """Read without the list cache and reject changed/moved/duplicate records."""
+    client = gspread.authorize(get_credentials())
+    worksheet = open_spreadsheet(client).worksheet(category_name)
+    rows = worksheet.get_all_values()
+    expected = pad_block(expected_block)
+    matches = [
+        product for product in extract_saved_products(rows)
+        if product["no"].lower() == str(expected[0][0]).lower()
+    ]
+    if len(matches) != 1 or matches[0]["row_index"] != base_row:
+        raise ValueError("商品 NO 重複、已移動或已刪除，請重新載入並核對")
+    fresh = get_saved_block(rows, base_row)
+    if any(not cells_equal(fresh[r][c], expected[r][c]) for r in range(6) for c in range(12)):
+        raise ValueError("雲表商品已變更，請重新載入並重新核對")
+    return fresh
+
+
 # --- 5. LINE 廣告文案（只讀取既有雲表，不改動採購資料） ---
 with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
     st.caption(
@@ -1789,22 +1827,41 @@ with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
                         ad_sheets[ad_category],
                         ad_product["row_index"],
                     )
+                    ad_review_key = hashlib.sha256(repr((ad_category, ad_selected, ad_block)).encode()).hexdigest()
+                    st.write(f"核對目標：{ad_category}｜{ad_product['no']}｜廠商 {ad_block[0][11]}")
+                    st.dataframe(pd.DataFrame(ad_block), hide_index=True, width="stretch")
+                    st.caption("程式檢查不代表原文已核對；請確認來源、單位、重量、費用與採用匯率，以及圖片屬於同一商品。")
+                    ad_ready = True
                     try:
-                        ad_copy = build_line_ad_copy_from_sheet_block(
-                            ad_category,
-                            ad_block,
-                        )
+                        build_line_ad_copy_from_sheet_block(ad_category, ad_block)
                     except ValueError as error:
-                        st.error(f"停止產生廣告文案：{error}")
-                    else:
-                        st.code(ad_copy, language=None)
-                        st.caption(
-                            "售價取雲表 10% 報價並無條件進位；交期固定 2-3 週。"
-                        )
+                        ad_ready = False
+                        st.error(f"程式檢查未通過：{error}")
+                    ad_reviewed = st.checkbox(
+                        "我已逐欄對照本款完整原文及原圖，並確認廠商與成本計算依據",
+                        key="ad_review_" + ad_review_key,
+                        disabled=not ad_ready,
+                    )
+                    if st.button("檢查並產生 LINE 文案", disabled=not ad_ready or not ad_reviewed):
+                        try:
+                            fresh_ad_block = get_fresh_line_ad_block(ad_category, ad_product["row_index"], ad_block)
+                            ad_copy = build_line_ad_copy_from_sheet_block(ad_category, fresh_ad_block)
+                        except Exception as error:
+                            get_all_sheets_data.clear()
+                            st.error(f"停止產生廣告文案：{error}")
+                        else:
+                            st.code(ad_copy, language=None)
+                            st.caption("售價取雲表 10% 報價並無條件進位；交期固定 2-3 週。此處只產生文案，不會發送 LINE。")
 
 
 # --- 6. 主畫面流程 ---
 user_input = st.text_area("📝 第一步:每次貼上一款廠商完整文案（含補充費用）", height=200)
+# A monotonic revision also resets A -> B -> A. A content hash alone can
+# revive an old manually edited draft if the same source is pasted again.
+if st.session_state.get("draft_source") != user_input:
+    st.session_state["draft_source"] = user_input
+    st.session_state["draft_revision"] = st.session_state.get("draft_revision", 0) + 1
+draft_key = f"draft_{st.session_state['draft_revision']}_"
 user_input_tw = zhconv.convert(user_input, 'zh-tw') if user_input else ""
 common_data, products_data = parse_text(user_input)
 with st.expander("🔧 診斷資訊 (若解析有誤可展開查看)"):
@@ -1816,19 +1873,21 @@ with st.expander("🔧 診斷資訊 (若解析有誤可展開查看)"):
     st.code(user_input, language=None)
 st.subheader("🔍 第二步:共用參數校正")
 c1, c2, c3, c4, c5 = st.columns(5)
-final_price = c1.number_input("進價(RMB)", value=common_data["price"], format="%.2f")
-final_qty = c2.number_input("裝箱量", value=common_data["qty"], step=1)
+final_price = c1.number_input("進價(RMB)", value=common_data["price"], format="%.2f", key=draft_key + "price")
+final_qty = c2.number_input("裝箱量", value=common_data["qty"], step=1, key=draft_key + "qty")
 final_unit_weight_g = c3.number_input(
     "單個重量(g)",
     value=common_data["unit_weight_g"],
     format="%.2f",
+    key=draft_key + "unit_weight",
 )
 final_carton_weight_kg = c4.number_input(
     "整箱毛重(kg)",
     value=common_data["weight"],
     format="%.2f",
+    key=draft_key + "carton_weight",
 )
-final_dom = c5.number_input("內陸運費(R/kg)", value=dom_rate_def)
+final_dom = c5.number_input("內陸運費(R/kg)", value=dom_rate_def, key=draft_key + "dom")
 weight_state = resolve_weight_inputs(
     final_carton_weight_kg,
     final_unit_weight_g,
@@ -1847,14 +1906,15 @@ elif weight_state["source"] == "both" and weight_state["mismatch_ratio"] >= 0.2:
         "停止計算，請核對後修正重量來源；不再自動取較大值報價。"
     )
 c6, c7 = st.columns(2)
-final_prod_size = c6.text_input("產品尺寸 (沒抓到可手動輸入)", value=common_data["prod_size"])
-final_color_size = c7.text_input("彩盒尺寸 (亞克力/單個包裝也算)", value=common_data["color_box_size"])
-final_outer_size = st.text_input("外箱尺寸 (沒抓到可手動輸入)", value=common_data["outer_box_size"])
-final_extra = st.text_area("額外備註（保留顏色、材質、端盒、木架等）", value=common_data["extra_tags"])
+final_prod_size = c6.text_input("產品尺寸 (沒抓到可手動輸入)", value=common_data["prod_size"], key=draft_key + "product_size")
+final_color_size = c7.text_input("彩盒尺寸 (亞克力/單個包裝也算)", value=common_data["color_box_size"], key=draft_key + "color_size")
+final_outer_size = st.text_input("外箱尺寸 (沒抓到可手動輸入)", value=common_data["outer_box_size"], key=draft_key + "outer_size")
+final_extra = st.text_area("額外備註（保留顏色、材質、端盒、木架等）", value=common_data["extra_tags"], key=draft_key + "extra")
 unit_options = ["", "個", "盒", "套", "瓶", "罐", "包", "袋"]
 parsed_unit = common_data["qty_unit"]
 final_qty_unit = st.selectbox("装箱及計價單位（必須一致；不同時先人工換算）", unit_options,
-                                index=unit_options.index(parsed_unit) if parsed_unit in unit_options else 0)
+                                index=unit_options.index(parsed_unit) if parsed_unit in unit_options else 0,
+                                key=draft_key + "unit")
 active_issues = list(common_data["issues"])
 active_issues.extend(supplemental_uncertainty_issues(final_extra))
 note_integrity_issues = wooden_rack_note_integrity_issues(common_data, final_extra)
@@ -1866,6 +1926,7 @@ if any("非木架額外費用" in issue for issue in active_issues):
     st.warning("非木架附加項目未確認前不提供成本。若費用另加，先將每銷售單位進價及整箱重量校正為含附加項目的數值；木架／木框依固定規則不列入。")
     confirmation_key = hashlib.sha256(
         repr((
+            draft_key,
             user_input,
             final_price,
             final_qty,
@@ -1896,7 +1957,7 @@ if "name" not in df_items.columns:
     df_items["name"] = ""
 df_items.insert(0, "寫入", True)
 df_items = df_items.rename(columns={"code": "貨號", "name": "名稱"})
-edited_df = st.data_editor(df_items, num_rows="dynamic", width="stretch")
+edited_df = st.data_editor(df_items, num_rows="dynamic", width="stretch", key=draft_key + "products")
 if user_input.strip():
     st.markdown("---")
     st.subheader("📊 第三步：選擇新增或原位修正")
@@ -1905,11 +1966,14 @@ if user_input.strip():
         ["新增商品", "修正既有商品"],
         horizontal=True,
         help="原位修正不新增列、不更改 NO 或原日期，也不處理圖片與格式。",
+        key=draft_key + "operation",
     )
     final_category = st.selectbox(
         "📂 分頁",
-        ["G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾"],
+        ["", "G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾"],
         index=0,
+        format_func=lambda value: value or "請選擇本款分頁",
+        key=draft_key + "category",
     )
 
     to_save_df = edited_df[
@@ -1927,7 +1991,9 @@ if user_input.strip():
     if all_sheets_data is None:
         st.error("雲表讀取失敗，停止所有存檔；不可把讀取失敗當成空表。")
         st.stop()
-    if final_category not in all_sheets_data:
+    if not final_category:
+        hard_reasons.append("尚未選擇本款分頁")
+    elif final_category not in all_sheets_data:
         hard_reasons.append("找不到指定分頁")
         st.error("找不到指定分頁，已停止；不會自動新建分頁。")
 
@@ -1951,7 +2017,7 @@ if user_input.strip():
             f"{item['row_index']}|{item['no']}": item for item in candidates
         }
         target_key = "update_target_" + hashlib.sha256(
-            repr((user_input, source_product, final_category)).encode()
+            repr((draft_key, user_input, source_product, final_category)).encode()
         ).hexdigest()
         selected_key = st.selectbox(
             "🎯 要修正的原商品（可搜尋 NO、貨號或名稱）",
@@ -2036,27 +2102,30 @@ if user_input.strip():
         else:
             hard_reasons.append("尚未選定要修正的原 NO")
 
-    vendor_options = ["v菲凡", "v多品村", "v優娜卡樂星"]
+    vendor_options = ["", "v菲凡", "v多品村", "v優娜卡樂星"]
     existing_vendor = (
         target_display_block[0][11]
         if target_display_block else ""
     )
     if existing_vendor and existing_vendor not in vendor_options:
-        vendor_options.insert(0, existing_vendor)
+        vendor_options.append(existing_vendor)
     vendor_default = (
         vendor_options.index(existing_vendor)
         if existing_vendor in vendor_options else 0
     )
     vendor_key = "vendor_" + hashlib.sha256(
-        repr((operation, final_category, selected_target and selected_target["no"])).encode()
+        repr((draft_key, operation, final_category, selected_target and selected_target["no"])).encode()
     ).hexdigest()
     final_vendor = st.selectbox(
         "🏷️ 廠商",
         vendor_options,
         index=vendor_default,
+        format_func=lambda value: value or "請明確選擇本款廠商（不依貨號或格式猜測）",
         key=vendor_key,
         disabled=bool(operation == "修正既有商品" and block_reasons),
     )
+    if not final_vendor and not (operation == "修正既有商品" and block_reasons):
+        hard_reasons.append("尚未選擇本款廠商")
     if is_free_shipping_vendor(final_vendor):
         st.success("✅ 此廠商廣州包郵")
 
@@ -2146,6 +2215,7 @@ if user_input.strip():
 
     if not to_save_df.empty:
         review_payload = (
+            draft_key,
             user_input,
             to_save_df.to_dict(),
             final_price,
