@@ -1,4 +1,4 @@
-# Release V86 final: reload bulk review with precise unavailable-ad-price reasons.
+# Release V87: restart for shared category settings and persistent product images.
 streamlit==1.63.0
 pandas
 gspread==6.2.1
