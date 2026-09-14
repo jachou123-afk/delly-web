@@ -721,7 +721,12 @@ def parse_text_legacy(text):
             if not line_s:
                 continue
 
-            is_excluded = False
+            # 「單套價格／單盒價格／單件價格…」都是欄位資料，不是品名。
+            # parse_text() 會另外解析其數值與計價單位；此處只避免把整行併入品名。
+            is_excluded = bool(re.match(
+                r'^(?:單|单)\s*(?:pcs|PCS|只|隻|個|个|盒|套|瓶|罐|包|袋|件)\s*(?:價格|价格)',
+                line_s,
+            ))
             for kw in exclusion_keywords:
                 if line_s.startswith(kw):
                     is_excluded = True
@@ -1021,7 +1026,7 @@ def parse_text(text):
                 common[field] = match[1].strip()
                 break
     # Named metadata must not be swallowed by the product name.
-    meta = r"^(?:型號|貨號|產品編號|編號|單價|單個價格|單盒價格|價格|每箱|箱數|裝箱|一箱|重量|單重|單個重量|每個重量|整箱|毛重|箱重|尺寸|產品尺寸|產品\s*:|彩盒|外箱|包裝|單個包裝|材質|材積|端盒|木架|木框|帶鐳|帶雷|USB|配件|電池|\d+\s*(?:個|款|種))"
+    meta = rf"^(?:型號|貨號|產品編號|編號|單(?:{units})價格|單價|價格|每箱|箱數|裝箱|一箱|重量|單重|單個重量|每個重量|整箱|毛重|箱重|尺寸|產品尺寸|產品\s*:|彩盒|外箱|包裝|單個包裝|材質|材積|端盒|木架|木框|帶鐳|帶雷|USB|配件|電池|\d+\s*(?:個|款|種))"
     if len(products) == 1 and codes:
         name_lines = []
         for line in normalized.splitlines():

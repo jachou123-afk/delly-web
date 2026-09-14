@@ -48,6 +48,51 @@ def test_formats(raw, code, price, qty, kg, g, size):
     assert "USB" not in p[0]["name"]
 
 
+@pytest.mark.parametrize(
+    "price_line,qty_line,expected_price,expected_unit",
+    [
+        ("單套價格:19.8元", "每箱數量:20套", 19.8, "套"),
+        ("單盒價格:9.9元", "每箱數量:30盒", 9.9, "盒"),
+        ("單個價格:12元", "每箱數量:48個", 12, "個"),
+        ("單件價格:7.5元", "每箱數量:60件", 7.5, "個"),
+        ("單瓶價格:8元", "每箱數量:24瓶", 8, "瓶"),
+        ("單罐價格:6.2元", "每箱數量:36罐", 6.2, "罐"),
+        ("單包價格:5元", "每箱數量:40包", 5, "包"),
+        ("單袋價格:4.6元", "每箱數量:50袋", 4.6, "袋"),
+    ],
+)
+def test_unit_price_line_is_metadata_not_product_name(
+    price_line, qty_line, expected_price, expected_unit
+):
+    raw = "\n".join([
+        "史努比家族豎紋陶瓷碗4件套",
+        "帶鐳射標（4個/1套）",
+        "型號:FU-26-8051SN",
+        qty_line,
+        price_line,
+        "整箱重量:18kg",
+    ])
+    common, products = ns["parse_text"](raw)
+
+    assert products == [{
+        "code": "FU-26-8051SN",
+        "name": "史努比家族豎紋陶瓷碗4件套",
+    }]
+    assert (common["price"], common["price_unit"]) == (
+        expected_price,
+        expected_unit,
+    )
+
+
+def test_unit_price_line_is_not_name_even_without_product_code():
+    common, products = ns["parse_text"](
+        "史努比家族豎紋陶瓷碗4件套\n單套價格:19.8元"
+    )
+
+    assert products == [{"code": "", "name": "史努比家族豎紋陶瓷碗4件套"}]
+    assert (common["price"], common["price_unit"]) == (19.8, "套")
+
+
 def test_nine_original_clipboards():
     raws = samples()
     if not raws:
