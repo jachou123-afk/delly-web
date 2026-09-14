@@ -13,13 +13,15 @@ from license_markers import (
     has_affirmative_license_marker,
     strip_affirmative_license_markers,
 )
-from line_ad_copy import CATEGORY_CODES, build_line_ad_copy_from_sheet_block
+from line_ad_copy import build_line_ad_copy_from_sheet_block
+from category_codes import QUOTE_CATEGORIES
+from product_image_ui import render_quote_images, clear_library_cache
 from dispatch_storage import CloudDispatchStore
 from dispatch_ui import render_dispatch_manager
 from supplier_names import normalize_vendor, vendor_options as canonical_vendor_options
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V86")
+st.title("🪐 半自動 - 採購報價彙整表 V87")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
@@ -69,7 +71,7 @@ def get_all_sheets_data():
         spreadsheet = open_spreadsheet(client)
         all_data = {}
         for ws in spreadsheet.worksheets():
-            if ws.title in ("_發送批次", "_發送圖片", "_報價依據"):
+            if ws.title.startswith("_"):
                 continue
             all_data[ws.title] = ws.get_all_values()
         return all_data
@@ -273,7 +275,7 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
             raise ValueError("商品區塊不完整")
         incoming = extract_saved_products(bulk_rows)
         live_sheets = {ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()
-                       if ws.title not in ("_發送批次", "_發送圖片")}
+                       if not ws.title.startswith("_")}
         conflicts = duplicate_messages(incoming, live_sheets)
         if conflicts:
             st.error("；".join(conflicts))
@@ -483,6 +485,27 @@ def get_dispatch_store():
     return CloudDispatchStore(open_spreadsheet(gspread.authorize(get_credentials())))
 
 
+def get_category_codes():
+    return get_dispatch_store().category_settings()["codes"]
+
+
+def persist_quote_images(category, base_row, expected_block, assets):
+    if not assets:
+        return True
+    from quote_images import save_quote_images
+    try:
+        result = save_quote_images(get_dispatch_store(), category, base_row, expected_block, assets)
+        if any(row["結果"] not in {"已綁定", "已存在"} for row in result):
+            raise ValueError("；".join(row["原因"] for row in result if row["結果"] not in {"已綁定", "已存在"}))
+        clear_library_cache()
+        st.success("本款原圖已綁定到商品圖庫，發送管理會自動帶入。")
+        return True
+    except Exception as exc:
+        st.error(f"商品已寫入，但圖片綁定未完成：{exc}")
+        st.warning("不要重複新增商品；請到發送管理保存／補配圖片。")
+        return False
+
+
 def persist_quote_evidence(category, base_row, expected_block, raw_source, inputs, parsed, notes):
     """Capture only after a successful quote write. Failure never repeats that write."""
     from cost_audit import block as audit_block, number
@@ -503,7 +526,7 @@ def persist_quote_evidence(category, base_row, expected_block, raw_source, input
             raise ValueError("進價已變更")
         if any(formulas[1][c] != expected[1][c] for c in (2, 3, 4, 5, 7, 8, 9, 10)):
             raise ValueError("保存後公式已變更")
-        products = catalog({category: values})
+        products = catalog({category: values}, store.category_settings()["codes"])
         if len(products) != 1:
             raise ValueError("無法唯一識別已保存商品")
         source = products[0]
@@ -1724,7 +1747,7 @@ def update_existing_product(
 
         if not safety_only:
             live_sheets = {ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()
-                           if ws.title not in ("_發送批次", "_發送圖片")}
+                           if not ws.title.startswith("_")}
             planned_product = extract_saved_products(planned)[0]
             conflicts = duplicate_messages(
                 [{"code": planned_product["code"], "name": planned_product["name"]}],
@@ -1739,7 +1762,7 @@ def update_existing_product(
         # 同時再次掃描全部分頁，把跨分頁撞單的競態窗口縮到最小。
         final_live_sheets = {
             ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()
-            if ws.title not in ("_發送批次", "_發送圖片")
+            if not ws.title.startswith("_")
         }
         if final_live_sheets.get(category_name) != expected_rows or pad_block(sheet.get(
             f"A{base_row}:L{base_row + 5}",
@@ -1823,7 +1846,7 @@ def get_fresh_line_ad_block(category_name, base_row, expected_block):
 # --- 5. LINE 廣告文案（只讀取既有雲表，不改動採購資料） ---
 with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
     st.caption(
-        "目前已確認 G正版與 S生活用品代號。文案移除新品字樣；正版授權置頂；"
+        "分類代碼與發送管理共用；未設定時請先到「分類代碼設定」補齊。文案移除新品字樣；正版授權置頂；"
         "有彩盒／包裝／端盒尺寸時不顯示產品尺寸，並排除重量、外箱尺寸及所有木架資訊。"
     )
     if st.checkbox("載入雲表商品", key="load_line_ad_copy"):
@@ -1831,8 +1854,13 @@ with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
         if ad_sheets is None:
             st.error("無法讀取雲表，停止產生廣告文案。")
         else:
+            try:
+                ad_codes = get_category_codes()
+            except Exception as exc:
+                st.error(f"分類代碼讀取失敗，停止產生：{exc}")
+                ad_codes = {}
             ad_categories = [
-                category for category in CATEGORY_CODES
+                category for category in ad_codes
                 if category in ad_sheets
             ]
             if not ad_categories:
@@ -1872,7 +1900,7 @@ with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
                     st.caption("程式檢查不代表原文已核對；請確認來源、單位、重量、費用與採用匯率，以及圖片屬於同一商品。")
                     ad_ready = True
                     try:
-                        build_line_ad_copy_from_sheet_block(ad_category, ad_block)
+                        build_line_ad_copy_from_sheet_block(ad_category, ad_block, ad_codes)
                     except ValueError as error:
                         ad_ready = False
                         st.error(f"程式檢查未通過：{error}")
@@ -1884,7 +1912,7 @@ with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
                     if st.button("檢查並產生 LINE 文案", disabled=not ad_ready or not ad_reviewed):
                         try:
                             fresh_ad_block = get_fresh_line_ad_block(ad_category, ad_product["row_index"], ad_block)
-                            ad_copy = build_line_ad_copy_from_sheet_block(ad_category, fresh_ad_block)
+                            ad_copy = build_line_ad_copy_from_sheet_block(ad_category, fresh_ad_block, get_category_codes())
                         except Exception as error:
                             get_all_sheets_data.clear()
                             st.error(f"停止產生廣告文案：{error}")
@@ -2007,9 +2035,14 @@ if user_input.strip():
         help="原位修正不新增列、不更改 NO 或原日期，也不處理圖片與格式。",
         key=draft_key + "operation",
     )
+    try:
+        quote_category_codes = get_category_codes()
+    except Exception as exc:
+        st.error(f"分類設定讀取失敗：{exc}，請重新載入後再保存。")
+        st.stop()
     final_category = st.selectbox(
         "📂 分頁",
-        ["", "G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾"],
+        [""] + list(dict.fromkeys((*QUOTE_CATEGORIES, *quote_category_codes))),
         index=0,
         format_func=lambda value: value or "請選擇本款分頁",
         key=draft_key + "category",
@@ -2035,6 +2068,8 @@ if user_input.strip():
     elif final_category not in all_sheets_data:
         hard_reasons.append("找不到指定分頁")
         st.error("找不到指定分頁，已停止；不會自動新建分頁。")
+    if final_category and final_category not in quote_category_codes:
+        st.warning("本分類尚未設定廣告代碼：報價仍可保存，但產生廣告前需到發送管理的「分類代碼設定」補齊。")
 
     selected_target = None
     target_display_block = None
@@ -2247,6 +2282,12 @@ if user_input.strip():
             hard_reasons.append("目前沒有可套用的變更")
             st.info("目前沒有可套用的變更；不會重複寫入。")
 
+    quote_images = []
+    if source_product and final_category and not safety_only:
+        image_key = "quote_images_" + hashlib.sha256(repr((draft_key, operation, final_category, final_vendor,
+                    source_product, selected_target and selected_target["no"])).encode()).hexdigest()
+        quote_images, image_errors = render_quote_images(image_key)
+        hard_reasons.extend(image_errors)
     if hard_reasons:
         for reason in dict.fromkeys(hard_reasons):
             st.error(f"停止存檔：{reason}")
@@ -2284,6 +2325,7 @@ if user_input.strip():
             target_formula_block,
             planned_update_block,
             safety_only,
+            [a["sha256"] for a in quote_images],
         )
         review_key = hashlib.sha256(repr(review_payload).encode()).hexdigest()
         if operation == "修正既有商品" and selected_target:
@@ -2294,6 +2336,8 @@ if user_input.strip():
         else:
             confirm_label = "我已逐欄對照原文、補充資訊及廠商，確認新增這 1 款商品"
         final_confirm = st.checkbox(confirm_label, key="review_" + review_key)
+        if quote_images:
+            st.caption("本次確認也包含：上方原圖屬於這款商品。成功保存商品後才綁定；既有不同圖庫圖片不會被自動覆蓋。")
 
         if operation == "新增商品":
             create_disabled = bool(
@@ -2352,6 +2396,7 @@ if user_input.strip():
                     )
                     persist_quote_evidence(final_category, start_row, new_block, user_input,
                                            cost_inputs, common_data, cost_notes)
+                    persist_quote_images(final_category, start_row, new_block, quote_images)
         else:
             update_disabled = bool(
                 not final_confirm
@@ -2393,3 +2438,4 @@ if user_input.strip():
                         )
                         persist_quote_evidence(final_category, selected_target["row_index"], planned_update_block,
                                                user_input, cost_inputs, common_data, cost_notes)
+                        persist_quote_images(final_category, selected_target["row_index"], planned_update_block, quote_images)

@@ -30,7 +30,7 @@ def normalized_block(rows):
     return [row + [""] * (12 - len(row)) for row in block]
 
 
-def catalog(sheets):
+def catalog(sheets, category_codes=None):
     """Read the common six-row output, never parse supplier source messages."""
     products = []
     for category, rows in sheets.items():
@@ -43,7 +43,7 @@ def catalog(sheets):
                 continue
             block = normalized_block(rows[index:index + 6])
             no = "no" + str(int(match[1]))
-            inspection = inspect_source(category, block)
+            inspection = inspect_source(category, block, category_codes)
             errors = inspection["errors"]
             code, copy = inspection["code"], inspection["copy"]
             if numbers[str(row[0]).strip().lower()] != 1:

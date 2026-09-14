@@ -10,11 +10,15 @@ import gspread
 from PIL import Image
 
 from dispatch_manager import DispatchError, now
+from product_image_storage import ProductImageStoreMixin
+from product_images import PRODUCT_IMAGE_SHEET
+from category_storage import CategoryCodeStoreMixin
+from category_codes import CATEGORY_SHEET
 
 BATCH_SHEET = "_發送批次"
 IMAGE_SHEET = "_發送圖片"
 EVIDENCE_SHEET = "_報價依據"
-INTERNAL_SHEETS = {BATCH_SHEET, IMAGE_SHEET, EVIDENCE_SHEET}
+INTERNAL_SHEETS = {BATCH_SHEET, IMAGE_SHEET, EVIDENCE_SHEET, PRODUCT_IMAGE_SHEET, CATEGORY_SHEET}
 HEADER = ["record_id", "entity_id", "parent", "part", "total", "sha256", "payload", "created_at"]
 CHUNK_SIZE = 20000  # Also below 50k UTF-16 units for all-emoji content.
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
@@ -99,7 +103,7 @@ def asset_bytes(asset):
     return data
 
 
-class CloudDispatchStore:
+class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
     def __init__(self, spreadsheet):
         self.spreadsheet = spreadsheet
         self._worksheets = {}
@@ -221,7 +225,7 @@ class CloudDispatchStore:
     def catalog(self):
         from dispatch_manager import catalog
         sheets = [ws for ws in self.spreadsheet.worksheets() if not ws.title.startswith("_")]
-        products = catalog({ws.title: ws.get_all_values() for ws in sheets})
+        products = catalog({ws.title: ws.get_all_values() for ws in sheets}, self.category_settings()["codes"])
         sheet_ids = {ws.title: getattr(ws, "id", "") for ws in sheets}
         spreadsheet_id = getattr(self.spreadsheet, "id", "")
         for product in products:

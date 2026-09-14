@@ -28,6 +28,7 @@ def app_source(existing=False, failure=False, same_identity=False, ad_failure=Fa
             formula_rows[1][col] = f"=OLD_{col}"
     fake_sheets = {title: rows if title == "G正版" else [] for title in ("G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾")}
     replacements = {
+        "get_category_codes": "from category_codes import DEFAULT_CATEGORY_CODES\nreturn dict(DEFAULT_CATEGORY_CODES)",
         "persist_quote_evidence": "st.session_state['test_evidence'] = dict(raw=raw_source, inputs=inputs, parsed=parsed, notes=notes)\nreturn True",
         "get_settings_cached": "return dict(ex_rate=4.8, intl_rate=8.5, dom_rate=1.5)",
         "get_all_sheets_data": f"return {None if failure else fake_sheets!r}",

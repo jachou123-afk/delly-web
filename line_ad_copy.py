@@ -7,6 +7,7 @@ controls which already-saved fields are exposed in outbound advertising copy.
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 import re
 import unicodedata
+from category_codes import DEFAULT_CATEGORY_CODES, validate_codes
 
 from license_markers import (
     has_affirmative_license_marker,
@@ -14,10 +15,7 @@ from license_markers import (
 )
 
 
-CATEGORY_CODES = {
-    "G正版": "G",
-    "S生活用品": "S",
-}
+CATEGORY_CODES = DEFAULT_CATEGORY_CODES  # Compatibility export; configuration lives in one module.
 
 LEAD_TIME_LINE = "交貨2-3週"
 
@@ -93,17 +91,18 @@ def _dimension_signature(value):
     return re.sub(r"\s+", "", normalized).strip("，,；;")
 
 
-def build_bgd_code(category_name, no_value):
+def build_bgd_code(category_name, no_value, category_codes=None):
     """Return a strict BGD code without guessing unsupported sheet mappings."""
     category = _clean_text(category_name)
-    if category not in CATEGORY_CODES:
+    codes = validate_codes(category_codes if category_codes is not None else dict(CATEGORY_CODES))
+    if category not in codes:
         raise ValueError(f"尚未設定分頁代號：{category or '空白'}")
 
     no_text = unicodedata.normalize("NFKC", _clean_text(no_value))
     match = _NO_PATTERN.fullmatch(no_text)
     if not match:
         raise ValueError("NO 必須是 no 加純數字，例如 no221")
-    return f"BGD-{CATEGORY_CODES[category]}-{match.group(1)}"
+    return f"BGD-{codes[category]}-{match.group(1)}"
 
 
 def ceil_ad_price(quote_10):
@@ -260,6 +259,7 @@ def build_line_ad_copy(
     unit,
     details,
     carton_text,
+    category_codes=None,
 ):
     """Build one complete customer-facing message, failing closed on gaps."""
     raw_name = re.sub(r"\s+", " ", _clean_text(name))
@@ -282,7 +282,7 @@ def build_line_ad_copy(
     lines = [
         *(["正版授權"] if is_licensed else []),
         product_name,
-        build_bgd_code(category_name, no_value),
+        build_bgd_code(category_name, no_value, category_codes),
         *_ad_detail_lines(details),
         carton_line,
         f"售價{ceil_ad_price(quote_10)}元/{price_unit}",
@@ -312,7 +312,7 @@ def validate_sheet_pricing(rows):
     return block
 
 
-def build_line_ad_copy_from_sheet_block(category_name, rows):
+def build_line_ad_copy_from_sheet_block(category_name, rows, category_codes=None):
     """Strict legacy entry point; dispatch-specific confirmation lives separately."""
     block = validate_sheet_pricing(rows)
 
@@ -333,4 +333,5 @@ def build_line_ad_copy_from_sheet_block(category_name, rows):
         unit=unit_matches[0],
         details=info_text,
         carton_text=block[2][1],
+        category_codes=category_codes,
     )

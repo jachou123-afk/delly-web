@@ -125,11 +125,13 @@ def _filename_key(value):
     return re.sub(r"^貨號\s*[:：]?\s*", "", value)
 
 
-def match_image_pack(data, products):
+def match_image_pack(data, products, all_products=None):
     """Exact supplier-code/BGD filename matches only; ambiguous names stay unpaired."""
     keys = {p["identity"]: {_filename_key(p["code"]), _filename_key(p.get("supplier_code", ""))} - {""}
             for p in products}
-    counts = Counter(key for values in keys.values() for key in values)
+    universe = all_products if all_products is not None else products
+    counts = Counter(key for p in universe for key in
+                     ({_filename_key(p["code"]), _filename_key(p.get("supplier_code", ""))} - {""}))
     result = {p["identity"]: [] for p in products}
     warnings = []
     with _archive(data) as archive:

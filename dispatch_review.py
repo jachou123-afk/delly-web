@@ -12,14 +12,14 @@ from line_ad_copy import (
 )
 
 
-def inspect_source(category, rows):
+def inspect_source(category, rows, category_codes=None):
     block = [[str(v).strip() for v in list(row)[:12]] for row in list(rows)[:6]]
     block += [[] for _ in range(6 - len(block))]
     block = [row + [""] * (12 - len(row)) for row in block]
     errors = []
     code = ""
     try:
-        code = build_bgd_code(category, block[0][0])
+        code = build_bgd_code(category, block[0][0], category_codes)
     except ValueError as exc:
         errors.append(str(exc))
     try:
@@ -57,7 +57,7 @@ def inspect_source(category, rows):
         try:
             copy = build_line_ad_copy(name=block[0][1], category_name=category,
                                       no_value=block[0][0], quote_10=block[1][2], unit=candidate,
-                                      details=block[1][1], carton_text=block[2][1])
+                                      details=block[1][1], carton_text=block[2][1], category_codes=category_codes)
         except ValueError as exc:
             errors.append(str(exc))
     return {"review_version": 2, "block": block, "code": code, "copy": copy,

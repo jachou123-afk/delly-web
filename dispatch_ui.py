@@ -15,6 +15,8 @@ from dispatch_review import comparison_rows, hydrate_draft, unit_confirmed
 from cost_audit_ui import render_cost_review
 from supplier_names import vendor_filter_label
 from batch_cost_ui import render_batch_cost_tools
+from product_image_ui import render_source_images, render_save_current_images
+from category_ui import render_category_settings
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -140,39 +142,7 @@ def _create(store, history):
 
 
 def _source_image_tools(store, batch):
-    cache_key = "dispatch_source_images_" + batch["id"]
-    st.caption("原圖只在畫面提出配對候選；按下儲存本款後，才保存採用的圖片。不更改原報價表。")
-    if st.button("載入原報價表圖片（整批）", key="source_images_load_" + batch["id"]):
-        try:
-            with st.spinner("讀取原表圖片並比對品號、品名與圖片位置…"):
-                result = store.source_images([i["source"] for i in batch["items"]])
-            st.session_state[cache_key] = result
-            st.rerun()
-        except Exception as exc:
-            st.warning("原表圖片暫時無法匯出，並不代表原表沒有圖片。可用下方圖片包，或開啟單款原表核對。")
-            with st.expander("圖片讀取原因"):
-                st.text(str(exc))
-    with st.expander("一次匯入原圖 ZIP／原報價表 Excel（原表圖片讀不到時）"):
-        st.caption("ZIP 圖片檔名需等於貨號或 BGD 品號，例如 A0081.jpg；只配對唯一相符的檔名。Excel 依原表品號、品名和圖片錨點比對。")
-        uploaded = st.file_uploader("原圖圖片包或原表 Excel", type=["zip", "xlsx"], max_upload_size=50,
-                                    key="source_pack_" + batch["id"])
-        if st.button("讀取圖片包並預覽配對", key="source_pack_read_" + batch["id"], disabled=uploaded is None):
-            try:
-                from dispatch_images import extract_sheet_images, match_image_pack
-                reader = extract_sheet_images if uploaded.name.lower().endswith(".xlsx") else match_image_pack
-                st.session_state[cache_key] = reader(uploaded.getvalue(), [i["source"] for i in batch["items"]])
-                st.rerun()
-            except Exception as exc:
-                st.error(f"圖片包未套用：{exc}")
-    result = st.session_state.get(cache_key, {})
-    if result:
-        count = sum(bool(images) for images in result["images"].values())
-        st.info(f"找到 {count} 款的圖片候選。未配對的商品會保留在清單，不會略過。")
-        if result["warnings"]:
-            with st.expander("未配對／需人工處理的圖片"):
-                for warning in result["warnings"]:
-                    st.write(warning)
-    return result.get("images", {})
+    return render_source_images(store, batch)
 
 
 def _draft_item(store, batch, item, history, source_images=None):
@@ -192,8 +162,17 @@ def _draft_item(store, batch, item, history, source_images=None):
     if fresh_problems:
         st.warning("原報價表與這份草稿不同，請先按下方「更新本款來源與文案」，再重新核對。")
     cost_report = render_cost_review(store, source, prefix, batch["actor"]) if source.get("cost_audit_required") else None
-    candidates = {a["sha256"]: a for a in source_images or []}
     image_ok = True
+    candidates = {}
+    for reference in source_images or []:
+        try:
+            asset = ({**_get_asset(store, reference["stored_id"]),
+                      "reference": reference["reference"], "binding_revision": reference["binding_revision"]}
+                     if reference.get("stored_id") else reference)
+            candidates[asset["sha256"]] = asset
+        except Exception as exc:
+            image_ok = False
+            st.error(f"本款圖庫原檔無法讀取：{exc}；未改用其他商品圖片。")
     left, right = st.columns([1, 1.4])
     with left:
         st.markdown("#### 原始資料／原圖")
@@ -212,8 +191,9 @@ def _draft_item(store, batch, item, history, source_images=None):
             st.info("尚未載入這款原圖。可先按上方「載入原報價表圖片」，或在此加入原圖。")
         keep = st.multiselect("保留的圖片", item["images"], default=item["images"],
                               format_func=lambda h: f"圖片 {item['images'].index(h) + 1}", key=prefix + "_keep") if item["images"] else []
+        saved_set = bool(candidates and all(a.get("binding_revision") for a in candidates.values()))
         use_candidates = st.multiselect("採用的原表／圖片包圖片", list(candidates),
-                                        default=list(candidates) if len(candidates) == 1 and not keep else [],
+                                        default=list(candidates) if (len(candidates) == 1 or saved_set) and not keep else [],
                                         format_func=lambda h: candidates[h]["name"], key=prefix + "_candidates_" + digest(list(candidates))[:12]) if candidates else []
         uploads = st.file_uploader("加入商品圖片", type=["jpg", "jpeg", "png", "webp"],
                                    accept_multiple_files=True, max_upload_size=2, key=prefix + "_uploads",
@@ -243,6 +223,14 @@ def _draft_item(store, batch, item, history, source_images=None):
     st.markdown("#### 逐欄核對表")
     st.table(comparison_rows(item, text))
     actor = st.text_input("本次核對人", value=batch["actor"], key=prefix + "_actor")
+    library_assets = {a["sha256"]: a for _, a in prepared}
+    for identity in keep:
+        try:
+            library_assets[identity] = _get_asset(store, identity)
+        except Exception:
+            image_ok = False
+    render_save_current_images(store, source, list(library_assets.values()), actor, prefix,
+                               disabled=not image_ok or bool(fresh_problems))
     unit_value, unit_note, unit_change = None, "", False
     if source.get("unit_mode") == "legacy":
         st.info(f"舊資料未明示計價單位。原表寫「{source.get('unit_evidence') or '未提供裝箱'}」，僅能提出候選「{source.get('unit') or '待確認'}」，不能證明售價按此單位計算。")
@@ -373,11 +361,11 @@ def _draft(store, batch, history):
             if blockers(item["source"], item.get("cost_audit")):
                 return "請核對成本／來源"
         return "待核對" if item_errors(item) else "已核對"
-    cached_candidates = st.session_state.get("dispatch_source_images_" + batch["id"], {}).get("images", {})
+    source_images = _source_image_tools(store, batch)
+    cached_candidates = source_images
     render_batch_cost_tools(store, batch, items, visible, row_state, cached_candidates)
     st.subheader("③ 單款明細與人工核對")
     st.caption("此區只顯示目前查看的一款。切換明細不改變上方勾選的整批驗算範圍。")
-    source_images = _source_image_tools(store, batch)
     selected = _select_item("逐款核對", items, batch, "draft",
                             lambda k: next(f"{i['order']}. {i['source']['code'] or i['id']}｜{i['source']['name']}" for i in items if i["id"] == k))
     item = next(i for i in items if i["id"] == selected)
@@ -569,7 +557,8 @@ def render_dispatch_manager(store_factory):
         st.session_state.pop("dispatch_catalog", None)
         st.session_state.pop("dispatch_review_catalog", None)
         for key in list(st.session_state):
-            if key.startswith(("dispatch_source_images_", "dispatch_cost_", "dispatch_bulk_result_")):
+            if key.startswith(("dispatch_source_images_", "dispatch_cost_", "dispatch_bulk_result_",
+                               "dispatch_library_", "dispatch_category_", "image_binding_revision_")):
                 st.session_state.pop(key, None)
         st.rerun()
     try:
@@ -581,6 +570,7 @@ def render_dispatch_manager(store_factory):
         st.error(f"無法讀取發送紀錄：{exc}")
         st.info("請確認雲端連線後重新載入，讀取失敗不會被當成沒有已發紀錄。")
         return
+    render_category_settings(store)
     options = [""] + [b["id"] for b in history]
     active = st.session_state.get("dispatch_active", "")
     history_revision = digest([(b["id"], b.get("_revision", "")) for b in history])[:16]
