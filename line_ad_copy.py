@@ -291,8 +291,8 @@ def build_line_ad_copy(
     return "\n".join(lines)
 
 
-def build_line_ad_copy_from_sheet_block(category_name, rows):
-    """Build advertising copy from one displayed 6x12 Google Sheets block."""
+def validate_sheet_pricing(rows):
+    """Validate saved monetary fields without guessing the pricing unit."""
     block = [list(row or []) + [""] * (12 - len(row or [])) for row in list(rows or [])[:6]]
     while len(block) < 6:
         block.append([""] * 12)
@@ -309,6 +309,12 @@ def build_line_ad_copy_from_sheet_block(category_name, rows):
         raise ValueError("10%報價與預估到手成本不一致，請先核對雲表公式")
     if not _clean_text(block[0][11]):
         raise ValueError("雲表缺少廠商，請先確認來源")
+    return block
+
+
+def build_line_ad_copy_from_sheet_block(category_name, rows):
+    """Strict legacy entry point; dispatch-specific confirmation lives separately."""
+    block = validate_sheet_pricing(rows)
 
     info_text = _clean_text(block[1][1])
     unit_matches = re.findall(

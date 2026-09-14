@@ -217,5 +217,19 @@ class CloudDispatchStore:
 
     def catalog(self):
         from dispatch_manager import catalog
-        return catalog({ws.title: ws.get_all_values() for ws in self.spreadsheet.worksheets()
-                        if not ws.title.startswith("_")})
+        sheets = [ws for ws in self.spreadsheet.worksheets() if not ws.title.startswith("_")]
+        products = catalog({ws.title: ws.get_all_values() for ws in sheets})
+        sheet_ids = {ws.title: getattr(ws, "id", "") for ws in sheets}
+        spreadsheet_id = getattr(self.spreadsheet, "id", "")
+        for product in products:
+            product["source_url"] = (f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+                                     f"#gid={sheet_ids[product['category']]}&range=A{product['row']}:T{product['row'] + 5}"
+                                     if spreadsheet_id else "")
+        return products
+
+    def source_images(self, products):
+        from dispatch_images import extract_sheet_images
+        from gspread.utils import ExportFormat
+        if hasattr(self.spreadsheet, "client"):
+            self.spreadsheet.client.set_timeout((10, 45))
+        return extract_sheet_images(self.spreadsheet.export(ExportFormat.EXCEL), products)

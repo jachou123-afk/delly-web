@@ -8,7 +8,7 @@ import re
 import uuid
 from zoneinfo import ZoneInfo
 
-from line_ad_copy import build_bgd_code, build_line_ad_copy_from_sheet_block
+from dispatch_review import inspect_source, unit_confirmed
 
 
 class DispatchError(ValueError):
@@ -43,18 +43,9 @@ def catalog(sheets):
                 continue
             block = normalized_block(rows[index:index + 6])
             no = "no" + str(int(match[1]))
-            errors = []
-            try:
-                code = build_bgd_code(category, no)
-                copy = build_line_ad_copy_from_sheet_block(category, block)
-            except ValueError as exc:
-                code = ""
-                copy = ""
-                errors.append(str(exc))
-                try:
-                    code = build_bgd_code(category, no)
-                except ValueError:
-                    pass
+            inspection = inspect_source(category, block)
+            errors = inspection["errors"]
+            code, copy = inspection["code"], inspection["copy"]
             if numbers[str(row[0]).strip().lower()] != 1:
                 errors.append("同一分頁的 NO 重複")
             if any(re.fullmatch(r"no\d+", r[0], re.I) for r in block[1:]):
@@ -68,11 +59,12 @@ def catalog(sheets):
                 except ValueError:
                     errors.append("商品日期不合法")
             products.append({
+                **inspection,
                 "key": f"{category}:{index + 1}:{no}",
                 "identity": f"{category}:{no}", "category": category,
                 "row": index + 1, "no": no, "number": int(match[1]),
                 "code": code, "name": block[0][1], "vendor": block[0][11],
-                "date": date, "supplier_code": re.sub(r"^貨號\s*", "", block[4][1]),
+                "date": date, "supplier_code": re.sub(r"^貨號\s*[:：]?\s*", "", block[4][1]),
                 "source_hash": digest(block), "block": block,
                 "copy": copy, "errors": errors,
             })
@@ -106,7 +98,7 @@ def new_batch(name, target, products, actor, selected_keys=None, excluded_reason
         raise DispatchError("未選取商品需要填寫本批排除原因")
     items = []
     for order, p in enumerate(products, 1):
-        source = {k: deepcopy(v) for k, v in p.items() if k != "block"}
+        source = deepcopy(p)
         items.append({"id": p["identity"], "source": source, "copy": p["copy"],
                       "images": [], "order": order, "review": None,
                       "excluded": p["key"] not in chosen,
@@ -121,7 +113,10 @@ def new_batch(name, target, products, actor, selected_keys=None, excluded_reason
 
 
 def content_digest(item):
-    return digest({k: item[k] for k in ("source", "copy", "images", "excluded", "reason")})
+    content = {k: item[k] for k in ("source", "copy", "images", "excluded", "reason")}
+    if item.get("unit_confirmation"):
+        content["unit_confirmation"] = item["unit_confirmation"]
+    return digest(content)
 
 
 def batch_digest(batch):
@@ -134,18 +129,23 @@ def item_errors(item):
     if item["excluded"]:
         return [] if item["reason"].strip() else ["排除商品需填寫原因"]
     errors = list(item["source"]["errors"])
+    if item["source"].get("unit_mode") == "legacy" and item["source"].get("copy") and not unit_confirmed(item):
+        errors.append("待確認計價單位：裝箱單位不等於已確認的售價單位")
     if not item["images"]:
         errors.append("尚未加入商品圖片")
     text = item["copy"].strip()
-    codes = re.findall(r"BGD-[A-Z]+-\d+", text)
-    if codes != [item["source"]["code"]]:
-        errors.append("文案品號缺失、重複或與本款不一致")
     expected = item["source"]["copy"]
-    for prefix in ("售價", "裝箱"):
-        required = [line for line in expected.splitlines() if line.startswith(prefix)]
-        actual = [line for line in text.splitlines() if line.startswith(prefix)]
-        if not required or actual != required:
-            errors.append(f"{prefix}需與雲表一致；要調價或改單位請先修正報價表")
+    if expected:
+        codes = re.findall(r"BGD-[A-Z]+-\d+", text)
+        if codes != [item["source"]["code"]]:
+            errors.append("文案品號缺失、重複或與本款不一致")
+        for prefix in ("售價", "裝箱"):
+            required = [line for line in expected.splitlines() if line.startswith(prefix)]
+            actual = [line for line in text.splitlines() if line.startswith(prefix)]
+            if not required or actual != required:
+                errors.append(f"{prefix}需與雲表一致；要調價或改單位請先修正報價表")
+    else:
+        errors.append("先處理來源資料，文案尚未能產生；不判定為品號錯誤")
     if re.search(r"進價|到手成本|預估成本|大陸運費|國際運費|內陸運費|外箱尺寸|木架|木框|計費重量|箱重|單個重量", text):
         errors.append("文案含內部成本、重量、外箱或木架資訊")
     if len(text) > 4500:
@@ -156,7 +156,8 @@ def item_errors(item):
     return list(dict.fromkeys(errors))
 
 
-def edit_item(batch, item_id, *, text, images, excluded, reason, reviewed, actor, duplicate_note=""):
+def edit_item(batch, item_id, *, text, images, excluded, reason, reviewed, actor, duplicate_note="",
+              confirmed_unit=None, unit_evidence=""):
     result = deepcopy(batch)
     if result["status"] != "draft":
         raise DispatchError("已確認批次內容已鎖定，請建立新草稿後重新核對")
@@ -165,6 +166,14 @@ def edit_item(batch, item_id, *, text, images, excluded, reason, reviewed, actor
     item = next(i for i in result["items"] if i["id"] == item_id)
     item.update(copy=text.strip(), images=list(dict.fromkeys(images)), excluded=bool(excluded),
                 reason=reason.strip(), duplicate_note=duplicate_note.strip(), review=None)
+    if confirmed_unit is not None:
+        if confirmed_unit:
+            if confirmed_unit != item["source"].get("unit") or not unit_evidence.strip():
+                raise DispatchError("請確認售價與裝箱採用相同單位並填寫確認依據；不同時先修正原報價表")
+            item["unit_confirmation"] = {"unit": confirmed_unit, "source_hash": item["source"]["source_hash"],
+                                          "actor": actor.strip(), "at": now(), "evidence": unit_evidence.strip()}
+        else:
+            item.pop("unit_confirmation", None)
     if reviewed and not excluded:
         item["review"] = {"digest": content_digest(item), "actor": actor.strip(), "at": now()}
         problems = item_errors(item)
