@@ -724,7 +724,7 @@ def parse_text_legacy(text):
             # 「單套價格／單盒價格／單件價格…」都是欄位資料，不是品名。
             # parse_text() 會另外解析其數值與計價單位；此處只避免把整行併入品名。
             is_excluded = bool(re.match(
-                r'^(?:單|单)\s*(?:[A-Za-z]+|[^\s:：0-9]{1,3})\s*(?:價格|价格)',
+                r'^(?:單|单|每)\s*[A-Za-z0-9\u4e00-\u9fff]{1,6}\s*(?:價格|价格|價|价)',
                 line_s,
             ))
             for kw in exclusion_keywords:
@@ -926,7 +926,14 @@ def parse_text(text):
     # 未知的「單X價格」不能悄悄退回只有數字、沒有計價單位的成本。
     # 保留價格供人工核對，但用 issue 阻斷所有衍生成本與報價。
     unit_price_labels = list(re.finditer(
-        r"單\s*(?P<unit>[A-Za-z]+|[^\s:：0-9]{1,3})\s*價格",
+        rf"(?:單|每)\s*(?P<unit>[A-Za-z0-9\u4e00-\u9fff]{{1,6}})\s*(?:價格|價)"
+        rf"(?=\s*[:：]?\s*(?:RMB|¥)?\s*{number})",
+        price_basis_text,
+        re.I,
+    ))
+    unit_price_labels.extend(re.finditer(
+        rf"(?:單價|價格|價錢|售價)\s*[:：]?\s*(?:RMB|¥)?\s*{number}\s*元\s*[/／]\s*"
+        rf"(?P<unit>[A-Za-z0-9\u4e00-\u9fff]{{1,6}})",
         price_basis_text,
         re.I,
     ))
@@ -936,7 +943,7 @@ def parse_text(text):
             issues.append(f"不支援的計價單位「{label['unit']}」，須先確認換算方式")
     # Require a price or carton label, never use the count inside an OPP bag.
     prices = list(re.finditer(
-        rf"(?:單\s*(?P<unit>{units})\s*價格|單價|價格|價錢|售價|都是|💰)\s*:?\s*(?:RMB|¥)?\s*(?P<value>{number})",
+        rf"(?:(?:單|每)\s*(?P<unit>{units})\s*(?:價格|價)|單價|價格|價錢|售價|都是|💰)\s*:?\s*(?:RMB|¥)?\s*(?P<value>{number})",
         price_basis_text, re.I))
     if not prices:
         prices = list(re.finditer(rf"(?P<value>{number})\s*元(?:\s*/\s*(?P<unit>{units}))?", price_basis_text, re.I))
@@ -1037,7 +1044,7 @@ def parse_text(text):
                 common[field] = match[1].strip()
                 break
     # Named metadata must not be swallowed by the product name.
-    meta = rf"^(?:型號|貨號|產品編號|編號|單\s*(?:[A-Za-z]+|[^\s:：0-9]{{1,3}})\s*價格|單價|價格|每箱|箱數|裝箱|一箱|重量|單重|單個重量|每個重量|整箱|毛重|箱重|尺寸|產品尺寸|產品\s*:|彩盒|外箱|包裝|單個包裝|材質|材積|端盒|木架|木框|帶鐳|帶雷|USB|配件|電池|\d+\s*(?:個|款|種))"
+    meta = rf"^(?:型號|貨號|產品編號|編號|(?:單|每)\s*[A-Za-z0-9\u4e00-\u9fff]{{1,6}}\s*(?:價格|價)|單價|價格|每箱|箱數|裝箱|一箱|重量|單重|單個重量|每個重量|整箱|毛重|箱重|尺寸|產品尺寸|產品\s*:|彩盒|外箱|包裝|單個包裝|材質|材積|端盒|木架|木框|帶鐳|帶雷|USB|配件|電池|\d+\s*(?:個|款|種))"
     if len(products) == 1 and codes:
         name_lines = []
         for line in normalized.splitlines():

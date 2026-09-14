@@ -53,6 +53,7 @@ def test_formats(raw, code, price, qty, kg, g, size):
     [
         ("單套價格:19.8元", "每箱數量:20套", 19.8, "套"),
         ("單 套 價格:19.8元", "每箱數量:20套", 19.8, "套"),
+        ("每套價格:19.8元", "每箱數量:20套", 19.8, "套"),
         ("單pc價格:11元", "每箱數量:20pcs", 11, "個"),
         ("單盒價格:9.9元", "每箱數量:30盒", 9.9, "盒"),
         ("單個價格:12元", "每箱數量:48個", 12, "個"),
@@ -95,9 +96,19 @@ def test_unit_price_line_is_not_name_even_without_product_code():
     assert (common["price"], common["price_unit"]) == (19.8, "套")
 
 
-def test_unknown_unit_price_line_is_not_name_and_blocks_cost():
+@pytest.mark.parametrize(
+    "price_line",
+    [
+        "單組價格:19.8元",
+        "每組價格:19.8元",
+        "單組價:19.8元",
+        "單2入價格:19.8元",
+        "價格:19.8元/組",
+    ],
+)
+def test_unknown_unit_price_line_is_not_name_and_blocks_cost(price_line):
     common, products = ns["parse_text"](
-        "測試商品\n型號:T-1\n每箱數量:20pcs\n單組價格:19.8元\n整箱重量:20kg"
+        f"測試商品\n型號:T-1\n每箱數量:20pcs\n{price_line}\n整箱重量:20kg"
     )
 
     assert products == [{"code": "T-1", "name": "測試商品"}]
