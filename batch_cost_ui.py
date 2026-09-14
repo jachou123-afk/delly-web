@@ -51,7 +51,9 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
         st.dataframe([{"順序": i["order"], "品號": i["source"]["code"] or i["source"]["no"],
                        "商品": i["source"]["name"], "成本": block(i["source"].get("block", []))[1][10] or "缺資料",
                        "售價": i["source"].get("price", "待確認"), "單位": i["source"].get("unit") or "待確認",
-                       "圖片": f"{len(i['images'])} 張已存" if i["images"] else (f"{len(candidates[i['id']])} 張候選" if candidates.get(i["id"]) else "待載入"),
+                       "圖片": f"{len(i['images'])} 張本批已存" if i["images"] else (
+                           f"{len(candidates[i['id']])} 張" + ("圖庫已存" if all(a.get("binding_revision") for a in candidates[i['id']]) else "候選")
+                           if candidates.get(i["id"]) else "待配對／補圖"),
                        "核對": row_state(i)} for i in visible],
                      hide_index=True, width="stretch", height=min(520, 48 + 42 * len(visible)), row_height=42,
                      on_select=lambda: _table_changed(table_key, selection_key, visible_ids, batch),

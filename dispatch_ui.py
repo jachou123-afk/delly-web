@@ -17,6 +17,7 @@ from supplier_names import vendor_filter_label
 from batch_cost_ui import render_batch_cost_tools
 from product_image_ui import render_source_images, render_save_current_images
 from category_ui import render_category_settings
+from batch_image_preview import render_batch_image_preview
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -382,23 +383,7 @@ def _draft(store, batch, history):
                 for i in updated["items"]:
                     i["order"] = ordered.index(i["id"]) + 1
                 _save(store, updated, batch)
-    with st.expander("整批廣告預覽"):
-        show_all_images = st.checkbox("載入整批商品圖片", key="dispatch_all_images_" + batch["id"],
-                                      help="圖片較多時載入需要一些時間；逐款核對不需要開啟。")
-        for i in items:
-            if i["excluded"]:
-                st.caption(f"{i['source']['code']} · 已排除：{i['reason']}")
-                continue
-            st.write(f"{i['order']}. {i['source']['name']}")
-            preview_left, preview_right = st.columns([1, 2])
-            with preview_left:
-                if show_all_images:
-                    _show_images(store, i["images"], "all_" + i["id"])
-                else:
-                    st.caption(f"已加入 {len(i['images'])} 張圖片")
-            with preview_right:
-                st.code(i["copy"], language=None)
-            st.divider()
+    render_batch_image_preview(store, items, source_images, batch["id"])
     ready = sum(not i["excluded"] and not item_errors(i)
                 and not source_changes({**batch, "items": [i]}, st.session_state["dispatch_review_catalog"]) for i in items)
     excluded = sum(i["excluded"] for i in items)
