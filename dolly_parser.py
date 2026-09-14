@@ -514,6 +514,175 @@ def clean_product_name(name):
     return name
 
 
+def labeled_dimension_info(value):
+    """Classify an explicitly labelled dimension without repairing its value."""
+    line = unicodedata.normalize("NFKC", str(value or "")).strip()
+    match = re.fullmatch(
+        r"(?P<label>[A-Za-z\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff]{0,11})"
+        r"\s*[:：]\s*(?P<value>.+?)\s*",
+        line,
+        re.I,
+    )
+    if not match:
+        return None
+    label = match["label"]
+    raw_value = match["value"].strip()
+    label_is_dimension = bool(
+        re.search(r"(?:尺寸|規格|長度|寬度|高度|直徑|口徑)$", label)
+        or re.search(r"\d\s*[*xX×]\s*\d", raw_value)
+        or label in {
+            "尺寸", "產品", "彩盒", "包裝盒", "單個包裝", "亞克力",
+            "外箱", "箱規", "白盒", "打開", "展開",
+        }
+    )
+    if not label_is_dimension:
+        return None
+    number = r"\d+(?:\.\d+)?"
+    numeric_shape = rf"{number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*"
+    valid = bool(re.fullmatch(
+        numeric_shape + r"\s*(?:cm|mm|公分|毫米)",
+        raw_value,
+        re.I,
+    ))
+    missing_unit = bool(re.fullmatch(numeric_shape, raw_value, re.I))
+    decimal_comma = bool(re.search(r"\d\s*[,，]\s*\d", raw_value))
+    return {
+        "label": label,
+        "value": raw_value,
+        "valid": valid,
+        "missing_unit": missing_unit,
+        "decimal_comma": decimal_comma,
+    }
+
+
+def weight_field_info(value):
+    """Classify weight-like fields; unknown labels are never coerced."""
+    line = unicodedata.normalize("NFKC", str(value or "")).strip()
+    match = re.fullmatch(
+        r"(?:"
+        r"(?P<cn_label>[A-Za-z0-9\u4e00-\u9fff]{0,12}(?:重量|毛重|淨重|箱重|單重|總重))"
+        r"\s*[:：]?\s*|"
+        r"(?P<abbr_label>(?:G\.?\s*W\.?|N\.?\s*W\.?|GW|NW))"
+        r"(?:\s*[:：]\s*|\s+)"
+        r")"
+        r"(?P<rest>(?:(?:大概|大約|約為|約)\s*\d.*|\d.*|不詳))",
+        line,
+        re.I,
+    )
+    if not match:
+        return None
+    label = match["cn_label"] or match["abbr_label"]
+    strict = re.fullmatch(
+        r"(?:約\s*)?"
+        r"(?P<value>\d+(?:\.\d+)?(?:\s*[/／]\s*\d+(?:\.\d+)?)?)"
+        r"\s*(?P<unit>kg|公斤|千克|g|公克|克)?\s*"
+        r"(?:\(\s*(?P<scope>單個|每個|單件|每件)\s*\))?\s*",
+        match["rest"],
+        re.I,
+    )
+    supported = {
+        "單個重量", "每個重量", "單件重量", "每件重量", "單重",
+        "整箱毛重", "整箱重量", "箱重", "毛重",
+        "整箱毛淨重", "箱毛淨重", "毛淨重",
+    }
+    scope = strict["scope"] if strict else ""
+    unit = strict["unit"] if strict else ""
+    return {
+        "label": label,
+        "supported_label": label in supported or label == "重量",
+        "known": bool(
+            strict
+            and (label in supported or bool(label == "重量" and scope))
+        ),
+        "unit": unit or "",
+        "scope": scope or "",
+        "strict": bool(strict),
+    }
+
+
+def is_standalone_laser_metadata(value):
+    line = unicodedata.normalize("NFKC", str(value or "")).strip()
+    return bool(re.fullmatch(
+        r"\(?\s*帶[鐳雷]射(?:標)?(?:\s*/\s*[^()]+)?\s*\)?",
+        line,
+        re.I,
+    ))
+
+
+def is_order_condition_line(value):
+    line = unicodedata.normalize("NFKC", str(value or "")).strip()
+    return bool(re.search(r"(?:起訂|起批)", line))
+
+
+def is_fulfilment_condition_line(value):
+    line = unicodedata.normalize("NFKC", str(value or "")).strip()
+    return bool(re.fullmatch(r"\([^()]+(?:出貨|發貨)[^()]*\)", line))
+
+
+def carton_qualifier_notes(value):
+    """Return parenthetical carton qualifiers without changing carton units."""
+    line = unicodedata.normalize("NFKC", str(value or "")).strip()
+    if not re.match(r"^(?:每箱數量|箱數|裝箱量|裝箱數量|裝箱數|裝箱|一箱)\s*[:：]?", line):
+        return []
+    notes = [item.strip() for item in re.findall(r"\(([^()]+)\)", line) if item.strip()]
+    slash_qualifier = re.search(r"/\s*([^/()]+)\s*$", line)
+    if slash_qualifier and slash_qualifier[1].strip() not in {"箱"}:
+        notes.append(slash_qualifier[1].strip())
+    return list(dict.fromkeys(notes))
+
+
+def metadata_format_issues(text):
+    """Find ambiguous metadata formats that must block derived costs."""
+    issues = []
+    for source_line in str(text or "").splitlines():
+        line = unicodedata.normalize("NFKC", source_line).strip()
+        weight_info = weight_field_info(line)
+        if weight_info and not re.search(r"木架|木框", line):
+            if weight_info["label"] == "重量" and not weight_info["scope"]:
+                issues.append("重量欄位「重量」未標明單個或整箱，須確認重量範圍")
+            elif not weight_info["supported_label"]:
+                issues.append(
+                    f"未識別重量欄位「{weight_info['label']}」，不可猜測為整箱或單個重量"
+                )
+            if weight_info["strict"] and not weight_info["unit"]:
+                issues.append(
+                    f"重量欄位「{weight_info['label']}」缺少單位，須確認 kg 或 g"
+                )
+            elif weight_info["supported_label"] and not weight_info["strict"]:
+                issues.append(
+                    f"重量欄位「{weight_info['label']}」格式或單位不明，須核對原文"
+                )
+        dimension_info = labeled_dimension_info(line)
+        if dimension_info:
+            if dimension_info["decimal_comma"]:
+                issues.append(
+                    f"尺寸欄位「{dimension_info['label']}」含小數逗號，須確認原值"
+                )
+            elif dimension_info["missing_unit"]:
+                issues.append(
+                    f"尺寸欄位「{dimension_info['label']}」缺少單位，須確認 cm 或 mm"
+                )
+            elif not dimension_info["valid"]:
+                issues.append(
+                    f"尺寸欄位「{dimension_info['label']}」格式不明，須核對原文"
+                )
+        if re.match(r"^包裝\s*[:：]\s*包裝\s*[:：]", line, re.I):
+            issues.append("包裝欄位標籤重複，須核對原文")
+    return list(dict.fromkeys(issues))
+
+
+def is_name_metadata_line(value):
+    """Recognize narrow metadata shapes without deleting ordinary name words."""
+    return bool(
+        labeled_dimension_info(value)
+        or weight_field_info(value)
+        or is_standalone_laser_metadata(value)
+        or is_order_condition_line(value)
+        or is_fulfilment_condition_line(value)
+        or re.fullmatch(r"展示盒\s*\d+\s*(?:個|隻|只|盒|套)", str(value or "").strip())
+    )
+
+
 def parse_text_legacy(text):
     common = {
         "price": 0.0,
@@ -709,7 +878,7 @@ def parse_text_legacy(text):
         exclusion_keywords = [
             '型號','型号','貨號','货号','單價','单价','單個價格','单个价格',
             '價格','价格','裝箱','装箱','箱數','箱数','每箱','一箱',
-            '數量','数量','重量','單重','单重','單個重量','单个重量',
+            '數量','数量','單重','单重','單個重量','单个重量',
             '每個重量','每个重量','毛重','箱重','整箱重量','整箱毛重',
             '尺寸','單個尺寸','单个尺寸','單個包裝','单个包装',
             '彩盒','外箱','產品','产品','規格','规格','亞克力','亚克力',
@@ -729,6 +898,11 @@ def parse_text_legacy(text):
             line_s = re.sub(EMOJI_PAT, '', line_s).strip()
             line_s = re.sub(r'\[[^\]]{1,20}\]', '', line_s).strip()
             if not line_s:
+                continue
+
+            if is_name_metadata_line(line_s):
+                if name_lines:
+                    break
                 continue
 
             # 「單套價格／單盒價格／單件價格…」都是欄位資料，不是品名。
@@ -933,6 +1107,7 @@ def parse_text(text):
     number = r"\d+(?:\.\d+)?"
     units = r"pcs|pc|個|隻|只|盒|套|瓶|罐|包|袋|件"
     issues = common["issues"]
+    issues.extend(metadata_format_issues(normalized))
     # 未知的「單X價格」不能悄悄退回只有數字、沒有計價單位的成本。
     # 保留價格供人工核對，但用 issue 阻斷所有衍生成本與報價。
     unit_price_labels = list(re.finditer(
@@ -974,7 +1149,7 @@ def parse_text(text):
     if len(prices) > 1:
         issues.append("存在多個價格，請一次貼一則報價並確認費用範圍")
     qty_matches = list(re.finditer(
-        rf"(?:每箱數量|箱數|裝箱量|裝箱數|裝箱|一箱)\s*:?\s*(?P<value>\d+)\s*(?P<unit>{units})?",
+        rf"(?:每箱數量|箱數|裝箱量|裝箱數量|裝箱數|裝箱|一箱)\s*:?\s*(?P<value>\d+)\s*(?P<unit>{units})?",
         cost_basis_text, re.I))
     if not qty_matches:
         qty_matches = list(re.finditer(rf"(?P<value>\d+)\s*(?P<unit>{units})\s*/\s*箱", cost_basis_text, re.I))
@@ -1011,7 +1186,7 @@ def parse_text(text):
     # 只接受此窄範圍句型，不恢復把任意裸 KG 當箱重的高風險兜底。
     if not carton_values:
         inline_carton_matches = list(re.finditer(
-            rf"(?:每箱數量|箱數|裝箱量|裝箱數|裝箱|一箱)\s*:?\s*"
+            rf"(?:每箱數量|箱數|裝箱量|裝箱數量|裝箱數|裝箱|一箱)\s*:?\s*"
             rf"\d+\s*(?:{units})\s*[,，、;；]\s*(?:約)?\s*"
             rf"({number})\s*(kg|公斤|千克)(?=$|[\s，,。.;；）)])",
             carton_text,
@@ -1039,10 +1214,10 @@ def parse_text(text):
         issues.append("偵測到多款商品；目前請每款分別貼上解析，避免共用錯誤參數")
     if codes and len(codes) == 1:
         products = [{"code": normalize_code(codes[0][1]), "name": products[0]["name"] if products else ""}]
-    size = rf"({number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*\s*(?:cm|mm|公分|毫米)?)"
+    size = rf"({number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*\s*(?:cm|mm|公分|毫米))"
     fields = {
         "outer_box_size": r"^(?:外箱規格|外箱尺寸|外箱)\s*:?\s*",
-        "color_box_size": r"^(?:彩盒尺寸|彩盒|單個包裝尺寸|單個包裝|包裝盒尺寸|包裝盒|包裝尺寸|亞克力)\s*:?\s*",
+        "color_box_size": r"^(?:彩盒尺寸|彩盒|白盒尺寸|白盒|單個包裝尺寸|單個包裝|包裝盒尺寸|包裝盒|包裝尺寸|亞克力)\s*:?\s*",
         "prod_size": r"^(?:產品尺寸|單個尺寸|尺寸|產品)\s*:?\s*",
     }
     for field, label in fields.items():
@@ -1054,7 +1229,7 @@ def parse_text(text):
                 common[field] = match[1].strip()
                 break
     # Named metadata must not be swallowed by the product name.
-    meta = rf"^(?:型號|貨號|產品編號|編號|(?:單|每)\s*[A-Za-z0-9\u4e00-\u9fff]{{1,6}}\s*(?:價格|價)|單價|價格|每箱|箱數|裝箱|一箱|重量|單重|單個重量|每個重量|整箱|毛重|箱重|尺寸|產品尺寸|產品\s*:|彩盒|外箱|包裝|單個包裝|材質|材積|端盒|木架|木框|帶鐳|帶雷|USB|配件|電池|\d+\s*(?:個|款|種))"
+    meta = rf"^(?:型號|貨號|產品編號|編號|(?:單|每)\s*[A-Za-z0-9\u4e00-\u9fff]{{1,6}}\s*(?:價格|價)|單價|價格|每箱|箱數|裝箱|一箱|單重|單個重量|每個重量|整箱|毛重|箱重|尺寸|產品尺寸|產品\s*:|彩盒|外箱|包裝|單個包裝|材質|材積|端盒|木架|木框|帶鐳|帶雷|USB|配件|電池|\d+\s*(?:個|款|種))"
     if len(products) == 1 and codes:
         name_lines = []
         for line in normalized.splitlines():
@@ -1066,6 +1241,7 @@ def parse_text(text):
                     continue
             if (
                 re.match(meta, line, re.I)
+                or is_name_metadata_line(line)
                 or re.search(r"木架|木框", line)
                 or supplemental_uncertainty_issues(line)
             ):
@@ -1075,11 +1251,43 @@ def parse_text(text):
         products[0]["name"] = " ".join(name_lines[:3])
     # Keep supplemental text verbatim (normalized), including units/approximation.
     notes = []
+    product_names = {
+        str(product.get("name") or "").strip()
+        for product in products
+        if str(product.get("name") or "").strip()
+    }
+    canonical_dimension_labels = {
+        "產品尺寸", "單個尺寸", "尺寸", "產品",
+        "彩盒尺寸", "彩盒", "單個包裝尺寸", "單個包裝",
+        "包裝盒尺寸", "包裝盒", "亞克力",
+        "外箱規格", "外箱尺寸", "外箱",
+    }
     for line in normalized.splitlines():
         line = line.strip()
+        if line in product_names:
+            continue
         if has_affirmative_license_marker(line):
             notes.append("正版授權")
             continue
+        notes.extend(carton_qualifier_notes(line))
+        dimension_info = labeled_dimension_info(line)
+        if dimension_info and (
+            not dimension_info["valid"]
+            or dimension_info["label"] not in canonical_dimension_labels
+            or dimension_info["label"] == "包裝尺寸"
+        ):
+            notes.append(line)
+        weight_info = weight_field_info(line)
+        if weight_info and (
+            not weight_info["known"]
+            or not weight_info["unit"]
+            or (weight_info["label"] == "重量" and not weight_info["scope"])
+        ):
+            notes.append(line)
+        if is_order_condition_line(line) or is_fulfilment_condition_line(line):
+            notes.append(line)
+        if re.fullmatch(r"展示盒\s*\d+\s*(?:個|隻|只|盒|套)", line):
+            notes.append(line)
         if (
             re.search(r"帶[鐳雷]射|正版授權|材質|顏色|圖案|端盒|木架|木框|包裝|USB|充電|約.*(?:kg|公斤|克)|另加|另計|加收|另收|額外收費|附加費|運費|物流費|快遞費|郵費|配送費|打包費|包裝費|加工費|手工費|貼標費|印刷費|組裝費|開模費|版費|配件費|稅費|稅點|服務費|搬運費|裝卸費|差價|待定|待確認", line, re.I)
             or supplemental_uncertainty_issues(line)

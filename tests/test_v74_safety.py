@@ -261,7 +261,14 @@ def test_nine_original_clipboards():
     for raw, exp in zip(raws, expected):
         c, p = ns["parse_text"](raw)
         assert (p[0]["code"],c["price"],c["qty"],c["weight"],c["unit_weight_g"]) == exp
-        assert not c["issues"], (exp[0], c["issues"])
+        if exp[0] == "7028":
+            assert c["outer_box_size"] == ""
+            assert any(
+                "外箱尺寸" in issue and "缺少單位" in issue
+                for issue in c["issues"]
+            )
+        else:
+            assert not c["issues"], (exp[0], c["issues"])
 
 
 def test_mc_z0001_wooden_rack_is_optional_and_uses_no_rack_inputs():

@@ -26,27 +26,46 @@ _NO_PATTERN = re.compile(r"(?:NO)?\s*(\d+)", re.IGNORECASE)
 _UNIT_PATTERN = re.compile(r"^[^\s/：:]+$")
 _PRICE_UNITS = {"個", "盒", "套", "瓶", "罐", "包", "袋"}
 _INTERNAL_PREFIX = re.compile(r"^計價單位\s*[：:]")
-_OUTER_BOX_PREFIX = re.compile(r"^(?:外箱尺寸|外箱規格|外箱规格|外箱)\s*[：:]?")
+_OUTER_BOX_PREFIX = re.compile(
+    r"^(?:外箱尺寸|外箱規格|外箱规格|外箱|箱規|箱规)\s*[：:]?"
+)
 _WEIGHT_PREFIX = re.compile(
     r"^(?:整箱毛重|整箱重量|箱重|毛重|淨重|净重|單個重量|单个重量|"
-    r"每個重量|每个重量|單件重量|单件重量|每件重量|單重|单重|重量)\s*[：:]?"
+    r"每個重量|每个重量|單件重量|单件重量|每件重量|單重|单重|重量)"
+    r"(?=\s|[：:]|\d|$)\s*[：:]?"
+)
+_UNKNOWN_WEIGHT_PREFIX = re.compile(
+    r"^(?:"
+    r"[A-Za-z0-9\u4e00-\u9fff]{0,12}(?:重量|毛重|淨重|净重|箱重|單重|单重|總重|总重)"
+    r"\s*[：:]?\s*|"
+    r"(?:G\.?\s*W\.?|N\.?\s*W\.?|GW|NW)(?:\s*[：:]\s*|\s+)"
+    r")"
+    r"(?:(?:大概|大約|大约|約為|约为|約|约)\s*\d+(?:\.\d+)?|"
+    r"\d+(?:\.\d+)?|不詳|不详)",
+    re.IGNORECASE,
 )
 _WOOD_PATTERN = re.compile(r"(?:木架|木框)")
 _CARTON_PREFIX = re.compile(r"^裝箱\s*")
 _PRODUCT_SIZE_PREFIX = re.compile(r"^(?:(?:產品|产品)\s*)?尺寸\s*[：:]?")
 _PACKAGING_SIZE_PREFIX = re.compile(
-    r"^(彩盒尺寸|包裝尺寸|包装尺寸|端盒尺寸)\s*[：:]?\s*(.+)$"
+    r"^(彩盒尺寸|白盒尺寸|白盒|包裝尺寸|包装尺寸|端盒尺寸)\s*[：:]?\s*(.+)$"
 )
 _PACKAGING_SIZE_PRIORITY = {
+    "白盒尺寸": -1,
+    "白盒": -1,
     "彩盒尺寸": 0,
     "端盒尺寸": 1,
     "包裝尺寸": 2,
     "包装尺寸": 2,
 }
 _TRAILING_PRIVATE_FIELD = re.compile(
-    r"\s+(?=(?:外箱尺寸|外箱規格|外箱规格|外箱|整箱毛重|整箱重量|箱重|毛重|"
+    r"\s+(?=(?:外箱尺寸|外箱規格|外箱规格|外箱|箱規|箱规|整箱毛重|整箱重量|箱重|毛重|"
     r"淨重|净重|單個重量|单个重量|每個重量|每个重量|單件重量|单件重量|"
-    r"每件重量|單重|单重|重量|木架|木框)\s*[：:]?)"
+    r"每件重量|單重|单重|重量)(?=\s|[：:]|\d|$)\s*[：:]?|"
+    r"(?:[A-Za-z0-9\u4e00-\u9fff]{0,12}(?:重量|毛重|淨重|净重|箱重|單重|单重|總重|总重)"
+    r"\s*[：:]?\s*|(?:G\.?\s*W\.?|N\.?\s*W\.?|GW|NW)(?:\s*[：:]\s*|\s+))"
+    r"(?:(?:大概|大約|大约|約為|约为|約|约)\s*\d+(?:\.\d+)?|"
+    r"\d+(?:\.\d+)?|不詳|不详)|木架|木框)"
 )
 
 
@@ -121,6 +140,7 @@ def _ad_detail_lines(details):
             _INTERNAL_PREFIX.match(normalized)
             or _OUTER_BOX_PREFIX.match(normalized)
             or _WEIGHT_PREFIX.match(normalized)
+            or _UNKNOWN_WEIGHT_PREFIX.match(normalized)
             or _WOOD_PATTERN.search(normalized)
             or _CARTON_PREFIX.match(normalized)
         ):
