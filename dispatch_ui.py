@@ -315,7 +315,7 @@ def _draft_item(store, batch, item, history, source_images=None):
 
 
 def _draft(store, batch, history):
-    st.info("先多選／全選商品做整批驗算，再點品號查看明細與人工核對。勾選範圍、計算一致都不代表已完成核對。")
+    st.caption("直接瀏覽商品圖片；需要驗算或人工核對時，使用下方工具。")
     try:
         if "dispatch_review_catalog" not in st.session_state:
             with st.spinner("讀取原報價資料供左右對照…"):
@@ -362,6 +362,7 @@ def _draft(store, batch, history):
                 return "請核對成本／來源"
         return "待核對" if item_errors(item) else "已核對"
     source_images = _source_image_tools(store, batch)
+    render_batch_image_preview(store, visible, source_images, batch["id"])
     cached_candidates = source_images
     render_batch_cost_tools(store, batch, items, visible, row_state, cached_candidates)
     st.subheader("③ 單款明細與人工核對")
@@ -382,7 +383,6 @@ def _draft(store, batch, history):
                 for i in updated["items"]:
                     i["order"] = ordered.index(i["id"]) + 1
                 _save(store, updated, batch)
-    render_batch_image_preview(store, items, source_images, batch["id"])
     ready = sum(not i["excluded"] and not item_errors(i)
                 and not source_changes({**batch, "items": [i]}, st.session_state["dispatch_review_catalog"]) for i in items)
     excluded = sum(i["excluded"] for i in items)
@@ -557,9 +557,11 @@ def render_dispatch_manager(store_factory):
     from nas_image_ui import render_nas_image_management
     from thumbnail_ui import render_thumbnail_management
     scope_cache(st.session_state, store)
-    render_nas_image_management(store)
-    render_thumbnail_management(store)
-    render_category_settings(store)
+    with st.sidebar.expander("圖片維護設定"):
+        if st.checkbox("顯示維護工具", key="dispatch_show_maintenance"):
+            render_nas_image_management(store)
+            render_thumbnail_management(store)
+            render_category_settings(store)
     options = [""] + [b["id"] for b in history]
     active = st.session_state.get("dispatch_active", "")
     history_revision = digest([(b["id"], b.get("_revision", "")) for b in history])[:16]

@@ -29,15 +29,15 @@ def test_explicit_build_and_readonly_paged_preview_preserves_all_business_data()
     sheet = app.session_state["sheet"]
     before = {k: deepcopy(ws.rows) for k, ws in sheet.sheets.items()}
     assert not app.exception and not app.session_state["network"].sessions
-    widget(app, "checkbox", "載入本頁縮圖").check().run()
-    assert not app.get("image") and len(app.info) == 6
+    assert len(app.get("image")) == 6 and not app.error
     assert not app.session_state["network"].sessions
     widget(app, "checkbox", "讀取縮圖進度").check().run()
     widget(app, "button", "建立下一批縮圖（最多 10 張）").click().run()
     assert 5 <= len(app.get("image")) <= 6 and not app.exception
     widget(app, "button", "建立下一批縮圖（最多 10 張）").click().run()
     assert app.success and widget(app, "button", "建立下一批縮圖（最多 10 張）").disabled
-    assert widget(app, "checkbox", "載入本頁縮圖").value and len(app.get("image")) == 6
+    assert not any(w.label == "載入本頁縮圖" for w in app.checkbox)
+    assert len(app.get("image")) == 6
     assert before == {k: sheet.sheets[k].rows for k in before}
     all_before = {k: deepcopy(ws.rows) for k, ws in sheet.sheets.items()}
     objects_before = dict(app.session_state["network"].objects)

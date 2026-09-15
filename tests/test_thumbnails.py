@@ -93,12 +93,28 @@ def test_63_derivatives_seven_groups_keep_originals_quotes_bindings_and_reviews(
     assert all(s.closed for s in network.sessions)
 
 
-def test_thumbnail_miss_is_not_an_original_download_or_implicit_upload():
+def test_thumbnail_miss_generates_readonly_preview_without_setup():
     sheet, store, network = seeded(2)
     before = {k: deepcopy(ws.rows) for k, ws in sheet.sheets.items()}
-    store.get_assets = lambda *a: pytest.fail("missing thumbnail fell back")
-    assert store.get_thumbnails(store.thumbnail_status()["pending"]) == {}
+    ids = store.thumbnail_status()["pending"]
+    thumbs = store.get_thumbnails(ids)
+    assert set(thumbs) == set(ids)
+    for thumb in thumbs.values():
+        check_thumbnail(thumb)
     assert not network.sessions and before == {k: ws.rows for k, ws in sheet.sheets.items()}
+
+
+def test_migrated_originals_without_derivatives_are_readable_without_cloud_writes():
+    sheet, store, network = seeded(2)
+    ids = store.migrate_next_images()
+    before = {k: deepcopy(ws.rows) for k, ws in sheet.sheets.items()}
+    objects = dict(network.objects)
+    thumbs = store.get_thumbnails(ids)
+    assert set(thumbs) == set(ids)
+    for thumb in thumbs.values():
+        check_thumbnail(thumb)
+    assert before == {k: ws.rows for k, ws in sheet.sheets.items()}
+    assert objects == network.objects
 
 
 @pytest.mark.parametrize("kind", ["missing", "corrupt", "secret_missing", "secret_invalid", "wrong_library"])

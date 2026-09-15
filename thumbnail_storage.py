@@ -104,7 +104,14 @@ class NasThumbnailMixin:
             self._nas()
         if self.nas_config is None:
             return {k: make_thumbnail(v) for k, v in self.get_assets(wanted).items()}
-        if not locations:
-            return {}  # Never silently download originals for missing NAS thumbnails.
-        with self._nas() as nas:
-            return {k: nas.get_thumbnail(meta) for k, meta in locations.items()}
+        result = {}
+        if locations:
+            with self._nas() as nas:
+                result = {k: nas.get_thumbnail(meta) for k, meta in locations.items()}
+        # Missing derivatives are made only in memory from the exact bound original.
+        # Existing but invalid derivatives still fail above; viewing never writes.
+        missing = wanted - locations.keys()
+        if missing:
+            for identity in sorted(missing):
+                result[identity] = make_thumbnail(self.get_asset(identity))
+        return result

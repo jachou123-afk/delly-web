@@ -63,5 +63,9 @@ def test_failed_write_reports_pending_and_keeps_verification_zero():
 def test_full_dispatch_page_has_management_and_no_network_when_closed():
     app = AppTest.from_string(source(1, full=True), default_timeout=15).run()
     assert not app.exception
-    assert widget(app, "checkbox", "讀取 NAS 搬移進度")
+    assert not any(w.label == "讀取 NAS 搬移進度" for w in app.checkbox)
+    assert not app.session_state["nas_test_network"].sessions
+    widget(app, "checkbox", "顯示維護工具").check().run()
+    assert not app.exception
+    assert widget(app, "checkbox", "讀取 NAS 搬移進度") in app.sidebar.checkbox
     assert not app.session_state["nas_test_network"].sessions

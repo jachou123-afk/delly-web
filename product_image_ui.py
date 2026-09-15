@@ -48,10 +48,10 @@ def render_source_images(store, batch):
     refs = library["images"] if library else {}
     found = sum(bool(v) for v in refs.values())
     if library is not None:
-        st.caption(f"商品圖庫：{found}／{len(products)} 款可自動帶圖。只載入目前查看商品的原檔；帶入圖片不代表已核對。")
+        st.caption(f"本批 {found}／{len(products)} 款已有配對圖片。")
     else:
         st.caption("商品圖庫：狀態未能讀取，暫不顯示自動帶圖數量。")
-    with st.expander("圖片管理：整包匯入／保存配對／重新讀取原表"):
+    with st.expander("補圖或調整圖片配對"):
         st.caption("舊商品整包配對一次，保存到圖庫後各批次共用；不需要每次重新搬圖。")
         if library:
             for warning in library["warnings"]:

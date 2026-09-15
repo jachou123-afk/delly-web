@@ -45,7 +45,7 @@ def test_bound_images_auto_preview_without_writing_or_marking_review():
     spreadsheet = app.session_state["test_spreadsheet"]
     before = {k: deepcopy(ws.rows) for k, ws in spreadsheet.sheets.items()}
     assert len(widget(app, "multiselect", "採用的原表／圖片包圖片").value) == 2
-    assert any("1／69 款可自動帶圖" in c.value for c in app.caption)
+    assert any("1／69 款已有配對圖片" in c.value for c in app.caption)
     assert not widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").value
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
     widget(app, "button", "全選本批（69 款）").click().run()
@@ -64,7 +64,7 @@ def test_save_unique_package_then_reload_autoloads_without_upload_again():
     assert len(CloudDispatchStore(spreadsheet).product_image_bindings()) == 1
     widget(app, "button", "重新載入雲端").click().run()
     assert not app.exception and len(widget(app, "multiselect", "採用的原表／圖片包圖片").value) == 1
-    assert any("1／69 款可自動帶圖" in c.value for c in app.caption)
+    assert any("1／69 款已有配對圖片" in c.value for c in app.caption)
     assert spreadsheet.sheets["G正版"].rows == quote_before
     assert {m.label: m.value for m in app.metric}["可發送"] == "0"
 
@@ -91,7 +91,7 @@ def test_library_read_error_is_not_reported_as_missing_images(monkeypatch):
     widget(app, "button", "重新載入雲端").click().run()
     assert not app.exception and any("圖庫讀取失敗" in e.value for e in app.error)
     assert any("狀態未能讀取" in c.value for c in app.caption)
-    assert not any("0／69 款可自動帶圖" in c.value for c in app.caption)
+    assert not any("0／69 款已有配對圖片" in c.value for c in app.caption)
     assert not any("採用的原表／圖片包圖片" == m.label for m in app.multiselect)
 
 
@@ -107,6 +107,7 @@ def test_quote_upload_interface_is_present_and_empty_is_optional():
 
 def test_category_ui_saves_explicit_code_and_invalidates_catalog():
     app = start()
+    widget(app, "checkbox", "顯示維護工具").check().run()
     spreadsheet = app.session_state["test_spreadsheet"]
     from dispatch_fakes import FakeWorksheet, product_rows
     spreadsheet.sheets["D吊飾"] = FakeWorksheet("D吊飾", product_rows((1,), category="D吊飾")["D吊飾"])

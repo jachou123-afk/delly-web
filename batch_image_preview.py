@@ -24,12 +24,11 @@ def preview_plan(item, references):
 def render_batch_image_preview(store, items, source_images, batch_id):
     scope_cache(st.session_state, store)
     key = "dispatch_page_thumbs_" + batch_id
-    with st.expander("整批廣告預覽", expanded=bool(st.session_state.get(key))):
+    with st.expander("商品圖片", expanded=True):
         plans = {i["id"]: preview_plan(i, source_images.get(i["id"], [])) for i in items if not i["excluded"]}
         available = sum(bool(p["ids"] or p["inline"]) for p in plans.values())
         st.caption(f"本批 {len(plans)} 款：{available} 款有圖片可預覽，{len(plans) - available} 款待補圖／確認配對。")
-        st.caption("每頁 6 款，只讀本頁縮圖；文字細節請到上方「逐款核對」選品號看原圖。"
-                   "縮圖不代表已核對，不會替換本批發送原圖；未保存的手動文案修改不包含在預覽。")
+        st.caption("每頁 6 款，圖片自動載入；點圖片右上角可放大。核對與修改請到下方「逐款核對」。")
         pages = max(1, math.ceil(len(items) / PAGE_SIZE))
         page_key = "dispatch_preview_page_" + batch_id
         st.session_state[page_key] = min(pages, max(1, st.session_state.get(page_key, 1)))
@@ -45,53 +44,58 @@ def render_batch_image_preview(store, items, source_images, batch_id):
         start = (page - 1) * PAGE_SIZE
         visible = items[start:start + PAGE_SIZE]
         st.write(f"本頁第 {start + 1 if visible else 0}～{start + len(visible)} 款／清單共 {len(items)} 款（含暫緩）")
-        show = st.checkbox("載入本頁縮圖", key=key)
+        if st.button("重新載入圖片", key=key + "_reload"):
+            for item in visible:
+                plan = plans.get(item["id"], {})
+                for identity in plan.get("ids", []):
+                    st.session_state.pop(THUMB_PREFIX + identity, None)
+                for asset in plan.get("inline", []):
+                    st.session_state.pop(THUMB_PREFIX + "inline_" + asset["sha256"], None)
         failures, loaded = {}, {}
-        if show:
-            wanted = list(dict.fromkeys(a for i in visible if not i["excluded"]
-                          for a in plans[i["id"]]["ids"] if THUMB_PREFIX + a not in st.session_state))
-            if wanted:
-                try:
-                    with st.spinner(f"讀取本頁 {len(wanted)} 張縮圖…"):
-                        loaded = (store.get_thumbnails(wanted) if hasattr(store, "get_thumbnails") else
-                                  {k: make_thumbnail(v) for k, v in store.get_assets(wanted).items()})
-                except Exception:
-                    failures = {a: "縮圖讀取失敗；未改用原圖或其他商品圖" for a in wanted}
-        for item in visible:
-            code = item["source"]["code"] or item["id"]
-            if item["excluded"]:
-                st.caption(f"{code} · 已排除：{item['reason']}")
-                continue
-            plan = plans[item["id"]]
-            st.write(f"{item['order']}. {code}｜{item['source']['name']}")
-            left, right = st.columns([1, 2])
-            with left:
+        wanted = list(dict.fromkeys(a for i in visible if not i["excluded"]
+                      for a in plans[i["id"]]["ids"] if THUMB_PREFIX + a not in st.session_state))
+        if wanted:
+            try:
+                with st.spinner("載入圖片…"):
+                    loaded = (store.get_thumbnails(wanted) if hasattr(store, "get_thumbnails") else
+                              {k: make_thumbnail(v) for k, v in store.get_assets(wanted).items()})
+            except Exception:
+                failures = {a: "圖片載入失敗，請按「重新載入圖片」。" for a in wanted}
+        for index, item in enumerate(visible):
+            if index % 3 == 0:
+                cards = st.columns(3)
+            with cards[index % 3], st.container(border=True):
+                code = item["source"]["code"] or item["id"]
+                st.write(f"{item['order']}. {code}｜{item['source']['name']}")
+                if item["excluded"]:
+                    st.caption(f"{code} · 已排除：{item['reason']}")
+                    continue
+                plan = plans[item["id"]]
                 if plan["pending"]:
                     st.warning(plan["pending"])
                 else:
-                    st.caption(plan["label"] + " · 預覽縮圖（非發送原檔）")
-                    if show:
-                        for identity in plan["ids"]:
-                            if identity in failures:
-                                st.error(f"{code}：{failures[identity]}")
-                            elif THUMB_PREFIX + identity not in st.session_state and identity not in loaded:
-                                st.info("縮圖尚未建立，請到上方「NAS 縮圖管理」建立；原圖仍可在單款核對查看。")
-                            else:
-                                try:
-                                    asset = cached(st.session_state, THUMB_PREFIX, identity, lambda: loaded[identity])
-                                    st.image(asset_bytes(asset), caption=asset["name"], width="stretch")
-                                except Exception:
-                                    st.error(f"{code}：縮圖校驗失敗，未使用其他圖片。")
-                        for asset in plan["inline"]:
+                    if plan["inline"]:
+                        st.caption("圖片候選，待確認配對")
+                    for identity in plan["ids"]:
+                        if identity in failures:
+                            st.error(f"{code}：{failures[identity]}")
+                        elif THUMB_PREFIX + identity not in st.session_state and identity not in loaded:
+                            st.error("圖片載入失敗，請按「重新載入圖片」。")
+                        else:
                             try:
-                                thumb = cached(st.session_state, THUMB_PREFIX, "inline_" + asset["sha256"],
-                                               lambda: make_thumbnail(asset))
-                                st.image(asset_bytes(thumb), caption=asset["name"], width="stretch")
+                                asset = cached(st.session_state, THUMB_PREFIX, identity, lambda: loaded[identity])
+                                st.image(asset_bytes(asset), width="stretch")
                             except Exception:
-                                st.error(f"{code}：圖片候選縮圖無法讀取")
-            with right:
-                if item["copy"]:
-                    st.code(item["copy"], language=None)
-                else:
-                    st.warning("文案尚未產生，請查看本款待處理原因。")
-            st.divider()
+                                st.error(f"{code}：圖片載入失敗，請按「重新載入圖片」。")
+                    for asset in plan["inline"]:
+                        try:
+                            thumb = cached(st.session_state, THUMB_PREFIX, "inline_" + asset["sha256"],
+                                           lambda: make_thumbnail(asset))
+                            st.image(asset_bytes(thumb), width="stretch")
+                        except Exception:
+                            st.error(f"{code}：圖片載入失敗，請按「重新載入圖片」。")
+                with st.expander("查看文案"):
+                    if item["copy"]:
+                        st.code(item["copy"], language=None)
+                    else:
+                        st.warning("文案尚未產生，請查看本款待處理原因。")
