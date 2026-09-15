@@ -1,9 +1,10 @@
 """Explicit, user-confirmed LINE room renames; never fuzzy-match rooms."""
 
-ADVERTISING_TARGET = "【利潤10%】自動排廣告群組"
+ADVERTISING_TARGET = "【利潤10%】 自動排廣告群組"
 TARGET_ALIASES = {
     "【自動排廣告群組】": ADVERTISING_TARGET,
     "自動排廣告群組": ADVERTISING_TARGET,
+    "【利潤10%】自動排廣告群組": ADVERTISING_TARGET,
 }
 
 
