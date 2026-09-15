@@ -311,6 +311,38 @@ def record_observation(batch, *, item_id, part, evidence, actor, target, action_
     return result
 
 
+def record_observation_batch(batch, *, item_ids, evidence, actor, target, action_id=None):
+    """Fill only missing image/text observations for explicitly reviewed active items."""
+    result = deepcopy(batch)
+    requested = list(dict.fromkeys(item_ids))
+    if not requested:
+        raise DispatchError("沒有可補登的商品")
+    active = {i["id"]: i for i in result["items"] if not i["excluded"]}
+    if any(item_id not in active for item_id in requested):
+        raise DispatchError("批次補登只能套用到本批未排除商品")
+    base_id = action_id or uuid.uuid4().hex
+    changed = []
+    for item_id in requested:
+        item = next(i for i in result["items"] if i["id"] == item_id)
+        if item.get("uncertain"):
+            raise DispatchError("有商品仍是結果待確認，請先逐款查明")
+        for part in ("image", "text"):
+            if not item[part + "_receipts"]:
+                result = record_observation(
+                    result, item_id=item_id, part=part, evidence=evidence,
+                    actor=actor, target=target,
+                    action_id=f"{base_id}:{item_id}:{part}",
+                )
+                changed.append(f"{item_id}:{part}")
+    if not changed:
+        raise DispatchError("所選商品的圖片與文案均已有核對紀錄")
+    result["audit"].append({
+        "at": now(), "actor": actor.strip(), "action": "事後批次補登已核對 LINE 圖文",
+        "items": requested, "filled": changed, "evidence": evidence.strip(),
+    })
+    return result
+
+
 def reconciliation(batch):
     missing, partial, uncertain, duplicates = [], [], [], []
     complete = 0

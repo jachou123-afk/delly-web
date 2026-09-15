@@ -11,7 +11,7 @@ import streamlit as st
 from dispatch_manager import (
     DispatchError, digest, edit_item,
     finish_batch, item_errors, item_status, new_batch, now, prior_activity,
-    reconciliation, record_observation, sequence_gaps, source_changes,
+    reconciliation, record_observation, record_observation_batch, sequence_gaps, source_changes,
 )
 from dispatch_storage import asset_bytes, validate_image
 from dispatch_review import comparison_rows, hydrate_draft, unit_confirmed
@@ -473,6 +473,32 @@ def _progress(store, batch):
         st.write(batch["reconciliation"])
         return
     active = [i for i in items if not i["excluded"]]
+    pending = [i for i in active if not i["image_receipts"] or not i["text_receipts"]]
+    if pending:
+        with st.expander(f"事後批次補登已發圖文（尚缺 {len(pending)} 款）"):
+            st.warning("只用於已實際發送、且已逐款查看 LINE 紀錄的商品；本功能不會發送 LINE。")
+            with st.form("dispatch_retro_batch_" + batch["id"] + batch.get("_revision", "")):
+                observed_target = st.text_input("事後補登的實際聊天室", value=batch["target"])
+                actor = st.text_input("事後補登核對人", value=batch["actor"])
+                evidence = st.text_input(
+                    "事後補登依據",
+                    placeholder="例如：2026-09-15 LINE 匯出紀錄，逐款核對圖片後接同品號文案",
+                )
+                checked = st.checkbox(
+                    f"我已逐款查看 LINE 紀錄，確認這 {len(pending)} 款的圖片與文案皆在正確聊天室"
+                )
+                if st.form_submit_button(f"一次補齊尚缺的 {len(pending)} 款圖文紀錄", type="primary"):
+                    if not checked:
+                        st.error("請先逐款核對 LINE 紀錄並勾選確認。")
+                    else:
+                        try:
+                            updated = record_observation_batch(
+                                batch, item_ids=[i["id"] for i in pending], evidence=evidence,
+                                actor=actor, target=observed_target,
+                            )
+                            _save(store, updated, batch)
+                        except Exception as exc:
+                            st.error(str(exc))
     item_id = _select_item("目前要處理的商品", active, batch, "progress",
                            lambda k: next(f"{i['order']}. {i['source']['code']}｜{item_status(i)}｜{i['source']['name']}" for i in active if i["id"] == k))
     item = next(i for i in active if i["id"] == item_id)
