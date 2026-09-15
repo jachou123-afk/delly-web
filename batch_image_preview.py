@@ -1,7 +1,12 @@
-"""Read-only draft preview: batch choices first, then clearly labelled library images."""
+"""Six-product pages of display-only thumbnails; original choices never change."""
+import math
 import streamlit as st
 
 from dispatch_storage import asset_bytes
+from image_cache import cached, scope_cache, THUMB_PREFIX
+from image_thumbnails import make_thumbnail
+
+PAGE_SIZE = 6
 
 
 def preview_plan(item, references):
@@ -17,33 +22,42 @@ def preview_plan(item, references):
 
 
 def render_batch_image_preview(store, items, source_images, batch_id):
-    key = "dispatch_all_images_" + batch_id
+    scope_cache(st.session_state, store)
+    key = "dispatch_page_thumbs_" + batch_id
     with st.expander("整批廣告預覽", expanded=bool(st.session_state.get(key))):
         plans = {i["id"]: preview_plan(i, source_images.get(i["id"], [])) for i in items if not i["excluded"]}
         available = sum(bool(p["ids"] or p["inline"]) for p in plans.values())
         st.caption(f"本批 {len(plans)} 款：{available} 款有圖片可預覽，{len(plans) - available} 款待補圖／確認配對。")
-        st.caption("本批已保存的圖片優先；未保存者顯示圖庫圖片或唯一候選。這是草稿預覽，不代表已核對或可發送；單款尚未儲存的手動修改不包含在這裡。")
-        show = st.checkbox("載入整批商品圖片", key=key,
-                           help="勾選後顯示本批全部可用圖片；不修改核對、價格或 LINE 狀態。")
-        failures = {}
+        st.caption("每頁 6 款，只讀本頁縮圖；文字細節請到上方「逐款核對」選品號看原圖。"
+                   "縮圖不代表已核對，不會替換本批發送原圖；未保存的手動文案修改不包含在預覽。")
+        pages = max(1, math.ceil(len(items) / PAGE_SIZE))
+        page_key = "dispatch_preview_page_" + batch_id
+        st.session_state[page_key] = min(pages, max(1, st.session_state.get(page_key, 1)))
+        left, middle, right = st.columns([1, 2, 1])
+        def move_page(delta):
+            st.session_state[page_key] = min(pages, max(1, st.session_state[page_key] + delta))
+        left.button("上一頁", key=key + "_prev", disabled=st.session_state[page_key] <= 1,
+                    on_click=move_page, args=(-1,))
+        right.button("下一頁", key=key + "_next", disabled=st.session_state[page_key] >= pages,
+                     on_click=move_page, args=(1,))
+        page = middle.selectbox("預覽頁碼", list(range(1, pages + 1)), key=page_key,
+                                format_func=lambda n: f"第 {n}／{pages} 頁")
+        start = (page - 1) * PAGE_SIZE
+        visible = items[start:start + PAGE_SIZE]
+        st.write(f"本頁第 {start + 1 if visible else 0}～{start + len(visible)} 款／清單共 {len(items)} 款（含暫緩）")
+        show = st.checkbox("載入本頁縮圖", key=key)
+        failures, loaded = {}, {}
         if show:
-            wanted = list(dict.fromkeys(a for p in plans.values() for a in p["ids"]
-                                       if "dispatch_asset_" + a not in st.session_state))
+            wanted = list(dict.fromkeys(a for i in visible if not i["excluded"]
+                          for a in plans[i["id"]]["ids"] if THUMB_PREFIX + a not in st.session_state))
             if wanted:
-                with st.spinner(f"讀取 {len(wanted)} 張原圖供整批預覽…"):
-                    # Small groups avoid one network request per product. A failed
-                    # group is reported on its products, never silently replaced.
-                    for start in range(0, len(wanted), 10):
-                        group = wanted[start:start + 10]
-                        try:
-                            loaded = store.get_assets(group)
-                            for asset_id in group:
-                                asset_bytes(loaded[asset_id])
-                            for asset_id in group:
-                                st.session_state["dispatch_asset_" + asset_id] = loaded[asset_id]
-                        except Exception as exc:
-                            failures.update({a: str(exc) for a in group})
-        for item in items:
+                try:
+                    with st.spinner(f"讀取本頁 {len(wanted)} 張縮圖…"):
+                        loaded = (store.get_thumbnails(wanted) if hasattr(store, "get_thumbnails") else
+                                  {k: make_thumbnail(v) for k, v in store.get_assets(wanted).items()})
+                except Exception:
+                    failures = {a: "縮圖讀取失敗；未改用原圖或其他商品圖" for a in wanted}
+        for item in visible:
             code = item["source"]["code"] or item["id"]
             if item["excluded"]:
                 st.caption(f"{code} · 已排除：{item['reason']}")
@@ -55,22 +69,26 @@ def render_batch_image_preview(store, items, source_images, batch_id):
                 if plan["pending"]:
                     st.warning(plan["pending"])
                 else:
-                    count = len(plan["ids"]) + len(plan["inline"])
-                    st.caption(f"{plan['label']} · {count} 張" + ("" if show else "；勾選上方「載入整批商品圖片」查看"))
+                    st.caption(plan["label"] + " · 預覽縮圖（非發送原檔）")
                     if show:
-                        for asset_id in plan["ids"]:
-                            try:
-                                if asset_id in failures:
-                                    raise ValueError(failures[asset_id])
-                                asset = st.session_state["dispatch_asset_" + asset_id]
-                                st.image(asset_bytes(asset), caption=asset["name"], width="stretch")
-                            except Exception as exc:
-                                st.error(f"{code} 圖片讀取失敗：{exc}；未當成缺圖，未換成其他圖片。")
+                        for identity in plan["ids"]:
+                            if identity in failures:
+                                st.error(f"{code}：{failures[identity]}")
+                            elif THUMB_PREFIX + identity not in st.session_state and identity not in loaded:
+                                st.info("縮圖尚未建立，請到上方「NAS 縮圖管理」建立；原圖仍可在單款核對查看。")
+                            else:
+                                try:
+                                    asset = cached(st.session_state, THUMB_PREFIX, identity, lambda: loaded[identity])
+                                    st.image(asset_bytes(asset), caption=asset["name"], width="stretch")
+                                except Exception:
+                                    st.error(f"{code}：縮圖校驗失敗，未使用其他圖片。")
                         for asset in plan["inline"]:
                             try:
-                                st.image(asset_bytes(asset), caption=asset["name"], width="stretch")
-                            except Exception as exc:
-                                st.error(f"{code} 圖片候選無法讀取：{exc}")
+                                thumb = cached(st.session_state, THUMB_PREFIX, "inline_" + asset["sha256"],
+                                               lambda: make_thumbnail(asset))
+                                st.image(asset_bytes(thumb), caption=asset["name"], width="stretch")
+                            except Exception:
+                                st.error(f"{code}：圖片候選縮圖無法讀取")
             with right:
                 if item["copy"]:
                     st.code(item["copy"], language=None)

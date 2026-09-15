@@ -18,6 +18,7 @@ from batch_cost_ui import render_batch_cost_tools
 from product_image_ui import render_source_images, render_save_current_images
 from category_ui import render_category_settings
 from batch_image_preview import render_batch_image_preview
+from image_cache import cached, ORIGINAL_PREFIX, scope_cache
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -48,10 +49,8 @@ def _save(store, batch, original=None):
 
 
 def _get_asset(store, asset_id):
-    key = "dispatch_asset_" + asset_id
-    if key not in st.session_state:
-        st.session_state[key] = store.get_asset(asset_id)
-    return st.session_state[key]
+    scope_cache(st.session_state, store)
+    return cached(st.session_state, ORIGINAL_PREFIX, asset_id, lambda: store.get_asset(asset_id))
 
 
 def _show_images(store, images, key, download=False):
@@ -556,7 +555,10 @@ def render_dispatch_manager(store_factory):
         st.info("請確認雲端連線後重新載入，讀取失敗不會被當成沒有已發紀錄。")
         return
     from nas_image_ui import render_nas_image_management
+    from thumbnail_ui import render_thumbnail_management
+    scope_cache(st.session_state, store)
     render_nas_image_management(store)
+    render_thumbnail_management(store)
     render_category_settings(store)
     options = [""] + [b["id"] for b in history]
     active = st.session_state.get("dispatch_active", "")

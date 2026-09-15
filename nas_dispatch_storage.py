@@ -5,6 +5,7 @@ from dispatch_manager import DispatchError
 from dispatch_storage import (CloudDispatchStore, IMAGE_SHEET, MAX_IMAGE_BYTES,
                               asset_bytes, decode_records, encode_record, validate_image)
 from synology_image_store import EXTENSIONS, NasConfig, SynologyImageStore
+from thumbnail_storage import NasThumbnailMixin
 
 LOCATION_SHEET = "_商品圖片位置"
 LOCATION_FIELDS = {"schema", "storage", "library_id", "root", "sha256", "name", "mime", "size"}
@@ -23,7 +24,7 @@ def _same_location(left, right):
     return all(left.get(k) == right.get(k) for k in LOCATION_FIELDS - {"name"})
 
 
-class NasDispatchStore(CloudDispatchStore):
+class NasDispatchStore(NasThumbnailMixin, CloudDispatchStore):
     def __init__(self, spreadsheet, config=None, *, config_error=False,
                  nas_factory=SynologyImageStore):
         super().__init__(spreadsheet)

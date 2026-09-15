@@ -75,32 +75,46 @@ def test_69_item_preview_shows_63_library_images_not_zero_batch_images():
     assert app.session_state["test_reads"] == []
     assert any("63 款有圖片可預覽，6 款待補圖" in c.value for c in app.caption)
     assert len(app.get("image")) == 0
-    widget(app, "checkbox", "載入整批商品圖片").check().run()
-    assert not app.exception and len(app.get("image")) == 63
-    assert len(app.code) == 69 and len(app.warning) == 6
-    assert list(map(len, app.session_state["test_reads"])) == [10, 10, 10, 10, 10, 10, 3]
+    widget(app, "checkbox", "載入本頁縮圖").check().run()
+    assert not app.exception and len(app.get("image")) == 6
+    assert len(app.code) == 6 and not app.warning
+    assert list(map(len, app.session_state["test_reads"])) == [6]
     assert before == {k: w.rows for k, w in sheets.sheets.items()}
     assert batch_before == app.session_state["test_batch"]
     assert all(not i["images"] and not i["review"] for i in batch_before["items"])
     reads = deepcopy(app.session_state["test_reads"])
-    widget(app, "checkbox", "載入整批商品圖片").uncheck().run()
-    widget(app, "checkbox", "載入整批商品圖片").check().run()
-    assert len(app.get("image")) == 63 and app.session_state["test_reads"] == reads
+    widget(app, "checkbox", "載入本頁縮圖").uncheck().run()
+    widget(app, "checkbox", "載入本頁縮圖").check().run()
+    assert len(app.get("image")) == 6 and app.session_state["test_reads"] == reads
+    image_count, code_count, missing_count = 6, 6, 0
+    for page in range(2, 13):
+        widget(app, "selectbox", "預覽頁碼").select(page).run()
+        assert not app.exception and len(app.code) <= 6
+        image_count += len(app.get("image"))
+        code_count += len(app.code)
+        missing_count += len(app.warning)
+    assert (image_count, code_count, missing_count) == (63, 69, 6)
+    assert max(map(len, app.session_state["test_reads"])) == 6
+    assert widget(app, "button", "下一頁").disabled
+    assert before == {k: w.rows for k, w in sheets.sheets.items()}
+    assert batch_before == app.session_state["test_batch"]
 
 
 def test_read_failure_keeps_product_rows_and_does_not_call_failed_images_missing():
     app = start(fail=True)
-    widget(app, "checkbox", "載入整批商品圖片").check().run()
-    assert not app.exception and len(app.code) == 69
-    assert len(app.error) == 10 and all("合成讀取中斷" in e.value for e in app.error)
-    assert len(app.get("image")) == 53 and len(app.warning) == 6
+    widget(app, "checkbox", "載入本頁縮圖").check().run()
+    assert not app.exception and len(app.code) == 6
+    assert len(app.error) == 6 and all("縮圖讀取失敗" in e.value for e in app.error)
+    assert len(app.get("image")) == 0 and not app.warning
+    widget(app, "button", "下一頁").click().run()
+    assert len(app.get("image")) == 6 and not app.error
     assert all(not i["review"] for i in app.session_state["test_batch"]["items"])
 
 
 def test_excluded_item_is_named_but_its_image_is_not_loaded():
     app = start(excluded=True)
-    widget(app, "checkbox", "載入整批商品圖片").check().run()
-    assert not app.exception and len(app.get("image")) == 62 and len(app.code) == 68
+    widget(app, "checkbox", "載入本頁縮圖").check().run()
+    assert not app.exception and len(app.get("image")) == 5 and len(app.code) == 5
     assert any("BGD-G-1 · 已排除" in c.value for c in app.caption)
 
 
@@ -112,7 +126,7 @@ def test_full_dispatch_page_connects_library_to_bulk_preview_and_labels_table():
     assert any("1 款有圖片可預覽，68 款待補圖" in c.value for c in app.caption)
     assert any("2 張圖庫已存" in str(d.value) for d in app.dataframe)
     before_images = len(app.get("image"))
-    widget(app, "checkbox", "載入整批商品圖片").check().run()
+    widget(app, "checkbox", "載入本頁縮圖").check().run()
     assert not app.exception and len(app.get("image")) == before_images + 2
     assert before == {k: w.rows for k, w in spreadsheet.sheets.items()}
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled

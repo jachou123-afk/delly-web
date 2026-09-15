@@ -218,7 +218,7 @@ class SynologyImageStore:
                 "root": self.config.root, "sha256": asset["sha256"], "name": asset["name"],
                 "mime": asset["mime"], "size": len(asset_bytes(asset))}
 
-    def _path(self, metadata):
+    def _path(self, metadata, *, thumbnail=False):
         from dispatch_storage import MAX_IMAGE_BYTES
         if (not isinstance(metadata, dict) or metadata.get("schema") != 1
                 or metadata.get("storage") != "synology"
@@ -232,11 +232,23 @@ class SynologyImageStore:
                 or not 0 < metadata["size"] <= MAX_IMAGE_BYTES):
             raise DispatchError("NAS 圖片索引不符或指向不同圖庫，停止讀寫")
         digest = metadata["sha256"]
-        return f"{self.config.root}/originals/{digest[:2]}/{digest}.{EXTENSIONS[metadata['mime']]}"
+        folder = "originals"
+        if thumbnail:
+            from image_thumbnails import THUMB_BYTES, THUMB_VERSION
+            if metadata["mime"] != "image/webp" or metadata["size"] > THUMB_BYTES:
+                raise DispatchError("NAS 縮圖索引格式或大小不符")
+            folder = f"thumbnails/v{THUMB_VERSION}"
+        return f"{self.config.root}/{folder}/{digest[:2]}/{digest}.{EXTENSIONS[metadata['mime']]}"
 
     def get_asset(self, metadata):
+        return self._read_asset(metadata, self._path(metadata))
+
+    def get_thumbnail(self, metadata):
+        from image_thumbnails import check_thumbnail
+        return check_thumbnail(self._read_asset(metadata, self._path(metadata, thumbnail=True)))
+
+    def _read_asset(self, metadata, path):
         from dispatch_storage import validate_image
-        path = self._path(metadata)
         params = self._parameters("SYNO.FileStation.Download", "download", {"path": [path], "mode": "download"})
         raw, content_type = self._request(self._apis["SYNO.FileStation.Download"]["path"], params, limit=metadata["size"])
         if "json" in content_type or "text/html" in content_type:
@@ -250,10 +262,17 @@ class SynologyImageStore:
 
     def put_asset(self, asset):
         """Skip existing paths, then verify bytes. Never overwrite/delete files."""
+        return self._put_asset(asset)
+
+    def put_thumbnail(self, asset):
+        from image_thumbnails import check_thumbnail
+        return self._put_asset(check_thumbnail(asset), thumbnail=True)
+
+    def _put_asset(self, asset, *, thumbnail=False):
         from dispatch_storage import asset_bytes, validate_image
         clean = validate_image(asset_bytes(asset), asset["name"])
         metadata = self._metadata(clean)
-        path = self._path(metadata)
+        path = self._path(metadata, thumbnail=thumbnail)
         folder, filename = path.rsplit("/", 1)
         if not self._root_checked:
             self.check_root()
@@ -265,5 +284,8 @@ class SynologyImageStore:
             # The server may have accepted the image before the connection died.
             # Do not blindly retry writes or publish an unverified reference.
             raise DispatchError("NAS 原圖保存結果待確認；未發布圖片索引，請只重試圖片核對") from None
-        self.get_asset(metadata)
+        if thumbnail:
+            self.get_thumbnail(metadata)
+        else:
+            self.get_asset(metadata)
         return metadata
