@@ -23,10 +23,11 @@ from category_ui import render_category_settings
 from batch_image_preview import render_batch_image_preview
 from batch_approval import prepare_batch, preparation_issues, confirm_prepared_batch
 from image_cache import cached, ORIGINAL_PREFIX, scope_cache
+from dispatch_targets import ADVERTISING_TARGET, canonical_target, same_target
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
-CHAT_TARGETS = ["周俊安", "【自動排廣告群組】"]
+CHAT_TARGETS = ["周俊安", ADVERTISING_TARGET]
 
 
 def _next_batch_name(history):
@@ -339,8 +340,9 @@ def _draft(store, batch, history):
     with st.expander("修改批次名稱或目標聊天室"):
         with st.form("dispatch_details_" + batch["id"] + batch.get("_revision", "")):
             name = st.text_input("批次名稱", value=batch["name"])
-            targets = list(dict.fromkeys(CHAT_TARGETS + [batch["target"]]))
-            target = st.selectbox("目標聊天室", targets, index=targets.index(batch["target"]))
+            current_target = canonical_target(batch["target"])
+            targets = list(dict.fromkeys(CHAT_TARGETS + [current_target]))
+            target = st.selectbox("目標聊天室", targets, index=targets.index(current_target))
             actor = st.text_input("修改人", value=batch["actor"])
             if st.form_submit_button("儲存批次設定"):
                 if not name.strip() or not target.strip() or not actor.strip():
@@ -348,7 +350,7 @@ def _draft(store, batch, history):
                 else:
                     updated = deepcopy(batch)
                     updated.update(name=name.strip(), target=target.strip(), actor=actor.strip())
-                    if target.strip() != batch["target"]:
+                    if not same_target(target, batch["target"]):
                         for i in updated["items"]:
                             i["duplicate_note"] = ""
                     updated["audit"].append({"at": now(), "actor": actor.strip(), "action": "修改批次設定"})

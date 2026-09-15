@@ -9,6 +9,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 from dispatch_review import inspect_source, unit_confirmed
+from dispatch_targets import canonical_target, same_target
 
 
 class DispatchError(ValueError):
@@ -106,7 +107,7 @@ def new_batch(name, target, products, actor, selected_keys=None, excluded_reason
                       "image_receipts": [], "text_receipts": [], "uncertain": None,
                       "duplicate_note": ""})
     return {"schema": 1, "id": uuid.uuid4().hex, "name": name.strip(),
-            "target": target.strip(), "actor": actor.strip(), "created_at": now(),
+            "target": canonical_target(target), "actor": actor.strip(), "created_at": now(),
             "status": "draft", "approved_at": None, "approved_digest": None,
             "items": items, "observations": [], "reconciliation": None,
             "audit": [{"at": now(), "actor": actor.strip(), "action": "建立草稿"}]}
@@ -214,7 +215,7 @@ def source_changes(batch, fresh_products):
 def prior_activity(batch, item, history):
     hits = []
     for old in history:
-        if old["id"] == batch["id"] or old["target"].strip() != batch["target"].strip():
+        if old["id"] == batch["id"] or not same_target(old["target"], batch["target"]):
             continue
         for previous in old["items"]:
             if previous["id"] != item["id"] or previous["excluded"]:
