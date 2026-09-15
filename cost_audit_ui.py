@@ -28,7 +28,7 @@ def render_cost_review(store, source, prefix, actor):
         for error in report["errors"]:
             st.caption(error)
     if report["source_ready"]:
-        st.info("原文已保存，待核對。確認原文、參數與商品相符後，再勾選本款確認。")
+        st.info("原文已保存，供需要時查看；最後統一確認整批圖文，不必逐款勾選。")
     else:
         st.warning(evidence_status(report if loaded else None) + "。表內數字不是完整廠商原文；舊資料不會自動回補。")
     with st.expander("查看原文與計算參數"):

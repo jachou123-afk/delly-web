@@ -46,7 +46,7 @@ def test_bound_images_auto_preview_without_writing_or_marking_review():
     before = {k: deepcopy(ws.rows) for k, ws in spreadsheet.sheets.items()}
     assert len(widget(app, "multiselect", "採用的原表／圖片包圖片").value) == 2
     assert any("1／69 款已有配對圖片" in c.value for c in app.caption)
-    assert not widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").value
+    assert not any(w.label.startswith("我已核對原文、圖片") for w in app.checkbox)
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
     widget(app, "button", "全選本批（69 款）").click().run()
     assert before == {k: ws.rows for k, ws in spreadsheet.sheets.items()}
@@ -66,12 +66,12 @@ def test_save_unique_package_then_reload_autoloads_without_upload_again():
     assert not app.exception and len(widget(app, "multiselect", "採用的原表／圖片包圖片").value) == 1
     assert any("1／69 款已有配對圖片" in c.value for c in app.caption)
     assert spreadsheet.sheets["G正版"].rows == quote_before
-    assert {m.label: m.value for m in app.metric}["可發送"] == "0"
+    assert {m.label: m.value for m in app.metric}["待整批確認"] == "1"
 
 
 def test_multiple_unbound_candidates_need_explicit_choice_before_binding():
     app = start(imported=True)
-    choose = widget(app, "selectbox", "逐款核對")
+    choose = widget(app, "selectbox", "查看商品")
     choose.set_value("G正版:no2").run()
     pictures = widget(app, "multiselect", "採用的原表／圖片包圖片")
     assert pictures.value == []
@@ -81,7 +81,7 @@ def test_multiple_unbound_candidates_need_explicit_choice_before_binding():
     assert not app.exception
     binding = CloudDispatchStore(app.session_state["test_spreadsheet"]).product_image_bindings()["G正版:no2"]
     assert len(binding["assets"]) == 2
-    assert not widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").value
+    assert not any(w.label.startswith("我已核對原文、圖片") for w in app.checkbox)
 
 
 def test_library_read_error_is_not_reported_as_missing_images(monkeypatch):

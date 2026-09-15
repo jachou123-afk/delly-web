@@ -358,7 +358,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
             raise DispatchError("報價依據寫後核對未完成；請重新載入，不要重複新增商品")
         return evidence
 
-    def verify_cost_checks(self, batch):
+    def verify_cost_checks(self, batch, *, require_source=True):
         """Re-read all active formula blocks in bounded requests before approval."""
         from collections import defaultdict
         from cost_audit import blockers, fingerprint
@@ -379,7 +379,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
                     raise DispatchError("成本公式讀取不完整，停止確認")
                 for item, formulas in zip(chosen, blocks):
                     report = self._cost_report(item["source"], formulas)
-                    if blockers(item["source"], report) or fingerprint(report) != fingerprint(item.get("cost_audit")):
+                    if blockers(item["source"], report, require_source=require_source) or fingerprint(report) != fingerprint(item.get("cost_audit")):
                         raise DispatchError(f"{item['source']['code']}：成本公式或原始依據已變更／尚未核對，請重新驗算")
 
     def source_images(self, products):

@@ -41,17 +41,17 @@ def selected(app):
 
 def test_all_none_native_checkbox_state_and_detail_focus_are_separate():
     app = start()
-    focus = widget(app, "selectbox", "逐款核對").value
+    focus = widget(app, "selectbox", "查看商品").value
     assert widget(app, "button", "驗算所選商品（0 款）").disabled
     widget(app, "button", "全選本批（69 款）").click().run()
     assert not app.exception
     assert len(selected(app)) == 69
-    assert widget(app, "selectbox", "逐款核對").value == focus
+    assert widget(app, "selectbox", "查看商品").value == focus
     assert len(json.loads(app.dataframe[0].proto.selection_state)["selection"]["rows"]) == 69
     widget(app, "button", "取消全選").click().run()
     assert not selected(app)
     assert json.loads(app.dataframe[0].proto.selection_state)["selection"]["rows"] == []
-    assert widget(app, "selectbox", "逐款核對").value == focus
+    assert widget(app, "selectbox", "查看商品").value == focus
 
 
 def test_all_69_render_a_result_and_never_auto_review_or_write():
@@ -65,7 +65,7 @@ def test_all_69_render_a_result_and_never_auto_review_or_write():
     assert app.dataframe[1].value["品號"].tolist() == [f"BGD-G-{n}" for n in range(1, 70)]
     assert {m.label: m.value for m in app.metric}["表內重算一致"] == "69"
     assert any("缺原文 69 款" in m.value for m in app.markdown)
-    assert {m.label: m.value for m in app.metric}["可發送"] == "0"
+    assert {m.label: m.value for m in app.metric}["待整批確認"] == "0"
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
     assert before == {k: v.rows for k, v in app.session_state["test_spreadsheet"].sheets.items()}
 

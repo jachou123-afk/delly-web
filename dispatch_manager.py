@@ -127,17 +127,19 @@ def batch_digest(batch):
         for i in batch["items"]]})
 
 
-def item_errors(item):
+def item_errors(item, *, require_review=True, require_source=True):
     if item["excluded"]:
         return [] if item["reason"].strip() else ["排除商品需填寫原因"]
     errors = list(item["source"]["errors"])
     if item["source"].get("cost_audit_required"):
         from cost_audit import blockers
-        errors.extend(blockers(item["source"], item.get("cost_audit")))
+        errors.extend(blockers(item["source"], item.get("cost_audit"), require_source=require_source))
     if item["source"].get("unit_mode") == "legacy" and item["source"].get("copy") and not unit_confirmed(item):
         errors.append("待確認計價單位：裝箱單位不等於已確認的售價單位")
     if not item["images"]:
         errors.append("尚未加入商品圖片")
+    if len(item["images"]) > 5:
+        errors.append("每款最多 5 張圖片")
     text = item["copy"].strip()
     expected = item["source"]["copy"]
     if expected:
@@ -156,7 +158,7 @@ def item_errors(item):
     if len(text) > 4500:
         errors.append("文案過長，請縮短至 4500 字以內")
     review = item.get("review")
-    if not review or review["digest"] != content_digest(item):
+    if require_review and (not review or review["digest"] != content_digest(item)):
         errors.append("圖片、文案與來源尚未逐款核對")
     return list(dict.fromkeys(errors))
 
@@ -222,7 +224,8 @@ def prior_activity(batch, item, history):
     return hits
 
 
-def approve_batch(batch, fresh_products, history, actor):
+def approve_batch(batch, fresh_products, history, actor, *, batch_review=False,
+                  acknowledge_missing_source=False):
     result = deepcopy(batch)
     if result["status"] != "draft" or not actor.strip():
         raise DispatchError("批次狀態不允許確認，或缺少核對人")
@@ -230,12 +233,24 @@ def approve_batch(batch, fresh_products, history, actor):
         raise DispatchError("本批沒有待發商品")
     errors = source_changes(result, fresh_products)
     for item in result["items"]:
-        errors += [f"{item['source']['code'] or item['id']}：{e}" for e in item_errors(item)]
+        errors += [f"{item['source']['code'] or item['id']}：{e}" for e in item_errors(
+            item, require_review=not batch_review, require_source=not batch_review)]
         if not item["excluded"] and prior_activity(result, item, history) and not item["duplicate_note"].strip():
             errors.append(f"{item['source']['code']}：同聊天室已有安排／發送紀錄，請填寫再次安排原因")
+    missing_source = [i["id"] for i in result["items"] if not i["excluded"]
+                      and i["source"].get("cost_audit_required")
+                      and not (i.get("cost_audit") or {}).get("source_ready")]
+    if batch_review and missing_source and not acknowledge_missing_source:
+        errors.append("本批有缺廠商原文的商品，請先確認已知悉此限制；表內重算不代表原文正確")
     if errors:
         raise DispatchError("\n".join(errors))
     result.update(status="approved", approved_at=now(), approved_digest=batch_digest(result))
+    if batch_review:
+        # One explicit batch decision, never manufacture individual reviews or
+        # change the original-evidence status to make the gate pass.
+        result["batch_confirmation"] = {"actor": actor.strip(), "at": result["approved_at"],
+                                         "digest": result["approved_digest"],
+                                         "missing_source_ids": missing_source}
     result["audit"].append({"at": now(), "actor": actor.strip(), "action": "確認本批內容"})
     return result
 

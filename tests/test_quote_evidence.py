@@ -132,7 +132,7 @@ render_cost_review(store, store.catalog()[0], 'test', '測試人')
     assert not app.exception
     viewer = next(e for e in app.expander if e.label == "查看原文與計算參數")
     assert not viewer.proto.expanded
-    assert any("原文已保存，待核對" in i.value for i in app.info)
+    assert any("原文已保存，供需要時查看" in i.value for i in app.info)
     assert any("保存時間：20" in c.value for c in app.caption)
     assert any("合成廠商原文" in t.value for t in app.text)
 
@@ -149,4 +149,4 @@ def test_supplement_clears_previous_batch_result_without_changing_quote_or_revie
     assert not app.exception
     assert "dispatch_bulk_result_test" not in app.session_state
     assert app.session_state["test_spreadsheet"].sheets["G正版"].rows == before
-    assert not widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").value
+    assert not any(w.label.startswith("我已核對原文、圖片") for w in app.checkbox)

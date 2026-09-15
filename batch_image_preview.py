@@ -28,7 +28,7 @@ def render_batch_image_preview(store, items, source_images, batch_id):
         plans = {i["id"]: preview_plan(i, source_images.get(i["id"], [])) for i in items if not i["excluded"]}
         available = sum(bool(p["ids"] or p["inline"]) for p in plans.values())
         st.caption(f"本批 {len(plans)} 款：{available} 款有圖片可預覽，{len(plans) - available} 款待補圖／確認配對。")
-        st.caption("每頁 6 款，圖片自動載入；點圖片右上角可放大。核對與修改請到下方「逐款核對」。")
+        st.caption("每頁 6 款，圖片自動載入；點圖片右上角可放大。需要修改時展開下方「查看／修改單款」。")
         pages = max(1, math.ceil(len(items) / PAGE_SIZE))
         page_key = "dispatch_preview_page_" + batch_id
         st.session_state[page_key] = min(pages, max(1, st.session_state.get(page_key, 1)))

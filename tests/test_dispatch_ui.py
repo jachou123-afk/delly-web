@@ -59,7 +59,7 @@ render_dispatch_manager(lambda: CloudDispatchStore(st.session_state["test_spread
 '''
 
 
-def test_old_draft_can_compare_source_confirm_unit_and_save_then_advance():
+def test_old_draft_can_fix_unknown_unit_without_individual_approval():
     from copy import deepcopy
     from dispatch_storage import CloudDispatchStore
     from dispatch_manager import item_errors
@@ -67,16 +67,15 @@ def test_old_draft_can_compare_source_confirm_unit_and_save_then_advance():
     assert not app.exception
     before = deepcopy(app.session_state["test_spreadsheet"].sheets["G正版"].rows)
     assert "售價53元/個" in widget(app, "text_area", "LINE 文案").value
-    assert any("逐欄核對表" in value.value for value in app.markdown)
-    assert widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").disabled
+    assert widget(app, "button", "確認本批內容，建立待發清單").disabled
     widget(app, "checkbox", "我已確認售價按「每個」計價，與裝箱單位相同").check().run()
     widget(app, "text_input", "單位確認依據").set_value("已對照廠商原文，售價與装箱均以個計算").run()
-    widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").check().run()
-    widget(app, "button", "確認並下一款").click().run()
+    widget(app, "button", "儲存本款修改").click().run()
     assert not app.exception
-    assert "1127" in widget(app, "selectbox", "逐款核對").value
+    assert "1126" in widget(app, "selectbox", "查看商品").value
     saved = CloudDispatchStore(app.session_state["test_spreadsheet"]).list_batches()[0]
-    assert not item_errors(saved["items"][0])
+    assert not item_errors(saved["items"][0], require_review=False)
+    assert saved["items"][0]["review"] is None
     assert saved["status"] == "draft" and saved["items"][0]["image_receipts"] == []
     assert app.session_state["test_spreadsheet"].sheets["G正版"].rows == before
 
@@ -87,12 +86,11 @@ def test_source_change_is_visible_and_prevents_review_until_refresh():
     widget(app, "button", "重新載入雲端").click().run()
     assert not app.exception
     assert any("原報價表與這份草稿不同" in value.value for value in app.warning)
-    assert widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").disabled
-    assert widget(app, "button", "確認並下一款").disabled
+    assert not any(w.label == "確認並下一款" for w in app.button)
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
 
 
-def test_v84_cost_panel_exposes_amounts_and_missing_original_blocks_review():
+def test_cost_panel_exposes_amounts_and_missing_original_requires_batch_acknowledgment():
     from dispatch_storage import EVIDENCE_SHEET
     app = AppTest.from_string(app_source(ready=True), default_timeout=15).run()
     assert {m.label: m.value for m in app.metric}["原表到手成本（TWD）"] == "47.6"
@@ -102,8 +100,8 @@ def test_v84_cost_panel_exposes_amounts_and_missing_original_blocks_review():
     widget(app, "button", "重新載入雲端").click().run()
     assert not app.exception
     assert any("缺廠商原文" in w.value for w in app.warning)
-    assert widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").disabled
-    assert widget(app, "button", "確認並下一款").disabled
+    assert any("並知悉 1 款缺廠商原文" in w.label for w in app.checkbox)
+    assert not any(w.label == "確認並下一款" for w in app.button)
 
 
 def test_v84_can_supplement_original_once_without_overwriting_quote_or_marking_review():
@@ -121,8 +119,8 @@ def test_v84_can_supplement_original_once_without_overwriting_quote_or_marking_r
     assert not app.exception
     assert spreadsheet.sheets["G正版"].rows == before
     assert "合成原文" in widget(app, "text_area", "本款廠商完整原文（含補充費用）").value
-    assert not widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").value
-    assert widget(app, "button", "確認本批內容，建立待發清單").disabled
+    assert not any(w.label.startswith("我已核對原文、圖片") for w in app.checkbox)
+    assert not widget(app, "checkbox", "我已確認整批商品、圖文內容、順序及目標聊天室").value
     assert CloudDispatchStore(spreadsheet).list_batches()[0]["status"] == "draft"
 
 
@@ -144,11 +142,11 @@ def test_select_source_create_draft_and_reload_keeps_all_products():
     widget(app, "button", "建立雲端草稿").click().run()
     assert not app.exception
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
-    assert widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").disabled
+    assert not any(w.label.startswith("我已核對原文、圖片") for w in app.checkbox)
     widget(app, "button", "重新載入雲端").click().run()
     assert not app.exception
-    assert len(widget(app, "selectbox", "逐款核對").options) == 5
-    assert any("1127" in option for option in widget(app, "selectbox", "逐款核對").options)
+    assert len(widget(app, "selectbox", "查看商品").options) == 5
+    assert any("1127" in option for option in widget(app, "selectbox", "查看商品").options)
 
 
 def test_draft_cannot_approve_unsaved_copy_changes_or_reuse_review_checkbox():
@@ -157,7 +155,7 @@ def test_draft_cannot_approve_unsaved_copy_changes_or_reuse_review_checkbox():
     assert not widget(app, "button", "確認本批內容，建立待發清單").disabled
     original = widget(app, "text_area", "LINE 文案").value
     widget(app, "text_area", "LINE 文案").set_value(original + "\n顏色混裝").run()
-    assert not widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").value
+    assert any("尚未儲存的修改" in w.value for w in app.warning)
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
 
 

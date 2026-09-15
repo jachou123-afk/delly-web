@@ -216,12 +216,12 @@ def evidence_status(report):
     return "缺廠商原文"
 
 
-def blockers(source, report):
+def blockers(source, report, *, require_source=True):
     if not report or report.get("rule") != RULE_VERSION or report.get("source_hash") != source["source_hash"]:
         return ["成本尚未獨立驗算，請開啟本款成本核對"]
     issues = list(report.get("errors", []))
     if not report.get("math_pass"):
         issues.append("成本驗算尚未通過")
-    if not report.get("source_ready"):
+    if require_source and not report.get("source_ready"):
         issues.append("缺少本款廠商原文／當次參數依據，不能視為來源已核對")
     return list(dict.fromkeys(issues))
