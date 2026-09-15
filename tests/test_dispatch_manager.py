@@ -129,6 +129,21 @@ def test_partial_receipt_does_not_complete_item_and_duplicate_registration_is_bl
         record(batch, "G正版:no1", "image")
 
 
+def test_batch_observation_only_fills_missing_parts_without_duplicates():
+    from dispatch_manager import record_observation_batch
+
+    batch = record(approved((1, 2)), "G正版:no1", "image")
+    result = record_observation_batch(
+        batch, item_ids=["G正版:no1", "G正版:no2"], actor="測試",
+        evidence="逐款查看 LINE 匯出紀錄", target=batch["target"], action_id="retro",
+    )
+    first, second = result["items"][:2]
+    assert len(first["image_receipts"]) == len(first["text_receipts"]) == 1
+    assert len(second["image_receipts"]) == len(second["text_receipts"]) == 1
+    assert reconciliation(result)["complete"] == 2
+    assert any(event["action"] == "事後批次補登已核對 LINE 圖文" for event in result["audit"])
+
+
 def test_uncertain_result_blocks_retry_until_resolution_is_documented():
     batch = record(approved((1,)), "G正版:no1", "image")
     batch = record(batch, "G正版:no1", "uncertain")
