@@ -19,10 +19,12 @@ from product_image_ui import render_quote_images, clear_library_cache
 from dispatch_storage import CloudDispatchStore
 from dispatch_ui import render_dispatch_manager
 from supplier_names import normalize_vendor, vendor_options as canonical_vendor_options
+from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.1")
+st.title("🪐 半自動 - 採購報價彙整表 V87.2")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
+render_nas_connection_check()
 # --- 2. Google Sheets 連線功能 ---
 SHEET_NAME = "半自動 - 採購報價彙整表BGD"
 SETTINGS_WS = "_設定"
