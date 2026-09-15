@@ -1,4 +1,4 @@
-# Release V87.5: automatic image viewing and sidebar maintenance settings.
+# Release V87.6: dated batch labels, sequential default names and chat dropdowns.
 streamlit==1.63.0
 pandas
 gspread==6.2.1

@@ -1,7 +1,10 @@
 """Streamlit page for preparing and visually reconciling LINE adverts."""
 import csv
+import re
 from copy import deepcopy
+from datetime import datetime
 from io import StringIO
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -22,6 +25,24 @@ from image_cache import cached, ORIGINAL_PREFIX, scope_cache
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
+CHAT_TARGETS = ["周俊安", "【自動排廣告群組】"]
+
+
+def _next_batch_name(history):
+    numbers = [int(match[1]) for batch in history
+               if (match := re.fullmatch(r"商品批次\s*(\d+)", batch["name"].strip()))]
+    return f"商品批次 {max([len(history), *numbers]) + 1:03d}"
+
+
+def _batch_label(batch):
+    try:
+        created = datetime.fromisoformat(batch.get("created_at", ""))
+        taipei = ZoneInfo("Asia/Taipei")
+        created = created.replace(tzinfo=taipei) if created.tzinfo is None else created.astimezone(taipei)
+        date = created.strftime("%Y/%m/%d")
+    except (TypeError, ValueError):
+        date = "日期未記錄"
+    return f"{date}｜{batch['name']}｜{batch['target']}｜{STATUS[batch['status']]}"
 
 
 def _select_item(label, items, batch, mode, format_func):
@@ -117,21 +138,21 @@ def _create(store, history):
     excluded_reason = ""
     if len(selected) < len(scope):
         excluded_reason = st.text_input("未選取商品的本批排除原因", key="dispatch_scope_reason")
-    automatic_name = f"{dates_selected[0] if len(dates_selected) == 1 else '商品'} 廣告"
+    automatic_name = _next_batch_name(history)
     if ("dispatch_name" not in st.session_state
             or st.session_state["dispatch_name"] == st.session_state.get("dispatch_auto_name")):
         st.session_state["dispatch_name"] = automatic_name
     st.session_state["dispatch_auto_name"] = automatic_name
     name = st.text_input("批次名稱", key="dispatch_name")
-    target_options = list(dict.fromkeys(["【自動排廣告群組】", "周俊安"] + [b["target"] for b in history]))
-    destination = st.selectbox("目標聊天室", [""] + target_options + ["自行輸入"],
-                               format_func=lambda x: x or "請選擇目標聊天室", key="dispatch_destination")
-    target = st.text_input("聊天室完整名稱", key="dispatch_custom_target") if destination == "自行輸入" else destination
+    target = st.selectbox("目標聊天室", CHAT_TARGETS, index=None,
+                          placeholder="請選擇目標聊天室", key="dispatch_destination_v876")
     actor = st.text_input("核對人", key="dispatch_actor")
     st.caption("同名聊天室請先在 LINE 確認群組成員。圖片與文案的已發狀態，依這個目標聊天室分開記錄。")
-    if st.button("建立雲端草稿", type="primary", disabled=not selected or not name.strip() or not target.strip() or not actor.strip() or (len(selected) < len(scope) and not excluded_reason.strip())):
+    if st.button("建立雲端草稿", type="primary", disabled=not selected or not name.strip() or not target or not actor.strip() or (len(selected) < len(scope) and not excluded_reason.strip())):
         try:
             fresh = store.catalog()
+            if name == automatic_name:
+                name = _next_batch_name(store.list_batches())
             batch = new_batch(name, target, scope, actor, selected, excluded_reason)
             changes = source_changes(batch, fresh)
             if changes:
@@ -332,7 +353,8 @@ def _draft(store, batch, history):
     with st.expander("修改批次名稱或目標聊天室"):
         with st.form("dispatch_details_" + batch["id"] + batch.get("_revision", "")):
             name = st.text_input("批次名稱", value=batch["name"])
-            target = st.text_input("目標聊天室完整名稱", value=batch["target"])
+            targets = list(dict.fromkeys(CHAT_TARGETS + [batch["target"]]))
+            target = st.selectbox("目標聊天室", targets, index=targets.index(batch["target"]))
             actor = st.text_input("修改人", value=batch["actor"])
             if st.form_submit_button("儲存批次設定"):
                 if not name.strip() or not target.strip() or not actor.strip():
@@ -566,7 +588,7 @@ def render_dispatch_manager(store_factory):
     active = st.session_state.get("dispatch_active", "")
     history_revision = digest([(b["id"], b.get("_revision", "")) for b in history])[:16]
     chosen = st.selectbox("廣告批次", options, index=options.index(active) if active in options else 0,
-                          format_func=lambda k: "＋ 建立新批次" if not k else next(f"{b['name']}｜{b['target']}｜{STATUS[b['status']]}" for b in history if b["id"] == k),
+                          format_func=lambda k: "＋ 建立新批次" if not k else next(_batch_label(b) for b in history if b["id"] == k),
                           key="dispatch_batch_selector_" + active + history_revision)
     if chosen != active:
         st.session_state["dispatch_active"] = chosen

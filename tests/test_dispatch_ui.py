@@ -161,18 +161,89 @@ def test_draft_cannot_approve_unsaved_copy_changes_or_reuse_review_checkbox():
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
 
 
-def test_default_batch_name_follows_date_but_preserves_custom_name():
+def test_default_batch_name_uses_sequence_and_preserves_custom_name():
     app = AppTest.from_string(app_source(), default_timeout=15).run()
     app.session_state["test_spreadsheet"].sheets["G正版"].rows[1][0] = "2026/9/13"
     widget(app, "button", "載入報價表商品").click().run()
-    assert widget(app, "text_input", "批次名稱").value == "2026-09-13 廣告"
+    assert widget(app, "text_input", "批次名稱").value == "商品批次 001"
     widget(app, "multiselect", "商品日期").set_value(["2026-09-12"]).run()
-    assert widget(app, "text_input", "批次名稱").value == "2026-09-12 廣告"
+    assert widget(app, "text_input", "批次名稱").value == "商品批次 001"
     widget(app, "text_input", "批次名稱").set_value("週末精選・第一批").run()
     widget(app, "multiselect", "商品日期").set_value(["2026-09-13"]).run()
     assert widget(app, "text_input", "批次名稱").value == "週末精選・第一批"
     assert not app.exception
     assert set(app.session_state["test_spreadsheet"].sheets) == {"G正版"}
+
+
+def test_sequence_continues_past_legacy_names_and_existing_numbers():
+    from dispatch_ui import _next_batch_name
+    assert _next_batch_name([]) == "商品批次 001"
+    assert _next_batch_name([{"name": "商品 廣告"}]) == "商品批次 002"
+    assert _next_batch_name([{"name": "商品批次 009"}, {"name": "週末精選"}]) == "商品批次 010"
+    assert _next_batch_name([{"name": "商品批次 999"}]) == "商品批次 1000"
+
+
+def test_batch_selector_date_uses_taipei_creation_date_without_changing_name():
+    from copy import deepcopy
+    from dispatch_ui import _batch_label
+    batch = {"name": "商品 廣告", "target": "周俊安", "status": "draft",
+             "created_at": "2026-09-14T17:30:00+00:00"}
+    before = deepcopy(batch)
+    assert _batch_label(batch) == "2026/09/15｜商品 廣告｜周俊安｜草稿・待核對"
+    assert batch == before
+    batch["created_at"] = ""
+    assert _batch_label(batch).startswith("日期未記錄｜")
+
+
+def test_new_batch_refreshes_cloud_sequence_before_save_and_offers_two_chats():
+    from copy import deepcopy
+    from dispatch_storage import CloudDispatchStore
+    from dispatch_fakes import ready_batch
+    app = AppTest.from_string(app_source(), default_timeout=15).run()
+    widget(app, "button", "載入報價表商品").click().run()
+    assert widget(app, "text_input", "批次名稱").value == "商品批次 001"
+    destination = widget(app, "selectbox", "目標聊天室")
+    assert destination.options == ["周俊安", "【自動排廣告群組】"]
+    assert destination.value is None
+    assert widget(app, "button", "建立雲端草稿").disabled
+    # Another computer creates a batch after this form was opened.
+    spreadsheet = app.session_state["test_spreadsheet"]
+    store = CloudDispatchStore(spreadsheet)
+    other = ready_batch(store)
+    other["name"] = "商品批次 007"
+    store.save_batch(other)
+    quote_before = deepcopy(spreadsheet.sheets["G正版"].rows)
+    destination.set_value("周俊安")
+    widget(app, "text_input", "核對人").set_value("測試人").run()
+    widget(app, "button", "建立雲端草稿").click().run()
+    assert not app.exception
+    new = next(b for b in store.list_batches() if b["id"] != other["id"])
+    assert new["name"] == "商品批次 008" and new["target"] == "周俊安"
+    assert new["status"] == "draft" and all(not i["review"] for i in new["items"])
+    assert quote_before == spreadsheet.sheets["G正版"].rows
+    assert any(new["created_at"][:10].replace("-", "/") in label
+               for label in widget(app, "selectbox", "廣告批次").options)
+
+
+def test_edit_chat_dropdown_preserves_old_target_until_explicit_save():
+    from copy import deepcopy
+    from dispatch_storage import CloudDispatchStore
+    app = AppTest.from_string(app_source(ready=True), default_timeout=15).run()
+    store = CloudDispatchStore(app.session_state["test_spreadsheet"])
+    before = deepcopy(store.list_batches()[0])
+    destination = widget(app, "selectbox", "目標聊天室")
+    assert destination.options[:2] == ["周俊安", "【自動排廣告群組】"]
+    assert destination.value == before["target"] == "測試群組"
+    assert not any(w.label == "目標聊天室完整名稱" for w in app.text_input)
+    destination.set_value("【自動排廣告群組】").run()
+    assert store.list_batches()[0] == before
+    widget(app, "button", "儲存批次設定").click().run()
+    assert not app.exception
+    saved = store.list_batches()[0]
+    assert saved["target"] == "【自動排廣告群組】"
+    assert saved["name"] == before["name"] and saved["created_at"] == before["created_at"]
+    assert saved["status"] == "draft" and saved["observations"] == []
+    assert widget(app, "selectbox", "目標聊天室").options == ["周俊安", "【自動排廣告群組】"]
 
 
 def test_ready_draft_can_be_approved_but_no_item_becomes_sent():
