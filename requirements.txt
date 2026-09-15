@@ -1,4 +1,4 @@
-# Release V87.2: bounded NAS deployment check only; product storage unchanged.
+# Release V87.3: verified NAS image pointers with retained legacy backups.
 streamlit==1.63.0
 pandas
 gspread==6.2.1

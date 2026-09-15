@@ -555,6 +555,8 @@ def render_dispatch_manager(store_factory):
         st.error(f"無法讀取發送紀錄：{exc}")
         st.info("請確認雲端連線後重新載入，讀取失敗不會被當成沒有已發紀錄。")
         return
+    from nas_image_ui import render_nas_image_management
+    render_nas_image_management(store)
     render_category_settings(store)
     options = [""] + [b["id"] for b in history]
     active = st.session_state.get("dispatch_active", "")

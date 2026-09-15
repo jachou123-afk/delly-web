@@ -114,11 +114,11 @@ def render_nas_connection_check():
 
     with st.spinner("檢查 NAS 專用圖庫連線（每次程式啟動最多一次）…"):
         result = _deployment_check.get(read_section)
-    with st.expander("NAS 連線檢查（尚未切換商品圖庫）"):
+    with st.expander("NAS 連線檢查（非商品搬移進度）"):
         st.caption("只測試固定 8×8 小圖；不搬商品、不改雲表、價格、人工核對或 LINE。"
                    "同次程式啟動的成功與失敗都保留，不提供公開重試按鈕。")
         if result["status"] == "unconfigured":
-            st.info("尚未取得 NAS 私密設定；原商品圖庫不變。")
+            st.info("尚未取得 NAS 私密設定；已有 NAS 索引的圖片不會自動改讀舊圖。")
         elif result["status"] == "passed":
             st.success("NAS 測試通過：專用帳號登入、指定圖庫、寫入、新連線讀回及 SHA-256 一致。")
             st.caption(f"固定合成測試圖 {result['bytes']} bytes，保留於專用圖庫；未綁定任何商品。")

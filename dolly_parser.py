@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, vendor_options as canonical_vendor_
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.2")
+st.title("🪐 半自動 - 採購報價彙整表 V87.3")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 render_nas_connection_check()
 # --- 2. Google Sheets 連線功能 ---
@@ -484,7 +484,9 @@ def build_cost_formulas(
     return result
 # --- 3. 工具頁籤；發送管理只使用整理完成的商品資料 ---
 def get_dispatch_store():
-    return CloudDispatchStore(open_spreadsheet(gspread.authorize(get_credentials())))
+    from nas_dispatch_storage import configured_store
+    return configured_store(open_spreadsheet(gspread.authorize(get_credentials())),
+                            lambda: st.secrets.get("nas_images"))
 
 
 def get_category_codes():
