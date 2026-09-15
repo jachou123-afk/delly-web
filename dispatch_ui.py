@@ -602,6 +602,12 @@ def render_dispatch_manager(store_factory):
         st.rerun()
     try:
         store = store_factory()
+        spreadsheet = getattr(store, "spreadsheet", None)
+        if spreadsheet is not None:
+            st.caption(
+                f"發送紀錄雲表：{getattr(spreadsheet, 'title', '未命名')} · "
+                f"{getattr(spreadsheet, 'id', '無識別碼')}"
+            )
         if "dispatch_history" not in st.session_state:
             st.session_state["dispatch_history"] = store.list_batches()
         history = st.session_state["dispatch_history"]
