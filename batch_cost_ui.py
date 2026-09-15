@@ -30,9 +30,12 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
     st.subheader("① 選取驗算範圍")
     selection_key = "dispatch_bulk_selected_" + batch["id"]
     all_ids, visible_ids = [i["id"] for i in items], [i["id"] for i in visible]
+    active_ids = [i["id"] for i in items if not i.get("excluded")]
     selected = set(st.session_state.get(selection_key, set())) & set(all_ids)
-    left, right, _ = st.columns([1, 1, 2])
-    if left.button(f"全選本批（{len(items)} 款）", key="bulk_all_" + batch["id"]):
+    left, middle, right, _ = st.columns([1, 1, 1, 2])
+    if left.button(f"全選待核對（{len(active_ids)} 款）", key="bulk_active_" + batch["id"]):
+        selected = set(active_ids)
+    if middle.button(f"全選含暫緩（{len(items)} 款）", key="bulk_all_" + batch["id"]):
         selected = set(all_ids)
     if right.button("取消全選", key="bulk_none_" + batch["id"]):
         selected = set()
@@ -41,7 +44,7 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
     st.write(f"本批共 {len(items)} 款｜搜尋顯示 {len(visible)} 款｜已選 {len(selected)} 款")
     if hidden:
         st.info(f"已選商品中有 {hidden} 款未顯示在目前搜尋結果；仍會納入驗算。取消全選會清除整批選取。")
-    st.caption("左側方框可多選；點「品號／商品」只看下方明細。全選涵蓋整批，包含搜尋未顯示及暫緩商品；不代表已核對或發送。")
+    st.caption("左側方框可多選；點「品號／商品」只看下方明細。「全選待核對」會略過暫緩商品；只有「全選含暫緩」才會涵蓋整批。選取不代表已核對或發送。")
     table_key = "dispatch_review_table_" + digest([batch_signature(batch), visible_ids])[:24]
     if visible:
         # Streamlit 1.63 supports native programmatic selection. Stable IDs live
