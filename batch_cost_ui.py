@@ -1,9 +1,12 @@
 """Independent multi-row scope, single-cell detail navigation, read-only results."""
+from copy import deepcopy
+
 import streamlit as st
 
 from batch_cost_audit import batch_signature, merge_selection, run_batch_audit
 from cost_audit import block
-from dispatch_manager import digest
+from dispatch_manager import digest, now
+from dispatch_review import unit_confirmed
 
 
 def _focus(batch, identity):
@@ -104,6 +107,56 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
         return
     if set(result["ids"]) != selected:
         st.warning(f"選取範圍已更動：下表仍是上次 {len(result['ids'])} 款的結果，不是目前所選 {len(selected)} 款。")
+    pending_units = [i for i in items if i["id"] in selected and not i["excluded"]
+                     and i["source"].get("unit_mode") == "legacy" and not unit_confirmed(i)]
+    if pending_units:
+        st.warning(f"所選商品中有 {len(pending_units)} 款舊資料尚未明示計價單位；表內重算一致仍不能自動代替單位確認。")
+        with st.expander(f"批次確認這 {len(pending_units)} 款計價單位", expanded=True):
+            unit_actor = st.text_input("批次單位確認人", key="bulk_unit_actor_" + batch["id"])
+            unit_evidence = st.text_input(
+                "批次單位確認依據",
+                placeholder="例如：逐款對照已發文案，售價單位與裝箱單位一致",
+                key="bulk_unit_evidence_" + batch["id"],
+            )
+            unit_ack = st.checkbox(
+                f"我已逐款確認這 {len(pending_units)} 款售價單位與裝箱單位相同",
+                key="bulk_unit_ack_" + batch["id"],
+            )
+            math_ready = set(result["ids"]) == selected and all(
+                (result["checks"].get(i["id"]) or {}).get("report", {}).get("math_pass")
+                for i in pending_units
+            )
+            if st.button(
+                f"套用單位確認到所選 {len(pending_units)} 款",
+                disabled=not math_ready or not unit_actor.strip() or not unit_evidence.strip() or not unit_ack,
+                key="bulk_unit_save_" + batch["id"],
+            ):
+                updated = deepcopy(batch)
+                identities = {i["id"] for i in pending_units}
+                confirmed_at = now()
+                for item in updated["items"]:
+                    if item["id"] in identities:
+                        source = item["source"]
+                        item["unit_confirmation"] = {
+                            "unit": source["unit"], "source_hash": source["source_hash"],
+                            "actor": unit_actor.strip(), "at": confirmed_at,
+                            "evidence": unit_evidence.strip(),
+                        }
+                updated["audit"].append({
+                    "at": confirmed_at, "actor": unit_actor.strip(),
+                    "action": "批次確認計價單位", "items": sorted(identities),
+                    "evidence": unit_evidence.strip(),
+                })
+                try:
+                    saved = store.save_batch(updated, expected_revision=batch.get("_revision", ""))
+                except Exception as exc:
+                    st.error(str(exc))
+                    st.info("本次不會把單位當成已確認，請重新載入雲端後再試。")
+                else:
+                    st.session_state["dispatch_active"] = saved["id"]
+                    st.session_state.pop("dispatch_history", None)
+                    st.session_state["dispatch_notice"] = f"已確認 {len(identities)} 款計價單位；請重新執行整批驗算。"
+                    st.rerun()
     counts = result["counts"]
     a, b, c, d = st.columns(4)
     a.metric("本次結果", f"{len(result['rows'])} 款")
