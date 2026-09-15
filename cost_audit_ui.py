@@ -1,11 +1,12 @@
 """Internal cost evidence, deliberately separate from outbound ad copy."""
 import streamlit as st
 
-from cost_audit import INPUT_LABELS, UNITS, audit, fingerprint
+from cost_audit import INPUT_LABELS, UNITS, audit, evidence_status, fingerprint
+from quote_evidence import clear_evidence_caches
 
 
 def render_cost_review(store, source, prefix, actor):
-    st.markdown("#### 成本與售價驗算（內部，不會放進 LINE 文案）")
+    st.markdown("#### 報價表重算與原文（內部，不會放進 LINE 文案）")
     cache_key = "dispatch_cost_" + source["identity"] + source["source_hash"]
     if cache_key not in st.session_state:
         try:
@@ -21,28 +22,42 @@ def render_cost_review(store, source, prefix, actor):
     c.metric("原廣告售價（TWD）", rows["廣告售價（TWD）"]["原表／原售價"])
     st.table(report["rows"])
     if report["math_pass"]:
-        st.success("計算：各步驟與獨立驗算一致；仍須核對原始數字與費用規則。")
+        st.success("表內重算一致：使用已保存的參數或原表／公式數字重算；不代表廠商原文已核對。")
     else:
         st.warning("計算：有差異或缺少依據，不能列為已核對。")
         for error in report["errors"]:
             st.caption(error)
     if report["source_ready"]:
-        st.info("來源：原文與參數已保存；請核對下面的原文及數值，最後再勾選本款確認。")
+        st.info("原文已保存，待核對。確認原文、參數與商品相符後，再勾選本款確認。")
     else:
-        st.warning("來源：沒有這版商品的完整依據。下表可能只有雲表／公式中的數字，不能當作廠商原文。")
-    st.table(report["input_rows"])
-    if report["raw_source"]:
-        with st.expander("廠商原文與當次處理依據", expanded=True):
-            st.text(report["raw_source"])
-            st.caption("依據來源：" + ("報價當次保存" if report["origin"] == "quote_save" else "人工補登，不冒充歷史原始紀錄"))
-            st.text(report["notes"])
+        st.warning(evidence_status(report if loaded else None) + "。表內數字不是完整廠商原文；舊資料不會自動回補。")
+    with st.expander("查看原文與計算參數"):
+        st.caption(f"保存位置：Google 試算表「{report.get('storage_title', '原採購報價雲表')}」→「_報價依據」分頁；不是 Streamlit 暫存。")
+        if report.get("storage_url"):
+            st.link_button("開啟原 Google 雲表保存位置", report["storage_url"])
+        saved = report.get("saved_evidence")
+        if saved:
+            st.caption("保存時間：" + (report.get("saved_at") or "舊紀錄未提供"))
+            st.caption("保存方式：" + ("報價當次保存" if saved["origin"] == "quote_save" else "人工補存，不是當時的原始保存紀錄"))
+            if not report["source_ready"]:
+                st.warning("以下是已保存的舊版原文，不作為目前商品的有效核對依據。補存時請重新對照最新商品。")
+            st.text(saved["raw_source"])
+            st.text(saved["notes"])
+        else:
+            st.info("尚未保存這款廠商原文。下方參數來自現有報價表／公式，不能還原完整原文。")
+        st.table(report["input_rows"])
+        if saved and not report["source_ready"]:
+            st.caption("舊版保存參數（僅供比對，不自動套用）：")
+            st.table([{"項目": label, "舊版保存值": saved.get("inputs", {}).get(key, "未保存")}
+                      for key, label in INPUT_LABELS.items()])
     st.caption("沿用現行規則：毛利率 10%（成本 ÷ 0.9）、重量加計 5%；木架／木框依原規則不列入，其他附加費用需已納入進價與重量。驗算一致不代表規則或原始數字已由人工確認。")
     if st.button("重新讀取成本與依據", key=prefix + "_cost_refresh"):
         st.session_state.pop(cache_key, None)
         store._evidence_index = None
+        store._evidence_row_index = None
         st.rerun()
-    with st.expander("補存／修正原文與驗算依據（不改報價表）"):
-        st.caption("舊資料可在這裡補一次：已有數字會預填；缺的參數需對照當時資料，不能套用今天的預設值。修改後需重新核對。")
+    with st.expander("補存／修正原文（不改商品與價格）"):
+        st.caption("會存入原 Google 雲表的「_報價依據」，保留歷史版本。已有數字會預填；請對照當時資料，不套用今天的預設值。保存不代表核對完成。")
         with st.form(prefix + "_cost_evidence_" + fingerprint(report)[:12]):
             raw = st.text_area("本款廠商完整原文（含補充費用）", report["raw_source"], height=160)
             inputs = {}
@@ -65,8 +80,8 @@ def render_cost_review(store, source, prefix, actor):
                         store.put_quote_evidence(source, formulas, raw, inputs,
                                                  notes=f"核對人：{actor}\n{notes.strip()}" if notes.strip() else "",
                                                  origin="review_attachment")
-                        st.session_state.pop(cache_key, None)
-                        st.session_state["dispatch_notice"] = "已保存依據，原報價表未改寫；請確認重算結果後重新核對本款。"
+                        clear_evidence_caches(st.session_state)
+                        st.session_state["dispatch_notice"] = "原文與參數已存入 Google 雲表「_報價依據」並讀回確認；商品與價格未改。舊驗算結果已清除，請重新驗算與核對。"
                         st.rerun()
                     except Exception as exc:
                         st.error(str(exc))

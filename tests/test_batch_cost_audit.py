@@ -30,8 +30,9 @@ def test_all_69_get_results_in_order_without_reviews_or_any_cloud_writes():
     result = run_batch_audit(store, batch, [i["id"] for i in batch["items"]], lambda *p: progress.append(p))
     assert len(result["rows"]) == len(result["ids"]) == len(result["checks"]) == 69
     assert [r["順序"] for r in result["rows"]] == list(range(1, 70))
-    assert result["counts"] == {"計算一致": 69}
-    assert {r["來源依據"] for r in result["rows"]} == {"待補資料"}
+    assert result["counts"] == {"表內重算一致": 69}
+    assert {r["原文狀態"] for r in result["rows"]} == {"缺廠商原文"}
+    assert {r["計算／商品問題"] for r in result["rows"]} == {"—"}
     assert {r["重算成本"] for r in result["rows"]} == {"47.6"}
     assert len(calls) == 12 and max(len(c[0]) for c in calls) == 20
     assert progress[-1] == (69, 69)
@@ -47,7 +48,7 @@ def test_subset_includes_excluded_items_and_never_relies_on_old_cost_flag():
         item["source"].pop("cost_audit_required", None)
     result = run_batch_audit(store, batch, ["G正版:no3", "G正版:no1"])
     assert result["ids"] == ["G正版:no1", "G正版:no3"]
-    assert "暫緩／排除" in result["rows"][1]["需處理"]
+    assert "暫緩／排除" in result["rows"][1]["計算／商品問題"]
     assert batch["items"][2]["excluded"]
     assert all(not i["review"] for i in batch["items"])
 
@@ -59,7 +60,7 @@ def test_stale_missing_duplicate_and_good_products_are_all_listed(monkeypatch):
     fresh = [fresh[0], fresh[2], fresh[2], fresh[3]]
     monkeypatch.setattr(store, "catalog", lambda: fresh)
     result = run_batch_audit(store, batch, [i["id"] for i in batch["items"]])
-    assert [r["計算結果"] for r in result["rows"]] == ["來源已變動"] * 3 + ["計算一致"]
+    assert [r["計算結果"] for r in result["rows"]] == ["來源已變動"] * 3 + ["表內重算一致"]
     assert all(r["重算成本"] == "—" for r in result["rows"][:3])
 
 
@@ -74,9 +75,10 @@ def test_failed_read_chunk_is_not_skipped_and_later_chunks_continue(monkeypatch)
     monkeypatch.setattr(ws, "batch_get", failing)
     result = run_batch_audit(store, batch, [i["id"] for i in batch["items"]])
     assert len(result["rows"]) == 69
-    assert result["counts"] == {"計算一致": 49, "讀取失敗": 20}
-    assert all("逾時" in r["需處理"] for r in result["rows"][20:40])
-    assert result["rows"][-1]["計算結果"] == "計算一致"
+    assert result["counts"] == {"表內重算一致": 49, "讀取失敗": 20}
+    assert all("逾時" in r["計算／商品問題"] for r in result["rows"][20:40])
+    assert all(r["原文狀態"] == "尚未確認（讀取未完成）" for r in result["rows"][20:40])
+    assert result["rows"][-1]["計算結果"] == "表內重算一致"
 
 
 def test_change_during_formula_read_is_detected(monkeypatch):
@@ -90,7 +92,7 @@ def test_change_during_formula_read_is_detected(monkeypatch):
         return values
     monkeypatch.setattr(ws, "batch_get", change)
     result = run_batch_audit(store, batch, [i["id"] for i in batch["items"]])
-    assert [r["計算結果"] for r in result["rows"]] == ["來源已變動", "計算一致"]
+    assert [r["計算結果"] for r in result["rows"]] == ["來源已變動", "表內重算一致"]
 
 
 @pytest.mark.parametrize("failure", ["catalog", "evidence", "incomplete"])
@@ -121,7 +123,7 @@ def test_wrong_cost_and_missing_inputs_are_not_counted_as_passed():
     assert result["rows"][0]["計算結果"] == "有差異"
     assert result["rows"][0]["成本差額"] == "51.4"
     assert result["rows"][1]["計算結果"] == "資料／公式待處理"
-    assert result["rows"][2]["計算結果"] == "計算一致"
+    assert result["rows"][2]["計算結果"] == "表內重算一致"
 
 
 @pytest.mark.parametrize("selected", [[], ["unknown"]])
@@ -172,6 +174,6 @@ def test_unavailable_ad_price_exposes_source_blocker_not_false_missing_sheet_pri
     row = result_row(item, {"report": {"errors": ["廣告售價（TWD）與獨立驗算不一致或原表缺值"]}})
     assert row["原廣告售價"] == "尚未產生"
     assert row["計算結果"] == "資料／公式待處理"
-    assert "分類尚未設定品號代碼" in row["需處理"]
-    assert "原廣告售價尚未產生" in row["需處理"]
-    assert "原表缺值" not in row["需處理"]
+    assert "分類尚未設定品號代碼" in row["計算／商品問題"]
+    assert "原廣告售價尚未產生" in row["計算／商品問題"]
+    assert "原表缺值" not in row["計算／商品問題"]

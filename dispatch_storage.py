@@ -110,6 +110,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
         self._image_index = None
         self._evidence_index = None
         self._evidence_row_index = None
+        self._evidence_times = {}
 
     def _sheet(self, title, create=False):
         if title in self._worksheets:
@@ -259,12 +260,27 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
             for offset in range(0, len(ranges), 20):
                 rows.extend(row for group in ws.batch_get([f"A{a}:H{b}" for a, b in ranges[offset:offset + 20]]) for row in group)
         found = dict.fromkeys(wanted)
+        for identity in wanted:
+            self._evidence_times.pop(identity, None)
         for record in decode_records(rows):
             value = record["value"]
             if value.get("schema") != 1 or value.get("identity") != record["entity"]:
                 raise DispatchError("報價依據識別碼或版本不符，停止驗算")
             found[record["entity"]] = value
+            self._evidence_times[record["entity"]] = record["at"]
         self._evidence_index.update(found)
+
+    def _cost_report(self, source, formulas):
+        from cost_audit import audit
+        report = audit(source, formulas, self._evidence(source["identity"]))
+        ws = self._sheet(EVIDENCE_SHEET)
+        spreadsheet_id = getattr(self.spreadsheet, "id", "")
+        sheet_id = getattr(ws, "id", "") if ws is not None else ""
+        report.update(saved_at=self._evidence_times.get(source["identity"], ""),
+                      storage_title=getattr(self.spreadsheet, "title", "原採購報價雲表"),
+                      storage_url=(f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+                                   + (f"#gid={sheet_id}" if sheet_id != "" else "")) if spreadsheet_id else "")
+        return report
 
     def read_cost_source(self, source):
         from cost_audit import block, fingerprint
@@ -276,14 +292,13 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
         return block(ws.get(area, value_render_option="FORMULA"))
 
     def cost_audit(self, source):
-        from cost_audit import audit
         formulas = self.read_cost_source(source)
-        return audit(source, formulas, self._evidence(source["identity"])), formulas
+        return self._cost_report(source, formulas), formulas
 
     def cost_audits(self, sources, on_progress=None):
         """Read-only, bounded bulk verifier. One failure never drops other rows."""
         from collections import defaultdict
-        from cost_audit import audit, block, fingerprint
+        from cost_audit import block, fingerprint
         if len(sources) > 150 or len({s["identity"] for s in sources}) != len(sources):
             raise DispatchError("整批驗算範圍重複或超過 150 款")
         self._evidence_index = None
@@ -314,7 +329,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
                             continue
                         try:
                             formula = block(formula)
-                            results[identity] = {"report": audit(source, formula, self._evidence(identity)),
+                            results[identity] = {"report": self._cost_report(source, formula),
                                                  "formulas": formula, "error": ""}
                         except Exception as exc:
                             results[identity] = {"error": f"本款驗算失敗：{exc}", "status": "資料／公式待處理"}
@@ -346,7 +361,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
     def verify_cost_checks(self, batch):
         """Re-read all active formula blocks in bounded requests before approval."""
         from collections import defaultdict
-        from cost_audit import audit, blockers, fingerprint
+        from cost_audit import blockers, fingerprint
         groups = defaultdict(list)
         self._evidence_index = None
         self._evidence_row_index = None
@@ -363,7 +378,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
                 if len(blocks) != len(chosen):
                     raise DispatchError("成本公式讀取不完整，停止確認")
                 for item, formulas in zip(chosen, blocks):
-                    report = audit(item["source"], formulas, self._evidence(item["id"]))
+                    report = self._cost_report(item["source"], formulas)
                     if blockers(item["source"], report) or fingerprint(report) != fingerprint(item.get("cost_audit")):
                         raise DispatchError(f"{item['source']['code']}：成本公式或原始依據已變更／尚未核對，請重新驗算")
 

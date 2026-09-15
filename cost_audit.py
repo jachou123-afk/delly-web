@@ -125,8 +125,9 @@ def make_evidence(source, formulas, raw_source, inputs, *, notes, origin, parsed
     calculate(clean, source["vendor"])
     return {"schema": 1, "rule": RULE_VERSION, "identity": source["identity"],
             "source_hash": source["source_hash"], "formula_hash": fingerprint(block(formulas)),
-            "raw_source": raw_source.strip(), "inputs": clean, "notes": notes.strip(),
-            "origin": origin, "parsed": deepcopy(parsed or {})}
+            "raw_source": raw_source, "inputs": clean, "notes": notes.strip(),
+            "origin": origin, "parsed": deepcopy(parsed or {}),
+            "product": {key: source.get(key, "") for key in ("category", "no", "code", "supplier_code", "name", "vendor")}}
 
 
 def audit(source, formulas=None, evidence=None):
@@ -135,7 +136,8 @@ def audit(source, formulas=None, evidence=None):
     result = {"rule": RULE_VERSION, "source_hash": source["source_hash"],
               "formula_hash": fingerprint(formulas), "evidence_hash": fingerprint(evidence) if evidence else "",
               "source_ready": False, "math_pass": False, "errors": [], "rows": [], "input_rows": [],
-              "raw_source": "", "notes": "", "inputs": legacy_inputs(source, formulas), "origin": "legacy"}
+              "raw_source": "", "notes": "", "inputs": legacy_inputs(source, formulas), "origin": "legacy",
+              "saved_evidence": deepcopy(evidence) if evidence else None}
     if evidence:
         if (evidence.get("schema") != 1 or evidence.get("rule") != RULE_VERSION
                 or evidence.get("identity") != source["identity"]
@@ -201,6 +203,17 @@ def audit(source, formulas=None, evidence=None):
             result["errors"].append(f"{title}與獨立驗算不一致或原表缺值")
     result["math_pass"] = bool(calculated and not result["errors"])
     return result
+
+
+def evidence_status(report):
+    """Storage status is deliberately not a human-review or arithmetic result."""
+    if report is None:
+        return "尚未確認（讀取未完成）"
+    if report.get("source_ready"):
+        return "原文已保存，待核對"
+    if report.get("saved_evidence"):
+        return "已保存舊版，需重新核對"
+    return "缺廠商原文"
 
 
 def blockers(source, report):

@@ -63,7 +63,8 @@ def test_all_69_render_a_result_and_never_auto_review_or_write():
     assert len(result(app)["rows"]) == 69
     assert len(app.dataframe[1].value) == 69
     assert app.dataframe[1].value["品號"].tolist() == [f"BGD-G-{n}" for n in range(1, 70)]
-    assert {m.label: m.value for m in app.metric}["計算一致"] == "69"
+    assert {m.label: m.value for m in app.metric}["表內重算一致"] == "69"
+    assert any("缺原文 69 款" in m.value for m in app.markdown)
     assert {m.label: m.value for m in app.metric}["可發送"] == "0"
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
     assert before == {k: v.rows for k, v in app.session_state["test_spreadsheet"].sheets.items()}
@@ -103,7 +104,7 @@ def test_one_changed_source_stays_in_results_instead_of_disappearing():
     widget(app, "button", "驗算所選商品（69 款）").click().run()
     assert not app.exception and len(result(app)["rows"]) == 69
     assert result(app)["rows"][-1]["計算結果"] == "來源已變動"
-    assert {m.label: m.value for m in app.metric}["計算一致"] == "68"
+    assert {m.label: m.value for m in app.metric}["表內重算一致"] == "68"
 
 
 def test_detail_navigation_updates_mounted_selectbox_and_survives_next_rerun():

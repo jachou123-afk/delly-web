@@ -1,4 +1,4 @@
-# Release V87.6: dated batch labels, sequential default names and chat dropdowns.
+# Release V87.7: verified cloud quote evidence, safe retries and clear source status.
 streamlit==1.63.0
 pandas
 gspread==6.2.1

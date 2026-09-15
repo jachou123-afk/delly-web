@@ -91,7 +91,7 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
             st.error(f"本次驗算未完成：{exc}；未更改雲表或核對狀態。")
         else:
             st.rerun()
-    st.subheader("② 所選商品驗算結果")
+    st.subheader("② 報價表重算結果")
     result = st.session_state.get(result_key)
     if not result:
         st.info("尚未執行整批驗算。選好商品後按「驗算所選商品」，每款都會列出結果。")
@@ -104,10 +104,12 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
     counts = result["counts"]
     a, b, c, d = st.columns(4)
     a.metric("本次結果", f"{len(result['rows'])} 款")
-    b.metric("計算一致", counts.get("計算一致", 0))
+    b.metric("表內重算一致", counts.get("表內重算一致", 0))
     c.metric("有差異", counts.get("有差異", 0))
-    d.metric("無法完成／需處理", sum(v for k, v in counts.items() if k not in {"計算一致", "有差異"}))
-    st.caption(f"驗算時間：{result['at']}。這是當次讀取的結果；計算一致不等於原文、圖片與單位已核對。未自動儲存核對、修改價格或發 LINE。")
+    d.metric("無法完成重算", sum(v for k, v in counts.items() if k not in {"表內重算一致", "有差異"}))
+    states = [row.get("原文狀態") for row in result["rows"]]
+    st.write(f"原文保存：已保存 {states.count('原文已保存，待核對')} 款｜缺原文 {states.count('缺廠商原文')} 款｜舊版需核對 {states.count('已保存舊版，需重新核對')} 款｜未能確認 {states.count('尚未確認（讀取未完成）')} 款")
+    st.caption(f"驗算時間：{result['at']}。表內重算一致不等於廠商原文正確；原文已保存也不等於人工核對完成。未修改價格或發 LINE。")
     result_table_key = "dispatch_bulk_table_" + digest([batch["id"], result["at"]])[:24]
     st.session_state[result_table_key] = {"selection": {"cells": []}}
     st.dataframe(result["rows"], hide_index=True, width="stretch", height=min(560, 48 + 44 * len(result["rows"])), row_height=44,
@@ -116,5 +118,6 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
                  column_config={"順序": st.column_config.NumberColumn(width="small"),
                                 "商品": st.column_config.TextColumn(width="medium"),
                                 "計算結果": st.column_config.TextColumn(width="medium"),
-                                "需處理": st.column_config.TextColumn(width="large")})
+                                "原文狀態": st.column_config.TextColumn(width="medium"),
+                                "計算／商品問題": st.column_config.TextColumn(width="large")})
     st.caption(f"共 {len(result['rows'])} 列，包含有差異、缺資料與讀取失敗的商品；可捲動或放大表格。點品號看下方詳細算式。")

@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, vendor_options as canonical_vendor_
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.6")
+st.title("🪐 半自動 - 採購報價彙整表 V87.7")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -514,41 +514,26 @@ def persist_quote_images(category, base_row, expected_block, assets):
 
 def persist_quote_evidence(category, base_row, expected_block, raw_source, inputs, parsed, notes):
     """Capture only after a successful quote write. Failure never repeats that write."""
-    from cost_audit import block as audit_block, number
-    from dispatch_manager import catalog
+    from quote_evidence import PENDING_KEY, clear_evidence_caches, queue_evidence, save_evidence
+    identity, pending = queue_evidence(st.session_state, category, base_row, expected_block,
+                                       raw_source, inputs, parsed, notes)
     try:
-        store = get_dispatch_store()
-        ws = store.spreadsheet.worksheet(category)
-        area = f"A{base_row}:L{base_row + 5}"
-        values = audit_block(ws.get(area, value_render_option="FORMATTED_VALUE"))
-        formulas = audit_block(ws.get(area, value_render_option="FORMULA"))
-        expected = audit_block(expected_block)
-        # Dates/formatting are owned by the original quote writer. All identity,
-        # input, note and formula cells must still match the reviewed write.
-        coords = [(0, 0), (0, 1), (0, 11), (1, 1), (2, 1), (3, 1), (4, 1)]
-        if any(formulas[r][c] != expected[r][c] for r, c in coords):
-            raise ValueError("商品身分或來源內容已變更")
-        if number(formulas[1][6]) != number(expected[1][6]):
-            raise ValueError("進價已變更")
-        if any(formulas[1][c] != expected[1][c] for c in (2, 3, 4, 5, 7, 8, 9, 10)):
-            raise ValueError("保存後公式已變更")
-        products = catalog({category: values}, store.category_settings()["codes"])
-        if len(products) != 1:
-            raise ValueError("無法唯一識別已保存商品")
-        source = products[0]
-        source["row"] = base_row
-        store.put_quote_evidence(source, formulas, raw_source, inputs, notes=notes,
-                                 origin="quote_save", parsed=parsed)
-        for key in list(st.session_state):
-            if key.startswith("dispatch_cost_"):
-                st.session_state.pop(key, None)
-        st.success("原文、擷取值、當次參數與費用說明已另存為核對依據。")
+        save_evidence(get_dispatch_store(), pending)
+        st.session_state[PENDING_KEY].pop(identity, None)
+        clear_evidence_caches(st.session_state)
+        st.success("原文、擷取值與當次參數已存入原 Google 雲表的「_報價依據」，並完成讀回核對；不是只暫存在網站。")
         return True
     except Exception as exc:
+        pending["last_error"] = str(exc)
         st.error(f"商品已寫入，但原始依據未完成保存：{exc}")
-        st.warning("不要重複新增商品；請到發送管理補存依據。未補齊前不能確認發送。")
+        st.warning("不要重複新增商品；原文尚未確認存到雲表，請勿關閉頁面。重新操作頁面後，可在上方重試保存原文與參數。")
         return False
 
+
+from quote_evidence import render_pending_evidence
+if st.session_state.get("quote_evidence_notice"):
+    st.success(st.session_state.pop("quote_evidence_notice"))
+render_pending_evidence(get_dispatch_store)
 
 quote_tab, dispatch_tab = st.tabs(
     ["📝 報價整理", "📣 發送管理"], key="tool_page", on_change="rerun"
@@ -2304,7 +2289,7 @@ if user_input.strip():
                            dom_rate=final_dom, intl_rate=intl_rate, ex_rate=ex_rate)
         cost_notes = ("報價操作者已勾選逐欄核對。沿用現行規則：毛利率 10%；重量加計 5%；"
                       "木架／木框不列入，其他附加費用須已涵蓋於進價及重量。\n" + final_extra)
-        st.caption("成功保存商品後，會將本款廠商原文、擷取值及當次匯率／費率另存到「_報價依據」，供發送前驗算；不改原成本公式。")
+        st.caption("按一次儲存：商品寫入後，完整廠商原文、擷取值與當次參數會另存到同一份 Google 雲表的「_報價依據」分頁並讀回確認；修改保留歷史，不改成本公式。")
         review_payload = (
             draft_key,
             user_input,
@@ -2400,9 +2385,11 @@ if user_input.strip():
                         f"✅ 寫入並核對成功！已將商品存入【{final_category}】，"
                         f"編號【{next_no}】，廠商【{final_vendor}】。"
                     )
-                    persist_quote_evidence(final_category, start_row, new_block, user_input,
-                                           cost_inputs, common_data, cost_notes)
+                    evidence_saved = persist_quote_evidence(final_category, start_row, new_block, user_input,
+                                                           cost_inputs, common_data, cost_notes)
                     persist_quote_images(final_category, start_row, new_block, quote_images)
+                    if not evidence_saved:
+                        st.rerun()
         else:
             update_disabled = bool(
                 not final_confirm
@@ -2442,6 +2429,8 @@ if user_input.strip():
                             f"✅ 已原位修正並核對【{final_category} {selected_target['no']}】；"
                             "沒有新增列，NO、原日期、圖片及格式均保留。"
                         )
-                        persist_quote_evidence(final_category, selected_target["row_index"], planned_update_block,
-                                               user_input, cost_inputs, common_data, cost_notes)
+                        evidence_saved = persist_quote_evidence(final_category, selected_target["row_index"], planned_update_block,
+                                                               user_input, cost_inputs, common_data, cost_notes)
                         persist_quote_images(final_category, selected_target["row_index"], planned_update_block, quote_images)
+                        if not evidence_saved:
+                            st.rerun()

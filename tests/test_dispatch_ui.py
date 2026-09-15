@@ -101,7 +101,7 @@ def test_v84_cost_panel_exposes_amounts_and_missing_original_blocks_review():
     evidence_ws.rows = evidence_ws.rows[:1]
     widget(app, "button", "重新載入雲端").click().run()
     assert not app.exception
-    assert any("沒有這版商品的完整依據" in w.value for w in app.warning)
+    assert any("缺廠商原文" in w.value for w in app.warning)
     assert widget(app, "checkbox", "我已核對原文、圖片、售價、單位與交期，確認圖文是同一款商品").disabled
     assert widget(app, "button", "確認並下一款").disabled
 
