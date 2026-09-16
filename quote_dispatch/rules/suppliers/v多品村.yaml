@@ -1,0 +1,9 @@
+{
+  "canonical_name": "v多品村",
+  "aliases": ["多品"],
+  "pricing": {
+    "domestic_shipping": "free",
+    "domestic_shipping_note": "廣州包郵"
+  },
+  "parser": {"profile": "common"}
+}

@@ -1,17 +1,14 @@
-"""Explicit, user-confirmed LINE room renames; never fuzzy-match rooms."""
+"""Compatibility imports for explicit, user-confirmed LINE room renames."""
 
-ADVERTISING_TARGET = "【利潤10%】 自動排廣告群組"
-TARGET_ALIASES = {
-    "【自動排廣告群組】": ADVERTISING_TARGET,
-    "自動排廣告群組": ADVERTISING_TARGET,
-    "【利潤10%】自動排廣告群組": ADVERTISING_TARGET,
-}
-
-
-def canonical_target(name):
-    name = name.strip()
-    return TARGET_ALIASES.get(name, name)
+from quote_dispatch.config import (
+    advertising_target,
+    canonical_target,
+    get_common_rules,
+    same_target,
+)
 
 
-def same_target(left, right):
-    return bool(left.strip() and right.strip()) and canonical_target(left) == canonical_target(right)
+ADVERTISING_TARGET = advertising_target()
+TARGET_ALIASES = dict(get_common_rules().target_aliases)
+
+__all__ = ["ADVERTISING_TARGET", "TARGET_ALIASES", "canonical_target", "same_target"]

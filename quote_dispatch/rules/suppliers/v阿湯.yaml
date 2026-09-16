@@ -1,0 +1,9 @@
+{
+  "canonical_name": "v阿湯",
+  "aliases": ["阿汤"],
+  "pricing": {
+    "domestic_shipping": "calculated",
+    "domestic_shipping_note": ""
+  },
+  "parser": {"profile": "common"}
+}

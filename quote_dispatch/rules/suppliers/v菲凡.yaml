@@ -1,0 +1,9 @@
+{
+  "canonical_name": "v菲凡",
+  "aliases": ["非凡"],
+  "pricing": {
+    "domestic_shipping": "calculated",
+    "domestic_shipping_note": ""
+  },
+  "parser": {"profile": "common"}
+}

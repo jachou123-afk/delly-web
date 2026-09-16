@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 import re
 import unicodedata
 from category_codes import DEFAULT_CATEGORY_CODES, validate_codes
+from quote_dispatch.config import get_common_rules
 
 from license_markers import (
     has_affirmative_license_marker,
@@ -17,11 +18,12 @@ from license_markers import (
 
 CATEGORY_CODES = DEFAULT_CATEGORY_CODES  # Compatibility export; configuration lives in one module.
 
-LEAD_TIME_LINE = "交貨2-3週"
+_COMMON_RULES = get_common_rules()
+LEAD_TIME_LINE = _COMMON_RULES.lead_time_line
 
 _NO_PATTERN = re.compile(r"(?:NO)?\s*(\d+)", re.IGNORECASE)
 _UNIT_PATTERN = re.compile(r"^[^\s/：:]+$")
-_PRICE_UNITS = {"個", "盒", "套", "瓶", "罐", "包", "袋"}
+_PRICE_UNITS = set(_COMMON_RULES.price_units)
 _INTERNAL_PREFIX = re.compile(r"^計價單位\s*[：:]")
 _COST_NOTE_PATTERN = re.compile(
     r"附加費用確認|附加费用确认|成本|進價|进价|運費|运费|"

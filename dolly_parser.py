@@ -13,7 +13,7 @@ from license_markers import (
     has_affirmative_license_marker,
     strip_affirmative_license_markers,
 )
-from line_ad_copy import build_line_ad_copy_from_sheet_block
+from quote_dispatch.pipeline.prepare import build_line_ad_copy_from_sheet_block
 from category_codes import QUOTE_CATEGORIES
 from product_image_ui import render_quote_images, clear_library_cache
 from dispatch_storage import CloudDispatchStore
@@ -139,14 +139,17 @@ def normalize_name(value):
 
 def is_free_shipping_vendor(vendor):
     """多品村由廣州出貨，陸運費固定包郵。"""
-    return normalize_vendor(vendor) == "v多品村"
+    from quote_dispatch.config import supplier_rule
+    return supplier_rule(vendor).domestic_shipping == "free"
 
 def build_carton_note_row(final_qty, vendor, qty_unit="個"):
     """建立裝箱備註列，並把多品村包郵註記放在大陸運費欄下方。"""
+    from quote_dispatch.config import supplier_rule
     row = [""] * 12
     row[1] = f"裝箱 {final_qty}{qty_unit}/箱"
-    if is_free_shipping_vendor(vendor):
-        row[8] = "廣州包郵"
+    rule = supplier_rule(vendor)
+    if rule.domestic_shipping == "free":
+        row[8] = rule.domestic_shipping_note
     return row
 
 def extract_saved_products(sheet_rows):

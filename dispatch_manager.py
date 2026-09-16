@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from dispatch_review import inspect_source, unit_confirmed
 from dispatch_targets import canonical_target, same_target
+from quote_dispatch.pipeline.reconcile import reconcile_batch
 
 
 class DispatchError(ValueError):
@@ -344,29 +345,7 @@ def record_observation_batch(batch, *, item_ids, evidence, actor, target, action
 
 
 def reconciliation(batch):
-    missing, partial, uncertain, duplicates = [], [], [], []
-    complete = 0
-    for i in batch["items"]:
-        code = i["source"]["code"] or i["id"]
-        status = item_status(i)
-        if status == "待發":
-            missing.append(code)
-        elif status == "部分完成":
-            partial.append(code + ("：缺文案" if i["image_receipts"] else "：缺圖片"))
-        elif status == "結果待確認":
-            uncertain.append(code)
-        elif status == "重複紀錄待處理":
-            duplicates.append(code)
-        elif status == "已確認完成":
-            complete += 1
-    resolved = {e["item"] for e in batch["observations"] if e["part"] == "resolve_unexpected"}
-    unexpected = [e["evidence"] for e in batch["observations"] if e["part"] == "unexpected" and e["id"] not in resolved]
-    integrity = batch["approved_digest"] != batch_digest(batch)
-    return {"expected": sum(not i["excluded"] for i in batch["items"]), "complete": complete,
-            "excluded": sum(i["excluded"] for i in batch["items"]), "missing": missing,
-            "partial": partial, "uncertain": uncertain, "duplicates": duplicates,
-            "unexpected": unexpected, "integrity_error": integrity,
-            "can_finish": batch["status"] != "draft" and not any((missing, partial, uncertain, duplicates, unexpected, integrity))}
+    return reconcile_batch(batch, item_status, batch_digest)
 
 
 def finish_batch(batch, actor, evidence):

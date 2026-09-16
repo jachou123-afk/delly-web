@@ -9,10 +9,10 @@ import hashlib
 import json
 import re
 import unicodedata
-from supplier_names import normalize_vendor
+from quote_dispatch.config import get_common_rules, supplier_rule
 
 RULE_VERSION = "cost-check-v1"
-UNITS = {"個", "盒", "套", "瓶", "罐", "包", "袋"}
+UNITS = set(get_common_rules().price_units)
 INPUT_LABELS = {"price": "進價（RMB／計價單位）", "qty": "每箱數量", "unit": "計價／裝箱單位",
                 "carton_kg": "整箱毛重（kg）", "unit_g": "單位重量（g）",
                 "dom_rate": "內陸費率（RMB/kg）", "intl_rate": "國際費率（RMB/kg）",
@@ -45,7 +45,7 @@ def fmt(value):
 
 
 def free_shipping(vendor):
-    return normalize_vendor(vendor) == "v多品村"
+    return supplier_rule(vendor).domestic_shipping == "free"
 
 
 def calculate(inputs, vendor):
