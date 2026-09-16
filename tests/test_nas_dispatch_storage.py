@@ -8,7 +8,7 @@ from dispatch_manager import DispatchError, new_batch
 from dispatch_storage import CloudDispatchStore, IMAGE_SHEET, asset_bytes, encode_record
 from nas_dispatch_storage import LOCATION_SHEET, NasDispatchStore, configured_store
 from product_images import PRODUCT_IMAGE_SHEET
-from synology_image_store import SynologyImageStore
+from synology_image_store import NAS_REDIRECT_ERROR, SynologyImageStore
 from test_product_image_library import picture, assignment
 from test_synology_image_store import Session, config
 
@@ -38,6 +38,63 @@ def seeded(count=3, total=None):
     network = Network()
     store = NasDispatchStore(sheet, config(), nas_factory=network.factory)
     return sheet, store, network
+
+
+class RedirectNas:
+    def __enter__(self):
+        raise DispatchError(NAS_REDIRECT_ERROR)
+
+    def __exit__(self, *args):
+        pass
+
+
+def test_redirect_allows_verified_cloud_backup_for_view_only_across_stores():
+    sheet, store, _ = seeded(2)
+    ids = store.migrate_next_images()
+    without_derivatives = NasDispatchStore(sheet, config(), nas_factory=lambda _: RedirectNas())
+    assert all(thumb["_cloud_backup"] for thumb in without_derivatives.get_thumbnails(ids).values())
+    store.prepare_next_thumbnails()
+    before = {name: deepcopy(ws.rows) for name, ws in sheet.sheets.items()}
+    reopened = NasDispatchStore(sheet, config(), nas_factory=lambda _: RedirectNas())
+    for identity in ids:
+        displayed = reopened.get_display_asset(identity)
+        assert displayed["_cloud_backup"] is True
+        assert asset_bytes(displayed) == asset_bytes(CloudDispatchStore(sheet).get_asset(identity))
+        with pytest.raises(DispatchError, match="NAS 入口已轉向"):
+            reopened.get_asset(identity)
+    thumbs = reopened.get_thumbnails(ids)
+    assert set(thumbs) == set(ids)
+    assert all(thumb["_cloud_backup"] and thumb["mime"] == "image/webp"
+               for thumb in thumbs.values())
+    with pytest.raises(DispatchError, match="NAS 入口已轉向"):
+        reopened.verify_migrated_images(ids)
+    assert before == {name: ws.rows for name, ws in sheet.sheets.items()}
+
+
+def test_redirect_does_not_hide_corrupt_or_missing_cloud_backup():
+    sheet, store, _ = seeded(1)
+    identity = store.migrate_next_images()[0]
+    reopened = NasDispatchStore(sheet, config(), nas_factory=lambda _: RedirectNas())
+    legacy = sheet.sheets[IMAGE_SHEET]
+    original_rows = deepcopy(legacy.rows)
+    legacy.rows[1:] = encode_record(identity, {**CloudDispatchStore(sheet).get_asset(identity),
+                                               "data": picture(99)["data"]})
+    with pytest.raises(DispatchError, match="校驗失敗"):
+        reopened.get_display_asset(identity)
+    legacy.rows = original_rows[:1]
+    with pytest.raises(DispatchError, match="找不到已保存"):
+        reopened.get_display_asset(identity)
+
+
+def test_redirect_does_not_invent_backup_for_new_nas_only_image():
+    sheet = FakeSpreadsheet()
+    network = Network()
+    store = NasDispatchStore(sheet, config(), nas_factory=network.factory)
+    identity = store.put_asset(asset_bytes(picture()), picture()["name"])
+    assert IMAGE_SHEET not in sheet.sheets
+    reopened = NasDispatchStore(sheet, config(), nas_factory=lambda _: RedirectNas())
+    with pytest.raises(DispatchError, match="找不到已保存"):
+        reopened.get_display_asset(identity)
 
 
 def test_63_originals_69_products_migrate_in_seven_batches_no_other_writes():

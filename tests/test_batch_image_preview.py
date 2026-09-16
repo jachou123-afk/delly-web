@@ -109,6 +109,27 @@ def test_read_failure_keeps_product_rows_and_does_not_call_failed_images_missing
     assert all(not i["review"] for i in app.session_state["test_batch"]["items"])
 
 
+def test_verified_cloud_backup_notice_survives_preview_cache():
+    source = '''
+import streamlit as st
+from batch_image_preview import render_batch_image_preview
+from test_product_image_library import picture
+class Store:
+    def get_thumbnails(self, ids):
+        return {identity: {**picture(), "_cloud_backup": True} for identity in ids}
+store = Store()
+item = {"id": "one", "order": 1, "excluded": False, "images": [picture()["sha256"]],
+        "source": {"code": "TEST-1", "name": "測試商品"}, "copy": "測試文案"}
+render_batch_image_preview(store, [item], {}, "batch")
+'''
+    app = AppTest.from_string(source).run()
+    assert not app.exception and len(app.get("image")) == 1
+    assert any("雲表中校驗相符" in warning.value for warning in app.warning)
+    app.run()
+    assert not app.exception and len(app.get("image")) == 1
+    assert any("雲表中校驗相符" in warning.value for warning in app.warning)
+
+
 def test_excluded_item_is_named_but_its_image_is_not_loaded():
     app = start(excluded=True)
     assert not app.exception and len(app.get("image")) == 5 and len(app.code) == 5
