@@ -4,7 +4,7 @@ import re
 from dispatch_manager import DispatchError
 from dispatch_storage import (CloudDispatchStore, IMAGE_SHEET, MAX_IMAGE_BYTES,
                               asset_bytes, decode_records, encode_record, validate_image)
-from synology_image_store import EXTENSIONS, NasConfig, SynologyImageStore
+from synology_image_store import EXTENSIONS, NAS_REDIRECT_ERROR, NasConfig, SynologyImageStore
 from thumbnail_storage import NasThumbnailMixin
 
 LOCATION_SHEET = "_商品圖片位置"
@@ -90,6 +90,18 @@ class NasDispatchStore(NasThumbnailMixin, CloudDispatchStore):
         if legacy:
             assets.update(super().get_assets(legacy))
         return assets
+
+    def get_display_asset(self, asset_id):
+        """Read-only view fallback; strict NAS reads remain required for approval and writes."""
+        try:
+            return self.get_asset(asset_id)
+        except DispatchError as exc:
+            if str(exc) != NAS_REDIRECT_ERROR:
+                raise
+            # This verifies the requested original's SHA-256; never substitute
+            # another image or treat a missing/corrupt backup as a valid view.
+            backup = CloudDispatchStore.get_assets(self, [asset_id])[asset_id]
+            return {**backup, "_cloud_backup": True}
 
     def _publish_locations(self, metadata):
         if not metadata:

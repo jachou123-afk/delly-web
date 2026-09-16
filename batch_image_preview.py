@@ -61,6 +61,9 @@ def render_batch_image_preview(store, items, source_images, batch_id):
                               {k: make_thumbnail(v) for k, v in store.get_assets(wanted).items()})
             except Exception:
                 failures = {a: "圖片載入失敗，請按「重新載入圖片」。" for a in wanted}
+        if any((loaded.get(identity) or st.session_state.get(THUMB_PREFIX + identity, {})).get("_cloud_backup")
+               for item in visible if not item["excluded"] for identity in plans[item["id"]]["ids"]):
+            st.warning("NAS 網址仍會轉址；本頁部分圖片暫由雲表中校驗相符的原圖顯示。")
         for index, item in enumerate(visible):
             if index % 3 == 0:
                 cards = st.columns(3)

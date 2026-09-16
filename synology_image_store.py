@@ -23,6 +23,7 @@ API_VERSIONS = {
     "SYNO.FileStation.Download": 2,
 }
 EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+NAS_REDIRECT_ERROR = "NAS 入口已轉向；請重新確認網址，未跟隨或向轉向網址傳送帳密"
 
 
 @dataclass(frozen=True)
@@ -124,7 +125,7 @@ class SynologyImageStore:
                 verify=True, stream=True,
             )
             if 300 <= response.status_code < 400:
-                raise DispatchError("NAS 入口已轉向；請重新確認網址，未跟隨或向轉向網址傳送帳密")
+                raise DispatchError(NAS_REDIRECT_ERROR)
             if response.status_code != 200:
                 raise DispatchError(f"NAS 讀寫失敗（HTTP {response.status_code}）；未視為缺圖")
             length = response.headers.get("Content-Length")

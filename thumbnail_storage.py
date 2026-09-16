@@ -2,9 +2,9 @@
 import re
 
 from dispatch_manager import DispatchError
-from dispatch_storage import decode_records, encode_record
+from dispatch_storage import CloudDispatchStore, decode_records, encode_record
 from image_thumbnails import THUMB_BYTES, THUMB_VERSION, make_thumbnail
-from synology_image_store import NasConfig
+from synology_image_store import NAS_REDIRECT_ERROR, NasConfig
 
 THUMB_SHEET = "_商品縮圖位置"
 
@@ -106,12 +106,23 @@ class NasThumbnailMixin:
             return {k: make_thumbnail(v) for k, v in self.get_assets(wanted).items()}
         result = {}
         if locations:
-            with self._nas() as nas:
-                result = {k: nas.get_thumbnail(meta) for k, meta in locations.items()}
+            try:
+                with self._nas() as nas:
+                    result = {k: nas.get_thumbnail(meta) for k, meta in locations.items()}
+            except DispatchError as exc:
+                if str(exc) != NAS_REDIRECT_ERROR:
+                    raise
+                # Derivative-only fallback for a verified legacy original.
+                # The regular get_assets route must remain NAS-strict.
+                backups = CloudDispatchStore.get_assets(self, locations)
+                result = {k: {**make_thumbnail(v), "_cloud_backup": True}
+                          for k, v in backups.items()}
         # Missing derivatives are made only in memory from the exact bound original.
         # Existing but invalid derivatives still fail above; viewing never writes.
         missing = wanted - locations.keys()
         if missing:
             for identity in sorted(missing):
-                result[identity] = make_thumbnail(self.get_asset(identity))
+                original = self.get_display_asset(identity)
+                result[identity] = {**make_thumbnail(original),
+                                    **({"_cloud_backup": True} if original.get("_cloud_backup") else {})}
         return result

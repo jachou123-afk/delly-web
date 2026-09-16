@@ -73,7 +73,8 @@ def _save(store, batch, original=None):
 
 def _get_asset(store, asset_id):
     scope_cache(st.session_state, store)
-    return cached(st.session_state, ORIGINAL_PREFIX, asset_id, lambda: store.get_asset(asset_id))
+    reader = getattr(store, "get_display_asset", store.get_asset)
+    return cached(st.session_state, ORIGINAL_PREFIX, asset_id, lambda: reader(asset_id))
 
 
 def _show_images(store, images, key, download=False):
@@ -82,6 +83,8 @@ def _show_images(store, images, key, download=False):
         try:
             asset = _get_asset(store, asset_id)
             data = asset_bytes(asset)
+            if asset.get("_cloud_backup"):
+                st.warning("NAS 網址仍會轉址；這張圖暫由雲表中校驗相符的原圖顯示。")
             st.image(data, caption=f"圖片 {position} · {asset['name']}", width="stretch")
             if download:
                 st.download_button(f"下載圖片 {position}", data, asset["name"], asset["mime"],
@@ -208,6 +211,8 @@ def _draft_item(store, batch, item, history, source_images=None):
         st.text(source.get("carton") or "裝箱資訊尚未讀取")
         if candidates:
             for candidate in candidates.values():
+                if candidate.get("_cloud_backup"):
+                    st.warning("NAS 網址仍會轉址；這張圖暫由雲表中校驗相符的原圖顯示。")
                 st.image(asset_bytes(candidate), caption=candidate.get("reference", candidate["name"]), width="stretch")
         elif item["images"]:
             st.caption("本批先前保存的核對圖片；可開啟原表再次對照。")
