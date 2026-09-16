@@ -273,6 +273,26 @@ def test_nine_original_clipboards():
             assert not c["issues"], (exp[0], c["issues"])
 
 
+def test_display_box_scope_survives_saved_product_block():
+    common, products = ns["parse_text"](
+        "TEST-1150 測試按鍵（4色混裝）\n"
+        "單價：5.2元\n📦裝箱量：576個/箱（24盒×24個）\n"
+        "彩盒尺寸：8×15×21CM（展示盒）\n毛重：20KG"
+    )
+    assert common["issues"] == []
+
+    block = ns["build_product_block"](
+        "no1", "2026/9/16", 2, products[0]["name"], products[0]["code"],
+        common["price"], common["qty"], common["qty_unit"], common["weight"],
+        common["unit_weight_g"], 0, 8.5, 4.8, "測試供應商",
+        color_size=common["color_box_size"], extra=common["extra_tags"],
+    )
+
+    assert "彩盒尺寸 8×15×21CM（展示盒）" in block[1][1].splitlines()
+    assert "24盒×24個" in block[1][1].splitlines()
+    assert block[2][1] == "裝箱 576個/箱"
+
+
 def test_mc_z0001_wooden_rack_is_optional_and_uses_no_rack_inputs():
     raw = """新品#正版授权
 三丽鸥浮雕系列茗芙4.5英寸饭碗

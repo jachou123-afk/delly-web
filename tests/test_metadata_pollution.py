@@ -386,6 +386,39 @@ def test_valid_dimension_range_is_preserved_without_blocking():
     assert blockers(common) == []
 
 
+def test_display_box_dimension_and_emoji_carton_qualifier_stay_together():
+    common, products = parse(
+        "TEST-1150 測試按鍵（4色混裝） 🍫⌨️\n"
+        "💰單價：5.2元\n📦裝箱量：576個/箱（24盒×24個）\n"
+        "產品尺寸：4×2×7cm\n"
+        "彩盒尺寸：8×15×21CM（展示盒）\n"
+        "外箱規格：43×32×49CM\n毛重：20KG"
+    )
+
+    assert products[0]["code"] == "TEST-1150"
+    assert (common["price"], common["qty"], common["qty_unit"], common["weight"]) == (5.2, 576, "個", 20)
+    assert common["color_box_size"] == "8×15×21CM（展示盒）"
+    assert "24盒×24個" in common["extra_tags"].splitlines()
+    assert blockers(common) == []
+    assert _ad_detail_lines(f"彩盒尺寸 {common['color_box_size']}") == [
+        "彩盒尺寸 8×15×21CM（展示盒）",
+    ]
+
+
+@pytest.mark.parametrize("field", [
+    "彩盒尺寸：8×15×21CM（單個小盒）",
+    "產品尺寸：8×15×21CM（展示盒）",
+    "彩盒尺寸：8×15×21（展示盒）",
+])
+def test_unrecognized_or_unitless_dimension_qualifier_still_blocks(field):
+    common, _ = parse(
+        f"測試商品\n型號:DIM2\n每箱數量:24pcs\n單個價格:5元\n{field}\n整箱重量:1kg"
+    )
+
+    assert common["issues"]
+    assert blockers(common)
+
+
 def test_carton_and_fulfilment_qualifiers_are_preserved_not_named():
     common, products = parse(
         "瘋狂動物城朱迪收納架\n型號:5106-4\n每箱數量:6pcs（捆）\n"

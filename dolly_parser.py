@@ -612,11 +612,12 @@ def labeled_dimension_info(value):
         return None
     number = r"\d+(?:\.\d+)?"
     numeric_shape = rf"{number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*"
-    valid = bool(re.fullmatch(
-        numeric_shape + r"\s*(?:cm|mm|公分|毫米)",
-        raw_value,
-        re.I,
-    ))
+    dimension_value = numeric_shape + r"\s*(?:cm|mm|公分|毫米)"
+    valid = bool(re.fullmatch(dimension_value, raw_value, re.I))
+    if not valid and label in {"彩盒尺寸", "彩盒"}:
+        valid = bool(re.fullmatch(
+            dimension_value + r"\s*\(\s*展示盒\s*\)", raw_value, re.I,
+        ))
     missing_unit = bool(re.fullmatch(numeric_shape, raw_value, re.I))
     decimal_comma = bool(re.search(r"\d\s*[,，]\s*\d", raw_value))
     return {
@@ -695,6 +696,7 @@ def is_fulfilment_condition_line(value):
 def carton_qualifier_notes(value):
     """Return parenthetical carton qualifiers without changing carton units."""
     line = unicodedata.normalize("NFKC", str(value or "")).strip()
+    line = re.sub(rf"^{EMOJI_PAT}+\s*", "", line).strip()
     if not re.match(r"^(?:每箱數量|箱數|裝箱量|裝箱數量|裝箱數|裝箱|一箱)\s*[:：]?", line):
         return []
     notes = [item.strip() for item in re.findall(r"\(([^()]+)\)", line) if item.strip()]
@@ -1297,9 +1299,13 @@ def parse_text(text):
         common[field] = ""
         for line in normalized.splitlines():
             cleaned = re.sub(EMOJI_PAT, "", line).strip()
-            match = re.search(label + size + r"\s*$", cleaned, re.I)
+            suffix = r"(?P<display_box>\s*\(\s*展示盒\s*\))?" if field == "color_box_size" else ""
+            match = re.search(label + size + suffix + r"\s*$", cleaned, re.I)
             if match:
-                common[field] = match[1].strip()
+                display_box = bool(match.groupdict().get("display_box"))
+                if display_box and not re.match(r"^彩盒(?:尺寸)?\s*[:：]?\s*(?=\d)", cleaned):
+                    continue
+                common[field] = match[1].strip() + ("（展示盒）" if display_box else "")
                 break
     # Named metadata must not be swallowed by the product name.
     meta = rf"^(?:型號|貨號|產品編號|編號|(?:單|每)\s*[A-Za-z0-9\u4e00-\u9fff]{{1,6}}\s*(?:價格|價)|單價|價格|每箱|箱數|裝箱|一箱|單重|單個重量|每個重量|整箱|毛重|箱重|尺寸|產品尺寸|產品\s*:|彩盒|外箱|包裝|單個包裝|材質|材積|端盒|木架|木框|帶鐳|帶雷|USB|配件|電池|\d+\s*(?:個|款|種))"
