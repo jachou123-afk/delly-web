@@ -108,21 +108,29 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
     def __init__(self, spreadsheet):
         self.spreadsheet = spreadsheet
         self._worksheets = {}
+        self._worksheet_handles = {}
         self._image_index = None
         self._evidence_index = None
         self._evidence_row_index = None
         self._evidence_times = {}
 
+    def worksheet(self, title):
+        """Reuse handles only; never reuse source values or record revisions."""
+        if title not in self._worksheet_handles:
+            self._worksheet_handles[title] = self.spreadsheet.worksheet(title)
+        return self._worksheet_handles[title]
+
     def _sheet(self, title, create=False):
         if title in self._worksheets:
             return self._worksheets[title]
         try:
-            ws = self.spreadsheet.worksheet(title)
+            ws = self.worksheet(title)
         except gspread.exceptions.WorksheetNotFound:
             if not create:
                 return None
             # Creation is lazy: browsing the page never creates a worksheet.
             ws = self.spreadsheet.add_worksheet(title=title, rows=100, cols=8)
+            self._worksheet_handles[title] = ws
             ws.update(values=[HEADER], range_name="A1:H1", value_input_option="RAW")
         if ws.row_values(1) != HEADER:
             raise DispatchError(f"{title} 欄位不符，停止寫入以保留原資料")
@@ -258,8 +266,23 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
 
     def catalog(self):
         from dispatch_manager import catalog
-        sheets = [ws for ws in self.spreadsheet.worksheets() if not ws.title.startswith("_")]
-        products = catalog({ws.title: ws.get_all_values() for ws in sheets}, self.category_settings()["codes"])
+        all_sheets = self.spreadsheet.worksheets()
+        self._worksheet_handles = {ws.title: ws for ws in all_sheets}
+        sheets = [ws for ws in all_sheets if not ws.title.startswith("_")]
+        values = {}
+        if hasattr(self.spreadsheet, "values_batch_get"):
+            for offset in range(0, len(sheets), 10):
+                group = sheets[offset:offset + 10]
+                ranges = ["'" + ws.title.replace("'", "''") + "'!A:L" for ws in group]
+                response = self.spreadsheet.values_batch_get(
+                    ranges, params={"valueRenderOption": "FORMATTED_VALUE", "majorDimension": "ROWS"})
+                blocks = response.get("valueRanges", [])
+                if len(blocks) != len(group):
+                    raise DispatchError("商品目錄讀取不完整，不使用部分清單")
+                values.update((ws.title, value.get("values", [])) for ws, value in zip(group, blocks))
+        else:  # Compatible local/test adapters; Google uses the bounded batch path.
+            values = {ws.title: ws.get_all_values() for ws in sheets}
+        products = catalog(values, self.category_settings()["codes"])
         sheet_ids = {ws.title: getattr(ws, "id", "") for ws in sheets}
         spreadsheet_id = getattr(self.spreadsheet, "id", "")
         for product in products:
@@ -317,7 +340,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
 
     def read_cost_source(self, source):
         from cost_audit import block, fingerprint
-        ws = self.spreadsheet.worksheet(source["category"])
+        ws = self.worksheet(source["category"])
         area = f"A{source['row']}:L{source['row'] + 5}"
         values = block(ws.get(area, value_render_option="FORMATTED_VALUE"))
         if fingerprint(values) != source["source_hash"]:
@@ -344,7 +367,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
             for offset in range(0, len(items), 20):
                 chosen = items[offset:offset + 20]
                 try:
-                    ws = self.spreadsheet.worksheet(category)
+                    ws = self.worksheet(category)
                     ranges = [f"A{s['row']}:L{s['row'] + 5}" for s in chosen]
                     values = ws.batch_get(ranges, value_render_option="FORMATTED_VALUE")
                     formulas = ws.batch_get(ranges, value_render_option="FORMULA")
@@ -404,7 +427,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
                 groups[item["source"]["category"]].append(item)
         self._load_evidence([i["id"] for items in groups.values() for i in items])
         for category, items in groups.items():
-            ws = self.spreadsheet.worksheet(category)
+            ws = self.worksheet(category)
             for offset in range(0, len(items), 20):
                 chosen = items[offset:offset + 20]
                 ranges = [f"A{i['source']['row']}:L{i['source']['row'] + 5}" for i in chosen]

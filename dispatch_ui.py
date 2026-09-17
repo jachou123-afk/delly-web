@@ -688,6 +688,11 @@ def _progress_finish(store, batch, report):
 def render_dispatch_manager(store_factory):
     st.header("📣 發送管理")
     st.caption("選商品 → 預覽與核對 → 確認待發清單 → 登記 LINE 結果 → 逐款對帳")
+    from audit_save_recovery import PENDING_KEY
+    from audit_save_ui import render_pending_save
+    if st.session_state.get(PENDING_KEY):
+        render_pending_save(store_factory)
+        st.stop()
     notice = st.session_state.pop("dispatch_notice", "")
     if notice:
         st.success(notice)

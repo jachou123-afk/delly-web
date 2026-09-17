@@ -7,7 +7,7 @@ from cost_audit import RULE_VERSION, block, fingerprint
 from dispatch_manager import DispatchError, digest, now
 
 
-def save_result(store, batch, result):
+def result_payload(batch, result):
     if batch['status'] != 'draft':
         raise DispatchError('只有草稿可以保存驗算結果')
     updated = deepcopy(batch)
@@ -20,7 +20,11 @@ def save_result(store, batch, result):
                                  at=result['at'], check=deepcopy(result['checks'][identity]))
     updated['cost_snapshot'] = dict(schema=1, rule=RULE_VERSION, at=result['at'], entries=entries)
     updated['audit'].append(dict(at=now(), actor=batch['actor'], action='保存驗算結果', items=result['ids']))
-    return store.save_batch(updated, expected_revision=batch.get('_revision', ''))
+    return updated
+
+
+def save_result(store, batch, result):
+    return store.save_batch(result_payload(batch, result), expected_revision=batch.get('_revision', ''))
 
 
 def restore_result(store, batch, catalog):
@@ -64,7 +68,7 @@ def restore_result(store, batch, catalog):
         for offset in range(0, len(group), 20):
             chosen = group[offset:offset + 20]
             try:
-                ws = store.spreadsheet.worksheet(category)
+                ws = store.worksheet(category)
                 ranges = [f"A{i['source']['row']}:L{i['source']['row'] + 5}" for i in chosen]
                 values = ws.batch_get(ranges, value_render_option='FORMATTED_VALUE')
                 formulas = ws.batch_get(ranges, value_render_option='FORMULA')
@@ -88,13 +92,37 @@ def restore_result(store, batch, catalog):
                 checks=checks, rows=rows, counts=dict(Counter(r['計算結果'] for r in rows)), persisted=True)
 
 
+def restore_token(batch, catalog):
+    return digest([batch_signature(batch), batch.get('cost_snapshot'),
+                   [(s['identity'], s['source_hash'], s['row']) for s in catalog]])
+
+
+def prime_saved_result(state, batch, result, catalog):
+    """Reuse this just-checked full snapshot only; approval still checks fresh data."""
+    if catalog is None or set(batch['cost_snapshot']['entries']) != set(result['ids']):
+        return False
+    # Changed/failed rows must still follow the normal invalidation path.
+    if any(c.get('error') for c in result['checks'].values()):
+        return False
+    current = deepcopy(result)
+    current.update(signature=batch_signature(batch), persisted=True, restore_token=restore_token(batch, catalog))
+    for row, identity in zip(current['rows'], current['ids']):
+        row['本款驗算時間'] = batch['cost_snapshot']['entries'][identity]['at']
+    state['dispatch_bulk_result_' + batch['id']] = current
+    for item in batch['items']:
+        check = current['checks'].get(item['id'], {})
+        if check.get('report') and not check.get('error'):
+            state['dispatch_cost_' + item['id'] + item['source']['source_hash']] = (check['report'], check['formulas'])
+    return True
+
+
 def restore_session(store, batch, catalog, state):
     """One version check per saved revision/session, not on every widget rerun."""
     snapshot = batch.get('cost_snapshot')
     if not snapshot:
         return
     key = 'dispatch_bulk_result_' + batch['id']
-    token = digest([batch_signature(batch), snapshot, [(s['identity'], s['source_hash'], s['row']) for s in catalog]])
+    token = restore_token(batch, catalog)
     if state.get(key, {}).get('restore_token') == token:
         return
     # Clear previous in-memory successes before attempting a cloud read.

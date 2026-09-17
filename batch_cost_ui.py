@@ -7,8 +7,9 @@ from batch_cost_audit import batch_signature, merge_selection, run_batch_audit
 from cost_audit import block
 from dispatch_manager import digest, now
 from dispatch_review import unit_confirmed
-from audit_persistence import save_result
-from dispatch_workbench_ui import cache_saved_batch
+from audit_persistence import prime_saved_result
+from audit_save_recovery import PENDING_KEY, pending_save, attempt_save
+from audit_save_ui import complete_save
 
 
 def _focus(batch, identity):
@@ -85,14 +86,16 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
             fresh = result.pop("catalog")
             if fresh is not None:
                 st.session_state["dispatch_review_catalog"] = fresh
-            saved = save_result(store, batch, result)
-            cache_saved_batch(saved)
+            pending = pending_save(store, batch, result)
+            st.session_state[PENDING_KEY] = pending
+            saved = attempt_save(lambda: store, pending)
+            if saved is None:
+                st.rerun()
+            complete_save(saved)
             st.session_state.pop(result_key, None)
-            st.session_state["dispatch_notice"] = "驗算結果已隨批次保存並讀回；未改商品價格、核准或發送狀態。"
+            prime_saved_result(st.session_state, saved, result, fresh)
         except Exception as exc:
-            st.session_state.pop(result_key, None)
-            st.error(f"本次驗算／保存未確認完成：{exc}；請重新載入確認。未修改商品價格或核准狀態。")
-            st.session_state.pop("dispatch_history", None)
+            st.error(f"本次驗算未完成：{exc}。原有已保存結果不變；未修改商品價格或核准狀態。")
             st.stop()
         else:
             st.rerun()
