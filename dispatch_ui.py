@@ -26,6 +26,8 @@ from image_cache import cached, ORIGINAL_PREFIX, scope_cache
 from dispatch_targets import ADVERTISING_TARGET, canonical_target, same_target
 from dispatch_workflow import progress_detail, pending_items, selected_pending, combined_copy, build_dispatch_package
 from dispatch_workbench_ui import render_workbench, cache_saved_batch, RUN_KEY
+from dispatch_diagnostics import batch_diagnostics, diagnose_item
+from dispatch_diagnostics_ui import render_diagnostics, render_issue_details
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -192,6 +194,14 @@ def _draft_item(store, batch, item, history, source_images=None):
     with st.expander("報價表原文、參數與詳細算式"):
         cost_report = render_cost_review(store, source, prefix, batch["actor"]) if source.get("cost_audit_required") else None
         st.table(comparison_rows(item, item["copy"]))
+    from batch_cost_audit import batch_signature
+    last_result = st.session_state.get("dispatch_bulk_result_" + batch["id"])
+    checked = (last_result.get("checks", {}).get(item["id"]) if last_result
+               and last_result["signature"] == batch_signature(batch) else None)
+    detail_batch, _ = prepare_batch({**batch, "items": [item]}, {item["id"]: source_images or []},
+                                    {item["id"]: None if checked and checked.get("error") else cost_report})
+    detail_issues = preparation_issues(detail_batch, st.session_state.get("dispatch_review_catalog", []), history)
+    render_issue_details(diagnose_item(detail_batch["items"][0], detail_issues.get(item["id"], []), source_images or [], checked))
     image_ok = True
     candidates = {}
     for reference in source_images or []:
@@ -390,10 +400,12 @@ def _draft(store, batch, history):
     render_batch_image_preview(store, visible, source_images, batch["id"])
     cached_candidates = source_images
     render_batch_cost_tools(store, batch, items, visible, row_state, cached_candidates)
-    st.subheader("③ 處理異常與最後確認")
-    st.caption("只處理需修改的商品；原文、參數及詳細算式收在下方，不必每款重複確認。")
-    with st.expander("查看／修改單款（需要時再展開）"):
-        selected = _select_item("查看商品", items, batch, "draft",
+    st.subheader("③ 發送前問題與修正")
+    diagnosis_slot = st.container()
+    with st.expander("查看／修改單款（需要時再展開）",
+                     expanded=bool(st.session_state.get("dispatch_problem_open_" + batch["id"]))):
+        review_items = sorted(items, key=lambda i: (i["excluded"], i["order"]))
+        selected = _select_item("查看商品", review_items, batch, "draft",
                             lambda k: next(f"{i['order']}. {i['source']['code'] or i['id']}｜{i['source']['name']}" for i in items if i["id"] == k))
         item = next(i for i in items if i["id"] == selected)
         unsaved = _draft_item(store, batch, item, history, source_images.get(item["id"], []))
@@ -415,14 +427,11 @@ def _draft(store, batch, history):
     excluded = sum(i["excluded"] for i in items)
     blocked = len(issues)
     st.write(f"確認發送到：**{batch['target']}**")
-    a, b, c = st.columns(3)
-    a.metric("待整批確認", ready)
-    b.metric("需處理", blocked)
-    c.metric("已排除", excluded)
-    if issues:
-        st.dataframe([{"品號": i["source"]["code"] or i["id"], "需處理": "；".join(issues[i["id"]])}
-                      for i in items if i["id"] in issues], hide_index=True, width="stretch", height=200)
-        st.caption("尚未驗算：到上方全選後驗算。缺圖、單位不明、價格差異或來源變動：展開單款修改，或暫緩該款。")
+    from batch_cost_audit import batch_signature
+    last_result = st.session_state.get("dispatch_bulk_result_" + batch["id"])
+    checks = last_result["checks"] if last_result and last_result["signature"] == batch_signature(batch) else {}
+    with diagnosis_slot:
+        render_diagnostics(batch, batch_diagnostics(prepared, issues, source_images, checks), ready, blocked, excluded)
     missing = [i["source"]["code"] or i["id"] for i in prepared["items"] if not i["excluded"]
                and i.get("cost_audit") and not i["cost_audit"].get("source_ready")]
     if missing:
