@@ -11,6 +11,13 @@ def explain_blocker(item, reason, references=(), checked=None):
     report = item.get("cost_audit") or {}
     where = f"原報價表 {source.get('category', '未記錄分頁')}!A{source.get('row', '?')} 起的商品區塊"
     detail = "下方「查看／修改單款」"
+    from review_issues import issue_reason
+    for issue in item.get("known_issues", []):
+        if issue.get("status") == "open" and reason == issue_reason(issue):
+            return _issue(issue['field'], issue['detail'],
+                          f"原紀錄：{issue['current']}；核對依據：{issue['expected']}。證據：{issue['evidence']}（{issue['at']}，{issue['actor']}）",
+                          issue['action'] + '；修正後以實際證據登記解除，驗算通過不會自動清除此問題。',
+                          '既有問題紀錄 → 查看／解除問題；' + where)
     if reason.startswith("待確認計價單位"):
         return _issue("售價單位", "售價單位尚未確認（不是已判定單位填錯）",
                       f"原表：{source.get('unit_evidence') or '未明示單位'}；目前候選：每{source.get('unit') or '？'}；尚無有效確認紀錄。",

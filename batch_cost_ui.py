@@ -7,6 +7,8 @@ from batch_cost_audit import batch_signature, merge_selection, run_batch_audit
 from cost_audit import block
 from dispatch_manager import digest, now
 from dispatch_review import unit_confirmed
+from audit_persistence import save_result
+from dispatch_workbench_ui import cache_saved_batch
 
 
 def _focus(batch, identity):
@@ -83,18 +85,15 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
             fresh = result.pop("catalog")
             if fresh is not None:
                 st.session_state["dispatch_review_catalog"] = fresh
-            for item in items:
-                if item["id"] not in selected:
-                    continue
-                cache_key = "dispatch_cost_" + item["id"] + item["source"]["source_hash"]
-                st.session_state.pop(cache_key, None)
-                check = result["checks"][item["id"]]
-                if check.get("report"):
-                    st.session_state[cache_key] = (check["report"], check["formulas"])
-            st.session_state[result_key] = result
+            saved = save_result(store, batch, result)
+            cache_saved_batch(saved)
+            st.session_state.pop(result_key, None)
+            st.session_state["dispatch_notice"] = "驗算結果已隨批次保存並讀回；未改商品價格、核准或發送狀態。"
         except Exception as exc:
             st.session_state.pop(result_key, None)
-            st.error(f"本次驗算未完成：{exc}；未更改雲表或核對狀態。")
+            st.error(f"本次驗算／保存未確認完成：{exc}；請重新載入確認。未修改商品價格或核准狀態。")
+            st.session_state.pop("dispatch_history", None)
+            st.stop()
         else:
             st.rerun()
     st.subheader("② 報價表重算結果")
@@ -155,7 +154,7 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
                 else:
                     st.session_state["dispatch_active"] = saved["id"]
                     st.session_state.pop("dispatch_history", None)
-                    st.session_state["dispatch_notice"] = f"已確認 {len(identities)} 款計價單位；請重新執行整批驗算。"
+                    st.session_state["dispatch_notice"] = f"已確認 {len(identities)} 款計價單位；來源及公式未變的驗算會保留。"
                     st.rerun()
     counts = result["counts"]
     a, b, c, d = st.columns(4)
@@ -165,7 +164,7 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
     d.metric("無法完成重算", sum(v for k, v in counts.items() if k not in {"表內重算一致", "有差異"}))
     states = [row.get("原文狀態") for row in result["rows"]]
     st.write(f"原文保存：已保存 {states.count('原文已保存，待核對')} 款｜缺原文 {states.count('缺廠商原文')} 款｜舊版需核對 {states.count('已保存舊版，需重新核對')} 款｜未能確認 {states.count('尚未確認（讀取未完成）')} 款")
-    st.caption(f"驗算時間：{result['at']}。表內重算一致不等於廠商原文正確；原文已保存也不等於人工核對完成。未修改價格或發 LINE。")
+    st.caption(f"驗算時間：{result['at']}。結果已隨批次保存；重開只比對來源／公式／依據版本，未變商品不重算。表內重算一致不等於廠商原文正確，也不會解除既有問題。未修改價格或發 LINE。")
     result_table_key = "dispatch_bulk_table_" + digest([batch["id"], result["at"]])[:24]
     st.session_state[result_table_key] = {"selection": {"cells": []}}
     st.dataframe(result["rows"], hide_index=True, width="stretch", height=min(560, 48 + 44 * len(result["rows"])), row_height=44,

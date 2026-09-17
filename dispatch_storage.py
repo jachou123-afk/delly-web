@@ -14,11 +14,12 @@ from product_image_storage import ProductImageStoreMixin
 from product_images import PRODUCT_IMAGE_SHEET
 from category_storage import CategoryCodeStoreMixin
 from category_codes import CATEGORY_SHEET
+from review_issues import ReviewIssueStoreMixin, ISSUE_SHEET
 
 BATCH_SHEET = "_發送批次"
 IMAGE_SHEET = "_發送圖片"
 EVIDENCE_SHEET = "_報價依據"
-INTERNAL_SHEETS = {BATCH_SHEET, IMAGE_SHEET, EVIDENCE_SHEET, PRODUCT_IMAGE_SHEET, CATEGORY_SHEET}
+INTERNAL_SHEETS = {BATCH_SHEET, IMAGE_SHEET, EVIDENCE_SHEET, PRODUCT_IMAGE_SHEET, CATEGORY_SHEET, ISSUE_SHEET}
 HEADER = ["record_id", "entity_id", "parent", "part", "total", "sha256", "payload", "created_at"]
 CHUNK_SIZE = 20000  # Also below 50k UTF-16 units for all-emoji content.
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
@@ -103,7 +104,7 @@ def asset_bytes(asset):
     return data
 
 
-class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
+class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewIssueStoreMixin):
     def __init__(self, spreadsheet):
         self.spreadsheet = spreadsheet
         self._worksheets = {}
@@ -392,6 +393,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
 
     def verify_cost_checks(self, batch, *, require_source=True):
         """Re-read all active formula blocks in bounded requests before approval."""
+        self.verify_known_issues(batch)
         from collections import defaultdict
         from cost_audit import blockers, fingerprint
         groups = defaultdict(list)

@@ -162,7 +162,8 @@ render_dispatch_manager(lambda: CloudDispatchStore(st.session_state['test_spread
     assert not app.exception
     assert {m.label: m.value for m in app.metric}["待整批確認"] == "3"
     assert not any("尚未儲存的修改" in w.value for w in app.warning)
-    assert before == {k: w.rows for k, w in app.session_state["test_spreadsheet"].sheets.items()}
+    assert {k: v for k, v in before.items() if k != '_發送批次'} == {
+        k: w.rows for k, w in app.session_state["test_spreadsheet"].sheets.items() if k != '_發送批次'}
     confirm = widget(app, "button", "確認本批內容，建立待發清單")
     assert not confirm.disabled
     confirm.click().run()

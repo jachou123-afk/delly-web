@@ -346,6 +346,11 @@ def _draft(store, batch, history):
             with st.spinner("讀取原報價資料供左右對照…"):
                 st.session_state["dispatch_review_catalog"] = store.catalog()
         batch = hydrate_draft(batch, st.session_state["dispatch_review_catalog"])
+        from audit_persistence import restore_session
+        from review_issues import attach_issues
+        registry = store.review_issues()
+        batch = attach_issues(batch, registry)
+        restore_session(store, batch, st.session_state["dispatch_review_catalog"], st.session_state)
     except Exception as exc:
         st.error(f"原資料讀取失敗，暫停核對：{exc}")
         return
@@ -354,6 +359,8 @@ def _draft(store, batch, history):
     # hydration; do not silently hide the panel or relax confirmation gates.
     for item in items:
         item["source"]["cost_audit_required"] = True
+    from review_issues_ui import render_review_issues
+    render_review_issues(store, batch, registry)
     with st.expander("修改批次名稱或目標聊天室"):
         with st.form("dispatch_details_" + batch["id"] + batch.get("_revision", "")):
             name = st.text_input("批次名稱", value=batch["name"])

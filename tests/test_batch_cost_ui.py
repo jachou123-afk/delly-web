@@ -54,7 +54,7 @@ def test_all_none_native_checkbox_state_and_detail_focus_are_separate():
     assert widget(app, "selectbox", "查看商品").value == focus
 
 
-def test_all_69_render_a_result_and_never_auto_review_or_write():
+def test_all_69_render_and_persist_results_without_changing_quotes_or_reviews():
     app = start()
     before = {k: deepcopy(v.rows) for k, v in app.session_state["test_spreadsheet"].sheets.items()}
     widget(app, "button", "全選含暫緩（69 款）").click().run()
@@ -67,7 +67,12 @@ def test_all_69_render_a_result_and_never_auto_review_or_write():
     assert any("缺原文 69 款" in m.value for m in app.markdown)
     assert {m.label: m.value for m in app.metric}["待整批確認"] == "0"
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
-    assert before == {k: v.rows for k, v in app.session_state["test_spreadsheet"].sheets.items()}
+    from dispatch_storage import CloudDispatchStore
+    sheet = app.session_state["test_spreadsheet"]
+    assert before['G正版'] == sheet.sheets['G正版'].rows
+    saved = CloudDispatchStore(sheet).get_batch(app.session_state['dispatch_active'])
+    assert saved['status'] == 'draft' and all(i['review'] is None for i in saved['items'])
+    assert len(saved['cost_snapshot']['entries']) == 69
 
 
 def test_search_never_silently_drops_hidden_selections_or_limits_select_all():
@@ -86,15 +91,16 @@ def test_search_never_silently_drops_hidden_selections_or_limits_select_all():
     assert not selected(app)
 
 
-def test_changed_selection_labels_old_result_and_reload_clears_it():
+def test_changed_selection_labels_old_result_and_reload_restores_timestamp():
     app = start()
     widget(app, "button", "全選含暫緩（69 款）").click().run()
     widget(app, "button", "驗算所選商品（69 款）").click().run()
     widget(app, "button", "取消全選").click().run()
     assert any("下表仍是上次 69 款" in w.value for w in app.warning)
+    stamp = result(app)['at']
     widget(app, "button", "重新載入雲端").click().run()
-    assert "dispatch_bulk_result_" + app.session_state["dispatch_active"] not in app.session_state
-    assert any("尚未執行整批驗算" in i.value for i in app.info)
+    assert result(app)['at'] == stamp and len(result(app)['rows']) == 69
+    assert not any("尚未執行整批驗算" in i.value for i in app.info)
 
 
 def test_one_changed_source_stays_in_results_instead_of_disappearing():
@@ -103,7 +109,7 @@ def test_one_changed_source_stays_in_results_instead_of_disappearing():
     widget(app, "button", "全選含暫緩（69 款）").click().run()
     widget(app, "button", "驗算所選商品（69 款）").click().run()
     assert not app.exception and len(result(app)["rows"]) == 69
-    assert result(app)["rows"][-1]["計算結果"] == "來源已變動"
+    assert result(app)["rows"][-1]["計算結果"] == "驗算已失效"
     assert {m.label: m.value for m in app.metric}["表內重算一致"] == "68"
 
 

@@ -133,6 +133,8 @@ def item_errors(item, *, require_review=True, require_source=True):
     if item["excluded"]:
         return [] if item["reason"].strip() else ["排除商品需填寫原因"]
     errors = list(item["source"]["errors"])
+    from review_issues import issue_reason
+    errors.extend(issue_reason(issue) for issue in item.get("known_issues", []) if issue.get("status") == "open")
     if item["source"].get("cost_audit_required"):
         from cost_audit import blockers
         errors.extend(blockers(item["source"], item.get("cost_audit"), require_source=require_source))

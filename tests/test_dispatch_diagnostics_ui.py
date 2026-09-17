@@ -54,7 +54,8 @@ def test_problem_table_shows_only_active_scope_with_blockers_and_reminders_separ
     assert any("修正方式：對照廠商原文" in v.value for v in app.markdown)
     assert any("操作位置：" in v.value and "單位確認依據" in v.value for v in app.caption)
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
-    assert before == {k: v.rows for k, v in app.session_state["test_spreadsheet"].sheets.items()}
+    assert {k: v for k, v in before.items() if k != '_發送批次'} == {
+        k: v.rows for k, v in app.session_state["test_spreadsheet"].sheets.items() if k != '_發送批次'}
 
 
 def test_click_problem_focuses_correct_item_and_expands_editor_without_writes():
