@@ -112,3 +112,35 @@ def test_header_collision_read_failure_and_invalid_assets_fail_closed():
     asset["sha256"] = "wrong"
     with pytest.raises(DispatchError, match="校驗失敗"):
         asset_bytes(asset)
+
+
+def test_receipt_save_reads_only_target_batch_payload_and_checks_readback(monkeypatch):
+    store = CloudDispatchStore(FakeSpreadsheet())
+    first = store.save_batch(ready_batch())
+    second = store.save_batch(ready_batch())
+    ws = store.spreadsheet.sheets[BATCH_SHEET]
+    ws.read_ranges.clear()
+
+    def no_full_read():
+        raise AssertionError("must not read every historical payload on each receipt")
+
+    monkeypatch.setattr(ws, "get_all_values", no_full_read)
+    saved = store.save_batch(first, first["_revision"])
+    assert saved["_revision"] != first["_revision"]
+    assert ws.read_ranges.count("A2:B") == 2
+    second_rows = {n for n, row in enumerate(ws.rows, 1) if len(row) > 1 and row[1] == second["id"]}
+    import re
+    for name in ws.read_ranges:
+        match = re.fullmatch(r"A(\d+):H(\d+)", name)
+        if match:
+            a, b = map(int, match.groups())
+            assert not second_rows.intersection(range(a, b + 1))
+
+
+def test_targeted_read_rejects_truncated_ranges(monkeypatch):
+    store = CloudDispatchStore(FakeSpreadsheet())
+    batch = store.save_batch(ready_batch())
+    ws = store.spreadsheet.sheets[BATCH_SHEET]
+    monkeypatch.setattr(ws, "batch_get", lambda ranges: [[] for _ in ranges])
+    with pytest.raises(DispatchError, match="讀取不完整"):
+        store.get_batch(batch["id"])

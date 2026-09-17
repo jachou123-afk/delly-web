@@ -132,7 +132,10 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
         ws = self._sheet(BATCH_SHEET)
         if ws is None:
             return []
-        records = decode_records(ws.get_all_values()[1:])
+        return self._latest_batches(decode_records(ws.get_all_values()[1:]))
+
+    @staticmethod
+    def _latest_batches(records):
         latest = {}
         for record in records:
             entity = record["entity"]
@@ -145,11 +148,40 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
             latest[entity] = {**value, "_revision": record["id"]}
         return sorted(latest.values(), key=lambda b: b["created_at"], reverse=True)
 
+    def get_batch(self, batch_id):
+        """Read a fresh thin index and only this batch's checked version chain.
+
+        Never cache this index: both pre-write and post-write must see concurrent
+        appends. Other batches' large JSON payloads are not needed for a receipt.
+        """
+        ws = self._sheet(BATCH_SHEET)
+        if ws is None:
+            return None
+        ranges = []
+        for number, row in enumerate(ws.get("A2:B"), 2):
+            if len(row) > 1 and row[1] == batch_id:
+                if ranges and ranges[-1][1] == number - 1:
+                    ranges[-1][1] = number
+                else:
+                    ranges.append([number, number])
+        rows = []
+        for offset in range(0, len(ranges), 50):
+            names = [f"A{a}:H{b}" for a, b in ranges[offset:offset + 50]]
+            groups = ws.batch_get(names)
+            if len(groups) != len(names) or any(len(group) != b - a + 1 for group, (a, b)
+                                               in zip(groups, ranges[offset:offset + 50])):
+                raise DispatchError("批次紀錄讀取不完整，停止保存")
+            rows.extend(row for group in groups for row in group)
+        records = decode_records(rows)
+        if any(r["entity"] != batch_id for r in records):
+            raise DispatchError("批次索引已變動，請重新載入")
+        batches = self._latest_batches(records)
+        return batches[0] if batches else None
+
     def save_batch(self, batch, expected_revision="", record_id=None):
         clean = {k: deepcopy(v) for k, v in batch.items() if not k.startswith("_")}
         record_id = record_id or uuid.uuid4().hex
-        latest = {b["id"]: b for b in self.list_batches()}
-        old = latest.get(batch["id"])
+        old = self.get_batch(batch["id"])
         if old and old["_revision"] == record_id:
             if serialize({k: v for k, v in old.items() if not k.startswith("_")}) != serialize(clean):
                 raise DispatchError("儲存識別碼已被另一份內容使用")
@@ -163,8 +195,8 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin):
         except Exception as exc:
             raise DispatchError("儲存結果待確認：請重新載入雲端紀錄，不可直接重複操作") from exc
         try:
-            saved = next(b for b in self.list_batches() if b["id"] == batch["id"])
-            if saved["_revision"] != record_id:
+            saved = self.get_batch(batch["id"])
+            if saved is None or saved["_revision"] != record_id:
                 raise DispatchError("寫後核對發現其他更新")
         except Exception as exc:
             raise DispatchError("紀錄可能已儲存，但寫後核對未完成；請重新載入") from exc

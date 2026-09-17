@@ -2,7 +2,9 @@
 
 正式程式與作業文件以本儲存庫 `main` 為準。
 
-- [LINE 商品廣告 Computer Use 執行 SOP](quote_dispatch/LINE_COMPUTER_USE_SOP.md)：跨電腦先重讀；整批準備、同聊天室依序發送、斷點查核、整批回寫。重新執行不等於整批重發。
+最新功能：[V87.11 第二次檢查與快速發送工作台](TESTING_V87_11.md)。新版驗證與部署狀態以此文件為準；歷史交接文件保留原樣。
+
+- [LINE 商品廣告 Computer Use 執行 SOP](quote_dispatch/LINE_COMPUTER_USE_SOP.md)：跨電腦先重讀；保留第二次檢查，通過後用凍結圖文快速工作台。實際查驗後完成並下一則；連續執行模式可保留逐款證據後整批回寫。重新執行不等於整批重發。
 - [交接狀態](HANDOFF_STATE.md)：版本、既有驗收與限制。
 - [報價轉發規則](quote_dispatch/README.md)：廠商規則與共用文案規則。
 

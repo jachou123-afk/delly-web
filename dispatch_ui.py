@@ -25,6 +25,7 @@ from batch_approval import prepare_batch, preparation_issues, confirm_prepared_b
 from image_cache import cached, ORIGINAL_PREFIX, scope_cache
 from dispatch_targets import ADVERTISING_TARGET, canonical_target, same_target
 from dispatch_workflow import progress_detail, pending_items, selected_pending, combined_copy, build_dispatch_package
+from dispatch_workbench_ui import render_workbench, cache_saved_batch, RUN_KEY
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -66,8 +67,8 @@ def _save(store, batch, original=None):
         st.error(str(exc))
         st.info("本次畫面不會把動作當成成功。請按「重新載入雲端」確認最新狀態。")
         return False
-    st.session_state["dispatch_active"] = saved["id"]
-    st.session_state.pop("dispatch_history", None)
+    cache_saved_batch(saved)
+    st.session_state.pop(RUN_KEY, None)
     st.session_state["dispatch_notice"] = "已儲存到雲端。"
     st.rerun()
 
@@ -519,6 +520,15 @@ def _batch_actions(store, batch):
 
 def _progress(store, batch, history=()):
     report = reconciliation(batch)
+    if not report["integrity_error"] and render_workbench(store, batch):
+        return
+    with st.expander("進度清單／既有批次補登／異常與對帳", expanded=bool(
+            report["integrity_error"] or report["uncertain"] or report["duplicates"] or report["unexpected"]
+            or report["can_finish"] or batch["status"] == "completed")):
+        _progress_details(store, batch, history, report)
+
+
+def _progress_details(store, batch, history, report):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("本批應發", report["expected"])
     c2.metric("已確認完成", report["complete"])
@@ -666,6 +676,7 @@ def render_dispatch_manager(store_factory):
     if notice:
         st.success(notice)
     if st.button("重新載入雲端", key="dispatch_reload"):
+        st.session_state.pop(RUN_KEY, None)
         st.session_state.pop("dispatch_history", None)
         st.session_state.pop("dispatch_catalog", None)
         st.session_state.pop("dispatch_review_catalog", None)
@@ -704,6 +715,7 @@ def render_dispatch_manager(store_factory):
                           format_func=lambda k: "＋ 建立新批次" if not k else next(_batch_label(b) for b in history if b["id"] == k),
                           key="dispatch_batch_selector_" + active + history_revision)
     if chosen != active:
+        st.session_state.pop(RUN_KEY, None)
         st.session_state["dispatch_active"] = chosen
         st.rerun()
     if not chosen:
