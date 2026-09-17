@@ -24,6 +24,7 @@ from batch_image_preview import render_batch_image_preview
 from batch_approval import prepare_batch, preparation_issues, confirm_prepared_batch
 from image_cache import cached, ORIGINAL_PREFIX, scope_cache
 from dispatch_targets import ADVERTISING_TARGET, canonical_target, same_target
+from dispatch_workflow import progress_detail, pending_items, selected_pending, combined_copy, build_dispatch_package
 
 STATUS = {"draft": "草稿・待核對", "approved": "已確認・待發送",
           "in_progress": "發送核對中", "completed": "已完成對帳"}
@@ -443,19 +444,80 @@ def _draft(store, batch, history):
                     st.error(str(exc))
 
 
-def _export(batch):
+def _export(batch, history=()):
     output = StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["順序", "品號", "商品", "目標聊天室", "狀態", "圖片確認時間", "文案確認時間", "排除原因"])
+    writer.writerow(["順序", "品號", "商品", "目標聊天室", "狀態", "圖片確認時間", "文案確認時間", "排除原因", "具體情況", "下一步", "同聊天室其他批次紀錄"])
     for i in sorted(batch["items"], key=lambda i: i["order"]):
         values = [i["order"], i["source"]["code"], i["source"]["name"], batch["target"], item_status(i),
                   "; ".join(r["at"] for r in i["image_receipts"]), "; ".join(r["at"] for r in i["text_receipts"]), i["reason"]]
+        detail = progress_detail(batch, i, history)
+        values.extend(detail[k] for k in ("具體情況", "下一步", "同聊天室其他批次紀錄"))
         writer.writerow(["'" + v if isinstance(v, str) and v.startswith(("=", "+", "-", "@")) else v for v in values])
     st.download_button("下載本批核對清單", output.getvalue().encode("utf-8-sig"),
                        f"廣告批次-{batch['id'][:8]}.csv", "text/csv", key="dispatch_csv_" + batch["id"])
 
 
-def _progress(store, batch):
+def _batch_actions(store, batch):
+    pending = pending_items(batch)
+    if not pending:
+        return
+    st.subheader("整批處理，不必逐款切換")
+    st.caption("先確認 LINE 是否已發過；下列選取只影響這次下載／登記，不會取消排除，也不會傳送 LINE。")
+    prefix = "dispatch_bulk_send_" + batch["id"] + batch.get("_revision", "")
+    by_id = {i["id"]: i for i in pending}
+    selection = st.multiselect("本次一起處理的商品", list(by_id), default=list(by_id), key=prefix + "_items",
+                               format_func=lambda k: f"{by_id[k]['source']['code']}｜{by_id[k]['source']['name']}")
+    selected = [i for i in pending if i["id"] in selection]
+    st.write(f"本次 {len(selected)} 款｜目標：{batch['target']}")
+    with st.expander("一次複製整批文案／下載圖文包", expanded=True):
+        st.caption("圖文包依順序分好每款原圖與文案；已登記的部分不再打包。產生前會整批檢查雲表是否變更。")
+        package_key = digest([batch, selection])
+        if st.button("核對雲表並準備整批圖文", disabled=not selected, key=prefix + "_prepare"):
+            st.session_state.pop("dispatch_download_package", None)
+            try:
+                selected_pending(batch, selection)
+                latest = next((b for b in store.list_batches() if b["id"] == batch["id"]), None)
+                if latest is None or digest(latest) != digest(batch):
+                    raise DispatchError("另一台裝置已更新本批，請先重新載入雲端")
+                changes = source_changes({**batch, "items": selected}, store.catalog())
+                if changes:
+                    raise DispatchError("；".join(changes))
+                with st.spinner("整批讀取原圖中…"):
+                    data = build_dispatch_package(batch, selection, lambda identity: _get_asset(store, identity))
+                st.session_state["dispatch_download_package"] = (package_key, data)
+            except Exception as exc:
+                st.error(f"尚未產生圖文包：{exc}")
+        package = st.session_state.get("dispatch_download_package")
+        if package and package[0] == package_key:
+            st.download_button("一次下載所選原圖＋文案", package[1], f"廣告圖文-{batch['id'][:8]}.zip",
+                               "application/zip", key=prefix + "_zip")
+            text = combined_copy(selected)
+            if text:
+                st.caption("下方右上角可一次複製所選文案。內容較長時，LINE 仍可能需要分段貼上。")
+                st.code(text, language=None)
+            st.success("圖文包已準備好；尚未發送，也未更改雲端紀錄。")
+    with st.expander("已在 LINE 發完？一次登記所選商品", expanded=True):
+        with st.form(prefix + "_receipt"):
+            actor = st.text_input("整批登記人", value=batch["actor"])
+            evidence = st.text_input("本次 LINE 訊息時間／核對依據", placeholder="例如：9/17 15:20～15:30，已對照所選品號的圖文")
+            checked = st.checkbox(f"我已查看「{batch['target']}」，所選商品的圖片和文案都已出現")
+            close = st.checkbox("若全批已核對且無異常，同時完成對帳", value=True)
+            if st.form_submit_button("一次保存所選商品的發送紀錄", type="primary", disabled=not selected):
+                try:
+                    if not checked:
+                        raise DispatchError("請先確認所選商品確實已在指定聊天室出現")
+                    selected_pending(batch, selection)
+                    updated = record_observation_batch(batch, item_ids=selection, evidence=evidence,
+                                                        actor=actor, target=batch["target"])
+                    if close and reconciliation(updated)["can_finish"]:
+                        updated = finish_batch(updated, actor, evidence)
+                    _save(store, updated, batch)
+                except Exception as exc:
+                    st.error(str(exc))
+
+
+def _progress(store, batch, history=()):
     report = reconciliation(batch)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("本批應發", report["expected"])
@@ -466,10 +528,32 @@ def _progress(store, batch):
         st.progress(report["complete"] / report["expected"])
     st.caption("已確認＝核對人已在 LINE 畫面查驗並登記；不是 LINE 系統回執。網站不會代按傳送。")
     items = sorted(batch["items"], key=lambda i: i["order"])
-    st.dataframe([{"順序": i["order"], "品號": i["source"]["code"] or i["id"], "商品": i["source"]["name"],
-                   "圖片": "已確認" if i["image_receipts"] else "未確認", "文案": "已確認" if i["text_receipts"] else "未確認",
-                   "狀態": item_status(i), "排除原因": i["reason"]} for i in items], hide_index=True, width="stretch")
-    _export(batch)
+    view = st.radio("查看範圍", ["待處理", "本批排除", "已完成", "全部"], horizontal=True,
+                    key="dispatch_progress_view_" + batch["id"])
+    visible = [i for i in items if view == "全部"
+               or (view == "本批排除" and i["excluded"])
+               or (view == "已完成" and item_status(i) == "已確認完成")
+               or (view == "待處理" and not i["excluded"] and item_status(i) != "已確認完成")]
+    rows = [progress_detail(batch, i, history) for i in visible]
+    if rows:
+        st.dataframe([{k: r[k] for k in ("順序", "品號", "商品", "狀態", "具體情況", "下一步")} for r in rows],
+                     hide_index=True, width="stretch", row_height=72,
+                     height=min(600, 40 + 72 * len(rows)),
+                     column_config={"具體情況": st.column_config.TextColumn(width="large"),
+                                    "下一步": st.column_config.TextColumn(width="large")})
+        if any(r["狀態"] == "原因待釐清" for r in rows):
+            st.warning("舊紀錄只寫「已發或有疑點」，沒有逐款說明；不代表每款都有問題，也不能據此認定已發送。")
+        with st.expander("查看完整原因與其他批次紀錄"):
+            chosen = st.selectbox("查看哪款的原因", range(len(rows)),
+                                  format_func=lambda n: rows[n]["品號"] + "｜" + rows[n]["商品"],
+                                  key="dispatch_reason_" + batch["id"] + view)
+            for key in ("具體情況", "下一步", "原始排除備註", "同聊天室其他批次紀錄"):
+                st.write(f"{key}：{rows[chosen][key] or '未填寫'}")
+            st.caption("其他批次紀錄僅供查找，不代表本次相同圖文已發送；不自動沿用完成狀態。")
+    else:
+        st.info("此範圍沒有商品。")
+    with st.expander("下載完整核對清單"):
+        _export(batch, history)
     if report["integrity_error"]:
         st.error("已確認的批次內容遭變更，停止後續操作。")
         return
@@ -478,32 +562,14 @@ def _progress(store, batch):
         st.write(batch["reconciliation"])
         return
     active = [i for i in items if not i["excluded"]]
-    pending = [i for i in active if not i["image_receipts"] or not i["text_receipts"]]
-    if pending:
-        with st.expander(f"事後批次補登已發圖文（尚缺 {len(pending)} 款）"):
-            st.warning("只用於已實際發送、且已逐款查看 LINE 紀錄的商品；本功能不會發送 LINE。")
-            with st.form("dispatch_retro_batch_" + batch["id"] + batch.get("_revision", "")):
-                observed_target = st.text_input("事後補登的實際聊天室", value=batch["target"])
-                actor = st.text_input("事後補登核對人", value=batch["actor"])
-                evidence = st.text_input(
-                    "事後補登依據",
-                    placeholder="例如：2026-09-15 LINE 匯出紀錄，逐款核對圖片後接同品號文案",
-                )
-                checked = st.checkbox(
-                    f"我已逐款查看 LINE 紀錄，確認這 {len(pending)} 款的圖片與文案皆在正確聊天室"
-                )
-                if st.form_submit_button(f"一次補齊尚缺的 {len(pending)} 款圖文紀錄", type="primary"):
-                    if not checked:
-                        st.error("請先逐款核對 LINE 紀錄並勾選確認。")
-                    else:
-                        try:
-                            updated = record_observation_batch(
-                                batch, item_ids=[i["id"] for i in pending], evidence=evidence,
-                                actor=actor, target=observed_target,
-                            )
-                            _save(store, updated, batch)
-                        except Exception as exc:
-                            st.error(str(exc))
+    _batch_actions(store, batch)
+    if active and st.checkbox("只處理單款／部分圖文／異常", key="dispatch_single_" + batch["id"]):
+        _single_progress_item(store, batch, active)
+    with st.expander("個別異常與最後對帳", expanded=bool(report["uncertain"] or report["duplicates"] or report["unexpected"])):
+        _progress_finish(store, batch, report)
+
+
+def _single_progress_item(store, batch, active):
     item_id = _select_item("目前要處理的商品", active, batch, "progress",
                            lambda k: next(f"{i['order']}. {i['source']['code']}｜{item_status(i)}｜{i['source']['name']}" for i in active if i["id"] == k))
     item = next(i for i in active if i["id"] == item_id)
@@ -547,9 +613,12 @@ def _progress(store, batch):
                         _save(store, updated, batch)
                     except Exception as exc:
                         st.error(str(exc))
+
+
+def _progress_finish(store, batch, report):
     st.divider()
     st.subheader("本批發送後對帳")
-    for field, label in (("missing", "尚未發送"), ("partial", "圖文不完整"), ("uncertain", "結果待確認"),
+    for field, label in (("missing", "尚無發送確認紀錄"), ("partial", "圖文紀錄不完整"), ("uncertain", "結果待確認"),
                          ("duplicates", "重複紀錄"), ("unexpected", "其他異常")):
         if report[field]:
             st.warning(label + "：" + "、".join(report[field]))
@@ -648,6 +717,6 @@ def render_dispatch_manager(store_factory):
     if batch["status"] == "draft":
         _draft(store, batch, history)
     else:
-        _progress(store, batch)
+        _progress(store, batch, history)
     with st.expander("核對與操作紀錄"):
         st.json({"操作": batch["audit"], "LINE 畫面核對": batch["observations"], "最終對帳": batch["reconciliation"]})

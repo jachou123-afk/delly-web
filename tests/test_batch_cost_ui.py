@@ -43,7 +43,7 @@ def test_all_none_native_checkbox_state_and_detail_focus_are_separate():
     app = start()
     focus = widget(app, "selectbox", "查看商品").value
     assert widget(app, "button", "驗算所選商品（0 款）").disabled
-    widget(app, "button", "全選本批（69 款）").click().run()
+    widget(app, "button", "全選含暫緩（69 款）").click().run()
     assert not app.exception
     assert len(selected(app)) == 69
     assert widget(app, "selectbox", "查看商品").value == focus
@@ -57,7 +57,7 @@ def test_all_none_native_checkbox_state_and_detail_focus_are_separate():
 def test_all_69_render_a_result_and_never_auto_review_or_write():
     app = start()
     before = {k: deepcopy(v.rows) for k, v in app.session_state["test_spreadsheet"].sheets.items()}
-    widget(app, "button", "全選本批（69 款）").click().run()
+    widget(app, "button", "全選含暫緩（69 款）").click().run()
     widget(app, "button", "驗算所選商品（69 款）").click().run()
     assert not app.exception
     assert len(result(app)["rows"]) == 69
@@ -74,7 +74,7 @@ def test_search_never_silently_drops_hidden_selections_or_limits_select_all():
     app = start()
     widget(app, "text_input", "搜尋本批品號／品名").set_value("BGD-G-69").run()
     assert len(app.dataframe[0].value) == 1
-    widget(app, "button", "全選本批（69 款）").click().run()
+    widget(app, "button", "全選含暫緩（69 款）").click().run()
     assert len(selected(app)) == 69
     assert any("68 款未顯示" in i.value for i in app.info)
     widget(app, "text_input", "搜尋本批品號／品名").set_value("找不到的商品").run()
@@ -88,7 +88,7 @@ def test_search_never_silently_drops_hidden_selections_or_limits_select_all():
 
 def test_changed_selection_labels_old_result_and_reload_clears_it():
     app = start()
-    widget(app, "button", "全選本批（69 款）").click().run()
+    widget(app, "button", "全選含暫緩（69 款）").click().run()
     widget(app, "button", "驗算所選商品（69 款）").click().run()
     widget(app, "button", "取消全選").click().run()
     assert any("下表仍是上次 69 款" in w.value for w in app.warning)
@@ -100,7 +100,7 @@ def test_changed_selection_labels_old_result_and_reload_clears_it():
 def test_one_changed_source_stays_in_results_instead_of_disappearing():
     app = start()
     app.session_state["test_spreadsheet"].sheets["G正版"].rows[-6][11] = "v不同來源"
-    widget(app, "button", "全選本批（69 款）").click().run()
+    widget(app, "button", "全選含暫緩（69 款）").click().run()
     widget(app, "button", "驗算所選商品（69 款）").click().run()
     assert not app.exception and len(result(app)["rows"]) == 69
     assert result(app)["rows"][-1]["計算結果"] == "來源已變動"

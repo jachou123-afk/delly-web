@@ -157,7 +157,7 @@ render_dispatch_manager(lambda: CloudDispatchStore(st.session_state['test_spread
     assert not next(e for e in app.expander if e.label == "報價表原文、參數與詳細算式").proto.expanded
     assert not any(w.label == "本次核對人" for w in app.text_input)
     assert not any(w.label.startswith("我已核對原文、圖片") for w in app.checkbox)
-    widget(app, "button", "全選本批（3 款）").click().run()
+    widget(app, "button", "全選含暫緩（3 款）").click().run()
     widget(app, "button", "驗算所選商品（3 款）").click().run()
     assert not app.exception
     assert {m.label: m.value for m in app.metric}["待整批確認"] == "3"

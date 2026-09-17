@@ -48,7 +48,7 @@ def test_bound_images_auto_preview_without_writing_or_marking_review():
     assert any("1／69 款已有配對圖片" in c.value for c in app.caption)
     assert not any(w.label.startswith("我已核對原文、圖片") for w in app.checkbox)
     assert widget(app, "button", "確認本批內容，建立待發清單").disabled
-    widget(app, "button", "全選本批（69 款）").click().run()
+    widget(app, "button", "全選含暫緩（69 款）").click().run()
     assert before == {k: ws.rows for k, ws in spreadsheet.sheets.items()}
     saved = CloudDispatchStore(spreadsheet).list_batches()[0]
     assert not saved["items"][0]["images"] and not saved["items"][0]["review"]
