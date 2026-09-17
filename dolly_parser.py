@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, vendor_options as canonical_vendor_
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.14")
+st.title("🪐 半自動 - 採購報價彙整表 V87.15")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -541,27 +541,22 @@ render_pending_evidence(get_dispatch_store)
 quote_tab, dispatch_tab = st.tabs(
     ["📝 報價整理", "📣 發送管理"], key="tool_page", on_change="rerun"
 )
-if dispatch_tab.open:
-    with dispatch_tab:
-        render_dispatch_manager(get_dispatch_store)
-    st.stop()
-
 # --- 側邊欄設定 ---
-settings = get_settings_cached()
-if settings is None:
-    st.error("成本設定讀取失敗，停止解析存檔；請重試，不套用其他匯率。")
-    st.stop()
-st.sidebar.header("⚙️ 成本參數設定")
-ex_rate = st.sidebar.number_input("匯率", value=settings["ex_rate"], step=0.05, format="%.2f")
-intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=settings["intl_rate"], step=0.5)
-dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=settings["dom_rate"], step=0.5)
-
-if st.sidebar.button("📌 將目前數值設為預設"):
-    if save_settings({"ex_rate": ex_rate, "intl_rate": intl_rate, "dom_rate": dom_rate_def}):
-        get_settings_cached.clear()
-        st.sidebar.success(f"已更新預設 → 匯率 {ex_rate}")
-        st.rerun()
-st.sidebar.caption(f"目前雲端預設:匯率 {settings['ex_rate']} / 國際 {settings['intl_rate']} / 內陸 {settings['dom_rate']}")
+if not dispatch_tab.open:
+    settings = get_settings_cached()
+    if settings is None:
+        st.error("成本設定讀取失敗，停止解析存檔；請重試，不套用其他匯率。")
+        st.stop()
+    st.sidebar.header("⚙️ 成本參數設定")
+    ex_rate = st.sidebar.number_input("匯率", value=settings["ex_rate"], step=0.05, format="%.2f")
+    intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=settings["intl_rate"], step=0.5)
+    dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=settings["dom_rate"], step=0.5)
+    if st.sidebar.button("📌 將目前數值設為預設"):
+        if save_settings({"ex_rate": ex_rate, "intl_rate": intl_rate, "dom_rate": dom_rate_def}):
+            get_settings_cached.clear()
+            st.sidebar.success(f"已更新預設 → 匯率 {ex_rate}")
+            st.rerun()
+    st.sidebar.caption(f"目前雲端預設:匯率 {settings['ex_rate']} / 國際 {settings['intl_rate']} / 內陸 {settings['dom_rate']}")
 # --- 4. 解析引擎 V12 ---
 # 注意：zhconv 會把「只」轉成「隻」，所有單位 pattern 都需含「隻」
 UNIT_PAT = r'(?:盒|pcs|PCS|只|隻|個|个|套|瓶|罐)'
@@ -1844,6 +1839,11 @@ def get_fresh_line_ad_block(category_name, base_row, expected_block):
 
 
 # --- 5. LINE 廣告文案（只讀取既有雲表，不改動採購資料） ---
+if dispatch_tab.open:
+    with dispatch_tab:
+        render_dispatch_manager(get_dispatch_store, correction_tools={"parse": parse_text, "formulas": build_cost_formulas})
+    st.stop()
+
 with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
     st.caption(
         "分類代碼與發送管理共用；未設定時請先到「分類代碼設定」補齊。文案移除新品字樣；正版授權置頂；"

@@ -191,6 +191,8 @@ def _draft_item(store, batch, item, history, source_images=None):
         st.info("下方保留原始資料供核對。先修正原報價表，再按「更新本款來源與文案」；不會把尚未產生的文案誤判成品號錯誤。")
     if fresh_problems:
         st.warning("原報價表與這份草稿不同，請先按下方「更新本款來源與文案」，再重新核對。")
+    from product_correction_ui import render_correction_editor
+    render_correction_editor(store, batch, item)
     with st.expander("報價表原文、參數與詳細算式"):
         cost_report = render_cost_review(store, source, prefix, batch["actor"]) if source.get("cost_audit_required") else None
         st.table(comparison_rows(item, item["copy"]))
@@ -685,11 +687,15 @@ def _progress_finish(store, batch, report):
                 st.error(str(exc))
 
 
-def render_dispatch_manager(store_factory):
+def render_dispatch_manager(store_factory, correction_tools=None):
     st.header("📣 發送管理")
     st.caption("選商品 → 預覽與核對 → 確認待發清單 → 登記 LINE 結果 → 逐款對帳")
     from audit_save_recovery import PENDING_KEY
     from audit_save_ui import render_pending_save
+    from product_correction_ui import PENDING, render_pending_correction
+    if st.session_state.get(PENDING):
+        render_pending_correction(store_factory)
+        st.stop()
     if st.session_state.get(PENDING_KEY):
         render_pending_save(store_factory)
         st.stop()
@@ -708,6 +714,7 @@ def render_dispatch_manager(store_factory):
         st.rerun()
     try:
         store = store_factory()
+        store.correction_tools = correction_tools
         spreadsheet = getattr(store, "spreadsheet", None)
         if spreadsheet is not None:
             st.caption(
@@ -747,6 +754,14 @@ def render_dispatch_manager(store_factory):
     batch = next(b for b in history if b["id"] == chosen)
     st.write(f"**{batch['name']}** · {batch['target']} · {STATUS[batch['status']]}")
     st.caption(f"批次 {batch['id'][:8]} · 建立於 {batch['created_at']}")
+    uncertain = [p for p in st.session_state.get('dispatch_uncertain_corrections', [])
+                 if any(i['id'] == p['plan']['source']['identity'] and not i['excluded'] for i in batch['items'])]
+    if uncertain:
+        st.error('本批含修正結果尚未釐清的商品，先查結果，不能確認或開啟發送工作台。')
+        if st.button('查詢本批待確認修正', key='dispatch_uncertain_recover_' + batch['id']):
+            st.session_state[PENDING] = uncertain[0]
+            st.rerun()
+        return
     if batch["status"] == "draft":
         _draft(store, batch, history)
     else:
