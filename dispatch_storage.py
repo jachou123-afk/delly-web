@@ -140,7 +140,18 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
     def list_batches(self):
         ws = self._sheet(BATCH_SHEET)
         if ws is None:
-            return []
+            # A title lookup can temporarily miss a tab while spreadsheet
+            # metadata still lists it. Confirm with a fresh metadata listing
+            # before presenting an existing user's history as a new account.
+            matches = [sheet for sheet in self.spreadsheet.worksheets()
+                       if sheet.title == BATCH_SHEET]
+            if not matches:
+                return []
+            if len(matches) != 1 or matches[0].row_values(1) != HEADER:
+                raise DispatchError("批次紀錄分頁重讀後仍不一致，停止顯示清單")
+            ws = matches[0]
+            self._worksheet_handles[BATCH_SHEET] = ws
+            self._worksheets[BATCH_SHEET] = ws
         # A whole-sheet values request can grow beyond Google's practical response
         # size as append-only batch revisions accumulate. Read the short index,
         # then fetch only the latest complete revision for each batch.

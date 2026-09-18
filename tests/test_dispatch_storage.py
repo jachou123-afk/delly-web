@@ -60,6 +60,21 @@ def test_batch_list_rejects_a_false_empty_index(monkeypatch):
         CloudDispatchStore(store.spreadsheet).list_batches()
 
 
+def test_batch_list_recovers_a_stale_title_lookup_from_fresh_metadata(monkeypatch):
+    store = CloudDispatchStore(FakeSpreadsheet())
+    saved = store.save_batch(ready_batch())
+    original = store.spreadsheet.worksheet
+
+    def stale_lookup(title):
+        if title == BATCH_SHEET:
+            raise gspread.exceptions.WorksheetNotFound(title)
+        return original(title)
+
+    import gspread
+    monkeypatch.setattr(store.spreadsheet, "worksheet", stale_lookup)
+    assert CloudDispatchStore(store.spreadsheet).list_batches() == [saved]
+
+
 def test_image_is_stored_losslessly_and_reused_by_digest():
     spreadsheet = FakeSpreadsheet()
     store = CloudDispatchStore(spreadsheet)
