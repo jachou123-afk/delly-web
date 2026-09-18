@@ -164,13 +164,24 @@ def test_receipt_requires_correct_target_and_cannot_mark_another_product():
         record(batch, "G正版:no999", "text")
 
 
-@pytest.mark.parametrize("bad", ["BGD-G-999", "售價1元/盒", "進價10元", "國際運費5元", "木架另加15元"])
+@pytest.mark.parametrize("bad", ["BGD-G-999", "售價1元/盒", "進價10元", "國際運費5元",
+                                       "木架另加15元", "木架重量4kg", "木架成本10元",
+                                       "報價不含木架；如需木架另計（15元）"])
 def test_changed_identity_price_or_internal_fields_cannot_be_reviewed(bad):
     batch = ready_batch(numbers=(1,))
     item = batch["items"][0]
     with pytest.raises(DispatchError):
         edit_item(batch, item["id"], text=item["copy"] + "\n" + bad, images=item["images"],
                   excluded=False, reason="", reviewed=True, actor="測試")
+
+
+@pytest.mark.parametrize("notice", ["報價不含選配木架；如需木架另計", "不含木框，如需木框另計",
+                                         "選配木架費用另計"])
+def test_customer_facing_wood_exclusion_is_not_internal_cost_leak(notice):
+    item = ready_batch(numbers=(1,))["items"][0]
+    item["copy"] += "\n" + notice
+    assert "文案含內部成本、重量、外箱或木架資訊" not in item_errors(
+        item, require_review=False, require_source=False)
 
 
 def test_unexpected_send_prevents_count_only_completion():
