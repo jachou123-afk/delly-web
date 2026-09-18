@@ -30,6 +30,36 @@ def test_batch_survives_new_store_session_without_modifying_quote_rows():
     assert len(store.catalog()) == 5
 
 
+def test_batch_list_reads_index_and_latest_records_without_whole_sheet(monkeypatch):
+    store = CloudDispatchStore(FakeSpreadsheet())
+    first = store.save_batch(ready_batch())
+    second = store.save_batch(ready_batch())
+    revised = deepcopy(first)
+    revised["name"] = "最新名稱"
+    store.save_batch(revised, first["_revision"])
+    ws = store.spreadsheet.sheets[BATCH_SHEET]
+    ws.read_ranges.clear()
+    monkeypatch.setattr(ws, "get_all_values", lambda: (_ for _ in ()).throw(
+        AssertionError("whole-sheet payload read must not run")))
+
+    batches = CloudDispatchStore(store.spreadsheet).list_batches()
+
+    assert {batch["id"]: batch["name"] for batch in batches} == {
+        first["id"]: "最新名稱", second["id"]: second["name"]}
+    assert ws.read_ranges[0] == "A2:F"
+    assert all(name == "A2:F" or name.startswith("A") and ":H" in name
+               for name in ws.read_ranges)
+
+
+def test_batch_list_rejects_a_false_empty_index(monkeypatch):
+    store = CloudDispatchStore(FakeSpreadsheet())
+    store.save_batch(ready_batch())
+    ws = store.spreadsheet.sheets[BATCH_SHEET]
+    monkeypatch.setattr(ws, "get", lambda name: [] if name == "A2:F" else ws.rows[1:])
+    with pytest.raises(DispatchError, match="索引讀取為空"):
+        CloudDispatchStore(store.spreadsheet).list_batches()
+
+
 def test_image_is_stored_losslessly_and_reused_by_digest():
     spreadsheet = FakeSpreadsheet()
     store = CloudDispatchStore(spreadsheet)

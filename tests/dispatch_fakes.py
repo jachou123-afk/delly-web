@@ -58,6 +58,8 @@ class FakeWorksheet:
         self.read_ranges.append(range_name)
         if range_name == "A2:B":
             return [row[:2] for row in self.rows[1:]]
+        if range_name == "A2:F":
+            return [row[:6] for row in self.rows[1:]]
         a, b = map(int, re.fullmatch(r"A(\d+):L(\d+)", range_name).groups())
         from cost_audit import block
         values = block(self.rows[a - 1:b])

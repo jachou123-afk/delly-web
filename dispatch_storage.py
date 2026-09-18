@@ -141,7 +141,67 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
         ws = self._sheet(BATCH_SHEET)
         if ws is None:
             return []
-        return self._latest_batches(decode_records(ws.get_all_values()[1:]))
+        # A whole-sheet values request can grow beyond Google's practical response
+        # size as append-only batch revisions accumulate. Read the short index,
+        # then fetch only the latest complete revision for each batch.
+        index = ws.get("A2:F")
+        if not index and ws.row_values(2):
+            raise DispatchError("批次紀錄索引讀取為空，但雲端仍有資料；停止顯示清單")
+        revisions = {}
+        latest = {}
+        for number, row in enumerate(index, 2):
+            if not row or not any(row):
+                continue
+            if len(row) != 6:
+                raise DispatchError("批次紀錄索引讀取不完整，停止顯示清單")
+            record_id, entity, parent, part, total, checksum = row
+            try:
+                part, total = int(part), int(total)
+            except (TypeError, ValueError) as exc:
+                raise DispatchError("批次紀錄索引分段格式錯誤") from exc
+            if not record_id or not entity or not checksum or not 1 <= part <= total <= 1000:
+                raise DispatchError("批次紀錄索引不合法，停止顯示清單")
+            revision = revisions.setdefault(record_id, {
+                "entity": entity, "parent": parent, "total": total,
+                "checksum": checksum, "parts": {},
+            })
+            if (entity, parent, total, checksum) != (
+                    revision["entity"], revision["parent"], revision["total"], revision["checksum"]):
+                raise DispatchError("同一批次紀錄索引互相矛盾")
+            if part in revision["parts"]:
+                raise DispatchError("同一批次紀錄分段重複，停止顯示清單")
+            revision["parts"][part] = number
+            if part == 1:
+                previous = latest.get(entity)
+                if parent != (previous or ""):
+                    raise DispatchError("同一批次有同時修改的衝突，請先核對雲端紀錄；不自動覆蓋")
+                latest[entity] = record_id
+        if any(set(revision["parts"]) != set(range(1, revision["total"] + 1))
+               for revision in revisions.values()):
+            raise DispatchError("雲端批次紀錄尚未寫入完整；請重新載入")
+        if not latest:
+            return []
+        rows_by_record = {}
+        for entity, record_id in latest.items():
+            positions = sorted(revisions[record_id]["parts"].values())
+            rows_by_record[record_id] = []
+            for offset in range(0, len(positions), 50):
+                group_positions = positions[offset:offset + 50]
+                ranges = [f"A{number}:H{number}" for number in group_positions]
+                groups = ws.batch_get(ranges)
+                if len(groups) != len(ranges) or any(len(group) != 1 for group in groups):
+                    raise DispatchError("批次紀錄讀取不完整，停止顯示清單")
+                rows_by_record[record_id].extend(group[0] for group in groups)
+        batches = []
+        for entity, record_id in latest.items():
+            records = decode_records(rows_by_record[record_id])
+            if len(records) != 1 or records[0]["id"] != record_id or records[0]["entity"] != entity:
+                raise DispatchError("批次紀錄索引已變動，請重新載入")
+            value = records[0]["value"]
+            if value.get("schema") != 1 or value.get("id") != entity:
+                raise DispatchError("批次版本或識別碼不合法")
+            batches.append({**value, "_revision": record_id})
+        return sorted(batches, key=lambda batch: batch["created_at"], reverse=True)
 
     @staticmethod
     def _latest_batches(records):
