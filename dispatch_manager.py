@@ -129,6 +129,26 @@ def batch_digest(batch):
         for i in batch["items"]]})
 
 
+_INTERNAL_COPY_PATTERN = re.compile(
+    r"進價|到手成本|預估成本|大陸運費|國際運費|內陸運費|外箱尺寸|計費重量|箱重|單個重量"
+)
+_SAFE_WOOD_NOTICE = re.compile(
+    r"(?:(?:報價|售價)?不含(?:選配)?(?:木架|木框)"
+    r"(?:[；，,、](?:如需|需要|加購|選配)?(?:木架|木框)?(?:費用)?另計)?"
+    r"|(?:選配|加購)?(?:木架|木框)(?:費用)?另計)"
+)
+
+
+def _contains_internal_copy_details(text):
+    if _INTERNAL_COPY_PATTERN.search(text):
+        return True
+    for line in text.splitlines():
+        if re.search(r"木架|木框", line):
+            if not _SAFE_WOOD_NOTICE.fullmatch(re.sub(r"\s+", "", line)):
+                return True
+    return False
+
+
 def item_errors(item, *, require_review=True, require_source=True):
     if item["excluded"]:
         return [] if item["reason"].strip() else ["排除商品需填寫原因"]
@@ -157,7 +177,7 @@ def item_errors(item, *, require_review=True, require_source=True):
                 errors.append(f"{prefix}需與雲表一致；要調價或改單位請先修正報價表")
     else:
         errors.append("先處理來源資料，文案尚未能產生；不判定為品號錯誤")
-    if re.search(r"進價|到手成本|預估成本|大陸運費|國際運費|內陸運費|外箱尺寸|木架|木框|計費重量|箱重|單個重量", text):
+    if _contains_internal_copy_details(text):
         errors.append("文案含內部成本、重量、外箱或木架資訊")
     if len(text) > 4500:
         errors.append("文案過長，請縮短至 4500 字以內")
