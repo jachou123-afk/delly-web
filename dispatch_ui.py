@@ -13,7 +13,7 @@ from dispatch_manager import (
     finish_batch, item_errors, item_status, new_batch, now, prior_activity,
     reconciliation, record_observation, record_observation_batch, sequence_gaps, source_changes,
 )
-from dispatch_storage import asset_bytes, validate_image
+from dispatch_storage import BATCH_SHEET, asset_bytes, validate_image
 from dispatch_review import comparison_rows, hydrate_draft, unit_confirmed
 from cost_audit_ui import render_cost_review
 from supplier_names import vendor_filter_label
@@ -724,6 +724,16 @@ def render_dispatch_manager(store_factory, correction_tools=None):
         if "dispatch_history" not in st.session_state:
             st.session_state["dispatch_history"] = store.list_batches()
         history = st.session_state["dispatch_history"]
+        if not history:
+            batch_sheet = next((sheet for sheet in spreadsheet.worksheets()
+                                if sheet.title == BATCH_SHEET), None)
+            if batch_sheet is not None and batch_sheet.row_values(2):
+                history = store.list_batches()
+                st.session_state["dispatch_history"] = history
+                if not history:
+                    st.error("雲端已有廣告批次紀錄，但清單讀取為空；請勿建立新批次。")
+                    st.caption("批次分頁及第一筆紀錄仍可讀取；請重新載入雲端，若仍相同需修復索引讀取。")
+                    return
     except Exception as exc:
         st.error(f"無法讀取發送紀錄：{exc}")
         st.info("請確認雲端連線後重新載入，讀取失敗不會被當成沒有已發紀錄。")
