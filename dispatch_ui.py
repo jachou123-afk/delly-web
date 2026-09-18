@@ -725,9 +725,14 @@ def render_dispatch_manager(store_factory, correction_tools=None):
             st.session_state["dispatch_history"] = store.list_batches()
         history = st.session_state["dispatch_history"]
         if not history:
-            batch_sheet = next((sheet for sheet in spreadsheet.worksheets()
+            visible_sheets = spreadsheet.worksheets()
+            batch_sheet = next((sheet for sheet in visible_sheets
                                 if sheet.title == BATCH_SHEET), None)
-            if batch_sheet is not None and batch_sheet.row_values(2):
+            first_record_present = bool(batch_sheet and batch_sheet.row_values(2))
+            st.caption("批次讀取診斷：可見分頁 " + str(len(visible_sheets))
+                       + "；找到批次分頁 " + ("是" if batch_sheet else "否")
+                       + "；首筆紀錄 " + ("有" if first_record_present else "無"))
+            if first_record_present:
                 history = store.list_batches()
                 st.session_state["dispatch_history"] = history
                 if not history:
