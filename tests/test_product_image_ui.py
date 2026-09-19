@@ -3,11 +3,11 @@ from copy import deepcopy
 from streamlit.testing.v1 import AppTest
 
 from dispatch_storage import CloudDispatchStore
-from product_images import PRODUCT_IMAGE_SHEET
+from product_images import PRODUCT_IMAGE_SHEET, subject_key
 from test_dispatch_ui import widget
 
 
-def app_source(bound=False, multi=False, imported=False):
+def app_source(bound=False, multi=False, imported=False, source_changed=False):
     return f'''
 import streamlit as st
 from dispatch_ui import render_dispatch_manager
@@ -23,6 +23,9 @@ if "test_spreadsheet" not in st.session_state:
     products = store.catalog()
     if {bound!r}:
         store.save_product_images([assignment(products[0], [picture(n) for n in range({2 if multi else 1})])], actor="合成測試", origin="test")
+    if {source_changed!r}:
+        spreadsheet.sheets["G正版"].rows[4][1] = "貨號 TEST-CHANGED"
+        products = store.catalog()
     batch = new_batch("合成圖片測試 69 款", "測試群組・不會發送", products, "測試人")
     store.save_batch(batch)
     st.session_state["test_spreadsheet"] = spreadsheet
@@ -82,6 +85,28 @@ def test_multiple_unbound_candidates_need_explicit_choice_before_binding():
     binding = CloudDispatchStore(app.session_state["test_spreadsheet"]).product_image_bindings()["G正版:no2"]
     assert len(binding["assets"]) == 2
     assert not any(w.label.startswith("我已核對原文、圖片") for w in app.checkbox)
+
+
+def test_changed_supplier_code_can_reuse_old_images_only_after_explicit_review():
+    app = start(bound=True, source_changed=True)
+    spreadsheet = app.session_state["test_spreadsheet"]
+    store = CloudDispatchStore(spreadsheet)
+    before = store.product_image_bindings()["G正版:no1"]
+    confirm = widget(app, "checkbox", "我已逐張核對：變更前綁定原圖仍是本款同一商品")
+    button = widget(app, "button", "沿用舊圖並更新本商品配對")
+    assert not confirm.value and button.disabled
+
+    confirm.check().run()
+    button = widget(app, "button", "沿用舊圖並更新本商品配對")
+    assert not button.disabled
+    button.click().run()
+
+    assert not app.exception
+    after = store.product_image_bindings()["G正版:no1"]
+    assert after["assets"] == before["assets"]
+    assert after["subject"] == subject_key(store.catalog()[0])
+    assert after["origin"] == "same_item_source_correction"
+    assert any("1／69 款已有配對圖片" in c.value for c in app.caption)
 
 
 def test_library_read_error_is_not_reported_as_missing_images(monkeypatch):

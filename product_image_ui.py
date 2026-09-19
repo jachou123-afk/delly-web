@@ -116,13 +116,33 @@ def render_save_current_images(store, source, assets, actor, key, disabled=False
             if binding_key not in st.session_state:
                 st.session_state[binding_key] = store.product_image_bindings().get(source["identity"])
             saved = st.session_state[binding_key]
-            different = bool(saved and (saved["subject"] != subject_key(source) or saved["assets"] != [a["sha256"] for a in assets]))
-            replace = st.checkbox("我確認以目前採用圖片替換本商品的圖庫對應", key="image_replace_" + key) if different else False
-            if st.button("保存本款圖片到圖庫", key="image_bind_one_" + key,
-                         disabled=disabled or not assets or len(assets) > 5 or not actor.strip() or (different and not replace)):
-                result = store.save_product_images([{"source": source, "assets": assets,
+            stale_binding = bool(saved and saved["subject"] != subject_key(source))
+            reuse_stale = stale_binding and not assets
+            selected_assets = assets
+            different = False
+            if reuse_stale:
+                st.warning("商品型號／名稱變動後，舊圖不會自動帶入。只有逐張確認仍是同一款商品，才可沿用原綁定圖片。")
+                previous = store.get_assets(saved["assets"])
+                selected_assets = [previous[identity] for identity in saved["assets"]]
+                columns = st.columns(min(5, len(selected_assets)))
+                for number, asset in enumerate(selected_assets):
+                    columns[number % len(columns)].image(
+                        asset_bytes(asset), caption=f"變更前已綁定原圖 {number + 1} · {asset['name']}", width="stretch")
+                replace = st.checkbox("我已逐張核對：變更前綁定原圖仍是本款同一商品",
+                                      key="image_reuse_stale_" + key)
+                button_label = "沿用舊圖並更新本商品配對"
+            else:
+                different = bool(saved and (stale_binding or saved["assets"] != [a["sha256"] for a in assets]))
+                replace = (st.checkbox("我確認以目前採用圖片替換本商品的圖庫對應",
+                                       key="image_replace_" + key) if different else False)
+                button_label = "保存本款圖片到圖庫"
+            if st.button(button_label, key="image_bind_one_" + key,
+                         disabled=disabled or not selected_assets or len(selected_assets) > 5
+                         or not actor.strip() or ((reuse_stale or different) and not replace)):
+                result = store.save_product_images([{"source": source, "assets": selected_assets,
                     "expected_revision": saved.get("_revision", "") if saved else ""}],
-                    actor=actor, origin="single_item_image_choice", replace=replace)
+                    actor=actor, origin="same_item_source_correction" if reuse_stale else "single_item_image_choice",
+                    replace=replace)
                 st.dataframe(result, hide_index=True, width="stretch")
                 clear_library_cache()
                 st.session_state.pop(binding_key, None)
