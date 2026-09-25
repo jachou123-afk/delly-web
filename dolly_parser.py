@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, vendor_options as canonical_vendor_
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.17")
+st.title("🪐 半自動 - 採購報價彙整表 V87.18")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -865,7 +865,7 @@ def parse_text_legacy(text):
 
     # ===== 尺寸 =====
     size_pattern = r'([0-9]+(?:\.[0-9]+)?(?:[*xX×][0-9]+(?:\.[0-9]+)?)+(?:[cC][mM]|公分)?)'
-    color_box_keywords = ['彩盒','亞克力','亚克力','單個包裝','单个包装','包裝盒','包装盒']
+    color_box_keywords = ['彩盒']
     outer_box_keywords = ['外箱規格', '外箱规格', '外箱尺寸', '外箱']
     prod_size_keywords = ['產品','产品','單個尺寸','单个尺寸','產品尺寸','产品尺寸']
 
@@ -1287,7 +1287,7 @@ def parse_text(text):
     size = rf"({number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*\s*(?:cm|mm|公分|毫米))"
     fields = {
         "outer_box_size": r"^(?:外箱規格|外箱尺寸|外箱)\s*:?\s*",
-        "color_box_size": r"^(?:彩盒尺寸|彩盒|白盒尺寸|白盒|單個包裝尺寸|單個包裝|包裝盒尺寸|包裝盒|包裝尺寸|亞克力)\s*:?\s*",
+        "color_box_size": r"^(?:彩盒尺寸|彩盒)\s*:?\s*",
         "prod_size": r"^(?:產品尺寸|單個尺寸|尺寸|產品)\s*:?\s*",
     }
     for field, label in fields.items():
@@ -1332,8 +1332,7 @@ def parse_text(text):
     }
     canonical_dimension_labels = {
         "產品尺寸", "單個尺寸", "尺寸", "產品",
-        "彩盒尺寸", "彩盒", "單個包裝尺寸", "單個包裝",
-        "包裝盒尺寸", "包裝盒", "亞克力",
+        "彩盒尺寸", "彩盒",
         "外箱規格", "外箱尺寸", "外箱",
     }
     for line in normalized.splitlines():
@@ -1359,6 +1358,8 @@ def parse_text(text):
         ):
             notes.append(line)
         if is_order_condition_line(line) or is_fulfilment_condition_line(line):
+            notes.append(line)
+        if re.fullmatch(r"\([^()]*\)", line) and re.search(r"編織袋|貼紙|標貼|貼箱", line):
             notes.append(line)
         if re.fullmatch(r"展示盒\s*\d+\s*(?:個|隻|只|盒|套)", line):
             notes.append(line)
@@ -1974,7 +1975,7 @@ elif weight_state["source"] == "both" and weight_state["mismatch_ratio"] >= 0.2:
     )
 c6, c7 = st.columns(2)
 final_prod_size = c6.text_input("產品尺寸 (沒抓到可手動輸入)", value=common_data["prod_size"], key=draft_key + "product_size")
-final_color_size = c7.text_input("彩盒尺寸 (亞克力/單個包裝也算)", value=common_data["color_box_size"], key=draft_key + "color_size")
+final_color_size = c7.text_input("彩盒尺寸（僅有彩盒依據時填）", value=common_data["color_box_size"], key=draft_key + "color_size")
 final_outer_size = st.text_input("外箱尺寸 (沒抓到可手動輸入)", value=common_data["outer_box_size"], key=draft_key + "outer_size")
 final_extra = st.text_area("額外備註（保留顏色、材質、端盒、木架等）", value=common_data["extra_tags"], key=draft_key + "extra")
 unit_options = ["", "個", "盒", "套", "瓶", "罐", "包", "袋"]

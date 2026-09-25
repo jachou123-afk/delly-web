@@ -20,6 +20,7 @@ from license_markers import (
     strip_affirmative_license_markers,
 )
 from line_ad_copy import _ad_detail_lines
+from supplier_names import normalize_vendor
 
 
 SOURCE = Path(__file__).parents[1] / "dolly_parser.py"
@@ -44,6 +45,7 @@ NS = {
     "has_affirmative_license_marker": has_affirmative_license_marker,
     "is_standalone_license_marker": is_standalone_license_marker,
     "strip_affirmative_license_markers": strip_affirmative_license_markers,
+    "normalize_vendor": normalize_vendor,
 }
 exec(compile(ast.Module(body=NODES, type_ignores=[]), str(SOURCE), "exec"), NS)
 
@@ -139,7 +141,7 @@ def test_unknown_weight_label_is_preserved_but_never_guessed():
     }]
     assert (common["price"], common["qty"], common["weight"]) == (50, 10, 0)
     assert common["unit_weight_g"] == 0
-    assert common["color_box_size"] == "23*23*6cm"
+    assert common["color_box_size"] == ""
     assert common["outer_box_size"] == "47.5*32.5*27.5cm"
     assert common["extra_tags"].splitlines() == [
         "正版授權",
@@ -150,6 +152,52 @@ def test_unknown_weight_label_is_preserved_but_never_guessed():
     ]
     assert any("未識別重量欄位「整鞋重量」" in issue for issue in common["issues"])
     assert "缺少有效重量來源" in blockers(common)
+
+
+def test_single_package_dimension_does_not_claim_a_color_box():
+    raw = """新款#正版授权
+三丽鸥系列户外折叠椅
+带镭射标/4个图案可选
+每箱数量:10pcs（捆）
+单个价格:60元
+单个尺寸:68*60*49cm
+单个包装:69*15*15cm
+单个重量:1.8kg
+（10个套1个编织袋）
+（贴纸+镭射标贴箱子）"""
+    common, _ = parse(raw)
+
+    assert common["prod_size"] == "68*60*49cm"
+    assert common["color_box_size"] == ""
+    assert "單個包裝:69*15*15cm" in common["extra_tags"].splitlines()
+    assert "(10個套1個編織袋)" in common["extra_tags"].splitlines()
+    assert "(貼紙+鐳射標貼箱子)" in common["extra_tags"].splitlines()
+    assert "彩盒" not in common["extra_tags"]
+
+    block = NS["build_product_block"](
+        "no1", "2026/9/25", 1, "測試折疊椅", "CHAIR1",
+        common["price"], common["qty"], common["qty_unit"],
+        common["weight"], common["unit_weight_g"], 0, 8.5, 4.8,
+        "測試供應商", prod_size=common["prod_size"],
+        color_size=common["color_box_size"], extra=common["extra_tags"],
+    )
+    saved_details = block[1][1]
+    assert "彩盒尺寸" not in saved_details
+    assert "單個包裝:69*15*15cm" in saved_details
+    assert "(10個套1個編織袋)" in saved_details
+    assert "(貼紙+鐳射標貼箱子)" in saved_details
+    ad_lines = _ad_detail_lines(saved_details)
+    assert "單個包裝:69*15*15cm" in ad_lines
+    assert "(10個套1個編織袋)" in ad_lines
+    assert "(貼紙+鐳射標貼箱子)" in ad_lines
+
+
+@pytest.mark.parametrize("label", ["單個包裝尺寸", "包裝尺寸", "包裝盒尺寸", "白盒尺寸"])
+def test_non_color_package_dimensions_do_not_claim_a_color_box(label):
+    common, _ = parse(f"測試商品\n單個價格:5元\n{label}:12*8*5cm")
+
+    assert common["color_box_size"] == ""
+    assert f"{label}:12*8*5cm" in common["extra_tags"].splitlines()
 
 
 def test_unknown_weight_label_blocks_even_with_another_valid_weight():
@@ -485,12 +533,11 @@ def test_white_box_is_packaging_size_and_suppresses_product_size_in_line_copy():
 
     assert products == [{"code": "CL-701", "name": "太陽能露營伸縮燈"}]
     assert common["prod_size"] == "12*4cm"
-    assert common["color_box_size"] == "17.2*4.7*4.7cm"
+    assert common["color_box_size"] == ""
     assert "白盒:17.2*4.7*4.7cm" in common["extra_tags"].splitlines()
 
     detail_lines = _ad_detail_lines(
         f"尺寸 {common['prod_size']}\n"
-        f"彩盒尺寸 {common['color_box_size']}\n"
         + common["extra_tags"]
     )
     assert detail_lines == ["白盒:17.2*4.7*4.7cm"]
