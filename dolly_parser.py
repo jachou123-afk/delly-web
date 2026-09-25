@@ -1975,9 +1975,10 @@ elif weight_state["source"] == "both" and weight_state["mismatch_ratio"] >= 0.2:
     )
 c6, c7 = st.columns(2)
 final_prod_size = c6.text_input("產品尺寸 (沒抓到可手動輸入)", value=common_data["prod_size"], key=draft_key + "product_size")
-final_color_size = c7.text_input("彩盒尺寸（僅有彩盒依據時填）", value=common_data["color_box_size"], key=draft_key + "color_size")
+packaging_key = draft_key + "packaging_v87_18_"
+final_color_size = c7.text_input("彩盒尺寸（僅有彩盒依據時填）", value=common_data["color_box_size"], key=packaging_key + "color_size")
 final_outer_size = st.text_input("外箱尺寸 (沒抓到可手動輸入)", value=common_data["outer_box_size"], key=draft_key + "outer_size")
-final_extra = st.text_area("額外備註（保留顏色、材質、端盒、木架等）", value=common_data["extra_tags"], key=draft_key + "extra")
+final_extra = st.text_area("額外備註（保留顏色、材質、端盒、木架等）", value=common_data["extra_tags"], key=packaging_key + "extra")
 unit_options = ["", "個", "盒", "套", "瓶", "罐", "包", "袋"]
 parsed_unit = common_data["qty_unit"]
 final_qty_unit = st.selectbox("装箱及計價單位（必須一致；不同時先人工換算）", unit_options,

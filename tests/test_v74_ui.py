@@ -66,6 +66,27 @@ VENDOR_INLINE_CARTON = """FF806274，不带电 线控起重机是[Fireworks]24.6
 外箱规格98.5*48*83.5CM"""
 
 
+def test_old_draft_packaging_widgets_do_not_keep_color_box_guess():
+    app = AppTest.from_string(app_source(), default_timeout=15).run()
+    raw = (
+        "三麗鷗戶外折疊椅\n每箱數量:10pcs\n單個價格:60元\n"
+        "單個尺寸:68*60*49cm\n單個包裝:69*15*15cm\n"
+        "單個重量:1.8kg\n(10個套1個編織袋)"
+    )
+    app.text_area[0].set_value(raw).run()
+    old_key = f"draft_{app.session_state['draft_revision']}_"
+    app.session_state[old_key + "color_size"] = "69*15*15cm"
+    app.session_state[old_key + "extra"] = "單個包裝:69*15*15cm"
+    app.run()
+
+    assert not app.exception
+    color_box = next(field for field in app.text_input if field.label.startswith("彩盒尺寸"))
+    extra = next(field for field in app.text_area if field.label.startswith("額外備註"))
+    assert color_box.value == ""
+    assert "單個包裝:69*15*15cm" in extra.value
+    assert "(10個套1個編織袋)" in extra.value
+
+
 def save_button(app):
     return next(b for b in app.button if b.label == "💾 新增商品")
 
