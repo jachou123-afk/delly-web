@@ -12,7 +12,7 @@ def save_quote_images(store, category, base_row, expected_block, assets):
     if len(matches) != 1 or sum(p["identity"] == matches[0]["identity"] for p in products) != 1:
         raise DispatchError("無法唯一識別剛保存的商品，圖片未綁定")
     source = matches[0]
-    formulas = block(store.spreadsheet.worksheet(category).get(f"A{base_row}:L{base_row + 5}", value_render_option="FORMULA"))
+    formulas = block(store.worksheet(category).get(f"A{base_row}:L{base_row + 5}", value_render_option="FORMULA"))
     coords = [(0, 0), (0, 1), (0, 11), (1, 1), (2, 1), (3, 1), (4, 1)]
     if any(formulas[r][c] != expected[r][c] for r, c in coords):
         raise DispatchError("保存後商品身分或來源已變更，圖片未綁定")

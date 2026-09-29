@@ -571,10 +571,12 @@ def test_append_user_entered_text_is_protected_from_formula_execution():
 
 def mock_cloud(monkeypatch, fresh=None):
     sheet=Mock(title="G正版", row_count=100)
-    sheet.get_all_values.return_value=[] if fresh is None else fresh
+    sheet.get_all_values.return_value=[[]] if fresh is None else fresh
     book=Mock()
     book.worksheet.return_value=sheet
     book.worksheets.return_value=[sheet]
+    book.values_batch_get.side_effect=lambda ranges, params: {"valueRanges": [
+        {"range": "'G正版'!A1:T100", "values": sheet.get_all_values.return_value}]}
     monkeypatch.setitem(ns,"st",Mock())
     monkeypatch.setitem(ns,"get_credentials",Mock())
     monkeypatch.setitem(ns,"gspread",SimpleNamespace(authorize=Mock(), exceptions=SimpleNamespace(WorksheetNotFound=KeyError)))
@@ -604,7 +606,7 @@ def test_readback_and_retry_protection(monkeypatch):
     sheet,_=mock_cloud(monkeypatch)
     rows=block()
     sheet.get.side_effect=[rows, [[r[0]] for r in rows]]
-    assert ns["save_bulk_to_worksheet"]("G正版",rows,1,expected_rows=[])
+    assert ns["save_bulk_to_worksheet"]("G正版",rows,3,expected_rows=[[]])
     sheet.get_all_values.return_value=rows
     assert not ns["save_bulk_to_worksheet"]("G正版",rows,8,expected_rows=rows)
     assert sheet.update.call_count == 1
@@ -613,5 +615,5 @@ def test_readback_and_retry_protection(monkeypatch):
 def test_uncertain_write_not_success(monkeypatch):
     sheet,_=mock_cloud(monkeypatch)
     sheet.get.side_effect=RuntimeError("timeout")
-    assert not ns["save_bulk_to_worksheet"]("G正版",block(),1,expected_rows=[])
+    assert not ns["save_bulk_to_worksheet"]("G正版",block(),3,expected_rows=[[]])
     assert "可能已寫入" in ns["st"].error.call_args[0][0]

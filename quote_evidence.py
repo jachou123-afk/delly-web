@@ -23,7 +23,7 @@ def queue_evidence(state, category, base_row, expected_block, raw_source, inputs
 
 def save_evidence(store, pending):
     category, base_row = pending["category"], pending["base_row"]
-    ws = store.spreadsheet.worksheet(category)
+    ws = store.worksheet(category)
     area = f"A{base_row}:L{base_row + 5}"
     values = block(ws.get(area, value_render_option="FORMATTED_VALUE"))
     formulas = block(ws.get(area, value_render_option="FORMULA"))

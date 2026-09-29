@@ -216,3 +216,39 @@ def test_empty_quote_image_upload_does_not_touch_storage():
         def catalog(self):
             pytest.fail("no images should not read cloud")
     assert save_quote_images(NoStore(), "G正版", 1, [], []) == []
+
+
+def test_quote_image_hook_reuses_catalog_handle_and_keeps_fresh_reads(monkeypatch):
+    sheet, store, products = fixture()
+    expected = store.read_cost_source(products[0])
+    ws = sheet.sheets["G正版"]
+    lookup, read_all, read = sheet.worksheet, ws.get_all_values, ws.get
+    lookups, catalog_reads, formula_reads = [], [], []
+
+    def record_lookup(title):
+        lookups.append(title)
+        return lookup(title)
+
+    def record_catalog_read():
+        catalog_reads.append(ws.title)
+        return read_all()
+
+    def record_read(area, value_render_option=None):
+        formula_reads.append((area, value_render_option))
+        return read(area, value_render_option=value_render_option)
+
+    monkeypatch.setattr(sheet, "worksheet", record_lookup)
+    monkeypatch.setattr(ws, "get_all_values", record_catalog_read)
+    monkeypatch.setattr(ws, "get", record_read)
+    result = save_quote_images(store, "G正版", 1, expected, [picture()])
+    assert result[0]["結果"] == "已綁定"
+    assert "G正版" not in lookups
+    assert catalog_reads == ["G正版"] * 3
+    assert formula_reads == [("A1:L6", "FORMULA")]
+
+    ws.rows[0][1] = "另一個視窗已更換商品"
+    with pytest.raises(DispatchError, match="商品身分"):
+        save_quote_images(store, "G正版", 1, expected, [picture(1)])
+    assert "G正版" not in lookups
+    assert catalog_reads == ["G正版"] * 4
+    assert formula_reads == [("A1:L6", "FORMULA")] * 2

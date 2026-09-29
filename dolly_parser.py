@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, vendor_options as canonical_vendor_
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.19")
+st.title("🪐 半自動 - 採購報價彙整表 V87.20")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -257,18 +257,33 @@ def get_target_formula_block(category_name, base_row):
         st.error(f"讀取原商品公式快照失敗：{e}")
         return None
 
-def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expected_rows=None):
+def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expected_rows=None,
+                           *, save_context=None):
     write_started = False
     try:
-        creds = get_credentials()
-        client = gspread.authorize(creds)
-        spreadsheet = open_spreadsheet(client)
-        try:
-            sheet = spreadsheet.worksheet(category_name)
-        except gspread.exceptions.WorksheetNotFound:
+        if save_context is None:
+            creds = get_credentials()
+            client = gspread.authorize(creds)
+            spreadsheet = open_spreadsheet(client)
+            try:
+                sheet = spreadsheet.worksheet(category_name)
+            except gspread.exceptions.WorksheetNotFound:
+                st.error("找不到目標分頁，已停止；不會自動新建分頁。")
+                return False
+        else:
+            spreadsheet = save_context["store"].spreadsheet
+            sheet = save_context["sheet"]
+            if save_context["category"] != category_name or sheet.title != category_name:
+                raise ValueError("儲存連線與選取分頁不符")
+        from quote_sheet_reads import read_public_sheet_values
+        # One fresh batch supplies both the destination snapshot and cross-sheet
+        # duplicate check; it is never replaced by the UI's cached catalog.
+        live_sheets = read_public_sheet_values(spreadsheet)
+        if category_name not in live_sheets:
             st.error("找不到目標分頁，已停止；不會自動新建分頁。")
+            get_all_sheets_data.clear()
             return False
-        fresh = sheet.get_all_values()
+        fresh = live_sheets[category_name]
         expected_start = len(fresh) + 2 if fresh else 1
         if expected_rows is None or fresh != expected_rows or st_r != expected_start:
             st.error("雲表已變動或缺少讀取快照，請重新載入並校對後再存檔。")
@@ -277,8 +292,6 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
         if not bulk_rows or len(bulk_rows) % block_size:
             raise ValueError("商品區塊不完整")
         incoming = extract_saved_products(bulk_rows)
-        live_sheets = {ws.title: ws.get_all_values() for ws in spreadsheet.worksheets()
-                       if not ws.title.startswith("_")}
         conflicts = duplicate_messages(incoming, live_sheets)
         if conflicts:
             st.error("；".join(conflicts))
@@ -323,21 +336,23 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
                     if not (isinstance(received, (int, float)) and isinstance(value, (int, float)) and received == value):
                         raise ValueError(f"寫後核對不符：第 {st_r + row_index} 列，第 {col + 1} 欄")
         num_blocks = len(bulk_rows) // block_size
+        formats = []
         for i in range(num_blocks):
             base_r = st_r + (i * block_size)
-            sheet.format(f"B{base_r}", {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}})
-            sheet.format(f"C{base_r}:F{base_r}", {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}})
-            sheet.format(f"G{base_r}:K{base_r}", {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}})
+            formats.extend([
+                {"range": f"B{base_r}", "format": {"backgroundColor": {"red": 1.0, "green": 0.6, "blue": 0.0}}},
+                {"range": f"C{base_r}:F{base_r}", "format": {"backgroundColor": {"red": 1.0, "green": 0.95, "blue": 0.8}}},
+                {"range": f"G{base_r}:K{base_r}", "format": {"backgroundColor": {"red": 0.92, "green": 0.96, "blue": 1.0}}},
+            ])
             note_index = (i * block_size) + 2
             if (
                 note_index < len(bulk_rows)
                 and len(bulk_rows[note_index]) > 8
                 and bulk_rows[note_index][8] == "廣州包郵"
             ):
-                sheet.format(
-                    f"I{base_r + 2}",
-                    {"backgroundColor": {"red": 0.8509804, "green": 0.91764706, "blue": 0.827451}},
-                )
+                formats.append({"range": f"I{base_r + 2}", "format": {
+                    "backgroundColor": {"red": 0.8509804, "green": 0.91764706, "blue": 0.827451}}})
+        sheet.batch_format(formats)
         return True
     except Exception as e:
         get_all_sheets_data.clear()
@@ -490,6 +505,18 @@ def get_dispatch_store():
                             lambda: st.secrets.get("nas_images"))
 
 
+def get_quote_save_snapshot(category_name):
+    """Fresh selected-sheet snapshot and handles scoped to this one submission."""
+    try:
+        store = get_dispatch_store()
+        sheet = store.worksheet(category_name)
+        return {"category": category_name, "store": store, "sheet": sheet,
+                "rows": sheet.get_all_values()}
+    except Exception as exc:
+        st.error(f"雲表讀取失敗，停止存檔；不會當成空表或建立分頁：{exc}")
+        return None
+
+
 def get_category_codes():
     return get_dispatch_store().category_settings()["codes"]
 
@@ -500,12 +527,13 @@ def get_quote_category_codes():
     return get_category_codes()
 
 
-def persist_quote_images(category, base_row, expected_block, assets):
+def persist_quote_images(category, base_row, expected_block, assets, *, store=None):
     if not assets:
         return True
     from quote_images import save_quote_images
     try:
-        result = save_quote_images(get_dispatch_store(), category, base_row, expected_block, assets)
+        result = save_quote_images(store if store is not None else get_dispatch_store(),
+                                   category, base_row, expected_block, assets)
         if any(row["結果"] not in {"已綁定", "已存在"} for row in result):
             raise ValueError("；".join(row["原因"] for row in result if row["結果"] not in {"已綁定", "已存在"}))
         clear_library_cache()
@@ -517,13 +545,14 @@ def persist_quote_images(category, base_row, expected_block, assets):
         return False
 
 
-def persist_quote_evidence(category, base_row, expected_block, raw_source, inputs, parsed, notes):
+def persist_quote_evidence(category, base_row, expected_block, raw_source, inputs, parsed, notes,
+                           *, store=None):
     """Capture only after a successful quote write. Failure never repeats that write."""
     from quote_evidence import PENDING_KEY, clear_evidence_caches, queue_evidence, save_evidence
     identity, pending = queue_evidence(st.session_state, category, base_row, expected_block,
                                        raw_source, inputs, parsed, notes)
     try:
-        save_evidence(get_dispatch_store(), pending)
+        save_evidence(store if store is not None else get_dispatch_store(), pending)
         st.session_state[PENDING_KEY].pop(identity, None)
         clear_evidence_caches(st.session_state)
         st.success("原文、擷取值與當次參數已存入原 Google 雲表的「_報價依據」，並完成讀回核對；不是只暫存在網站。")
@@ -2107,19 +2136,16 @@ if user_input.strip():
             st.stop()
 
         with st.spinner("正在核對雲端商品並儲存…"):
-            all_sheets_data = get_all_sheets_data()
-            if all_sheets_data is None:
-                st.error("雲表讀取失敗，停止所有存檔；不可把讀取失敗當成空表。")
+            save_context = get_quote_save_snapshot(final_category)
+            if save_context is None:
                 st.stop()
-            if final_category not in all_sheets_data:
-                st.error("找不到指定分頁，已停止；不會自動新建分頁。")
-                st.stop()
-            duplicate_warnings = duplicate_messages([source_product], all_sheets_data)
+            target_data = save_context["rows"]
+            # The save function still checks every public sheet freshly before writing.
+            duplicate_warnings = duplicate_messages([source_product], {final_category: target_data})
             if duplicate_warnings:
                 for warning in duplicate_warnings:
                     st.error(f"🚨 撞單雷達警告：{warning}")
                 st.stop()
-            target_data = all_sheets_data[final_category]
             true_last_row = len(target_data)
             max_no = 0
             for existing_row in target_data:
@@ -2159,6 +2185,7 @@ if user_input.strip():
                 start_row,
                 block_size=6,
                 expected_rows=target_data,
+                save_context=save_context,
             ):
                 get_all_sheets_data.clear()
                 st.success(
@@ -2166,8 +2193,10 @@ if user_input.strip():
                     f"編號【{next_no}】，廠商【{final_vendor}】。"
                 )
                 evidence_saved = persist_quote_evidence(final_category, start_row, new_block, user_input,
-                                                       cost_inputs, common_data, cost_notes)
-                persist_quote_images(final_category, start_row, new_block, quote_images)
+                                                       cost_inputs, common_data, cost_notes,
+                                                       store=save_context["store"])
+                persist_quote_images(final_category, start_row, new_block, quote_images,
+                                     store=save_context["store"])
                 if not evidence_saved:
                     st.rerun()
 

@@ -32,6 +32,11 @@ def app_source(existing=False, failure=False, same_identity=False, ad_failure=Fa
         "persist_quote_evidence": "st.session_state['test_evidence'] = dict(raw=raw_source, inputs=inputs, parsed=parsed, notes=notes)\nreturn True",
         "get_settings_cached": "return dict(ex_rate=4.8, intl_rate=8.5, dom_rate=1.5)",
         "get_all_sheets_data": "st.session_state['test_cloud_reads'] = st.session_state.get('test_cloud_reads', 0) + 1\n" + f"return {None if failure else fake_sheets!r}",
+        "get_quote_save_snapshot": (
+            "st.session_state['test_cloud_reads'] = st.session_state.get('test_cloud_reads', 0) + 1\n"
+            + ("st.error('雲表讀取失敗，停止存檔')\nreturn None" if failure else
+               f"return {{'category': category_name, 'store': 'same-submit-store', 'sheet': None, 'rows': {fake_sheets!r}[category_name]}}")
+        ),
         "get_target_formula_block": f"return {{'worksheet_id': 123, 'block': {formula_rows!r}}}",
         "get_fresh_line_ad_block": "raise ValueError('雲表商品已變更')" if ad_failure else f"return {rows!r}",
         "save_bulk_to_worksheet": "st.session_state['test_save_calls'] = st.session_state.get('test_save_calls', 0) + 1\nst.session_state['test_saved_category'] = category_name\nst.session_state['test_saved_rows'] = bulk_rows\nreturn True",

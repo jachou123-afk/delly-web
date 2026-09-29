@@ -67,6 +67,51 @@ def test_pending_snapshot_is_immutable_to_draft_edits_and_rejects_changed_produc
     assert EVIDENCE_SHEET not in store.spreadsheet.sheets
 
 
+def test_evidence_reuses_sheet_handle_but_rechecks_values_and_formulas(monkeypatch):
+    original, source, state, identity, pending = fixture()
+    store = CloudDispatchStore(original.spreadsheet)
+    lookups, reads = [], []
+    lookup = store.spreadsheet.worksheet
+    ws = store.spreadsheet.sheets["G正版"]
+    read = ws.get
+
+    def record_lookup(title):
+        lookups.append(title)
+        return lookup(title)
+
+    def record_read(area, value_render_option=None):
+        reads.append((area, value_render_option))
+        return read(area, value_render_option=value_render_option)
+
+    monkeypatch.setattr(store.spreadsheet, "worksheet", record_lookup)
+    monkeypatch.setattr(ws, "get", record_read)
+    save_evidence(store, pending)
+
+    assert lookups.count("G正版") == 1
+    assert reads == [("A1:L6", option) for option in (
+        "FORMATTED_VALUE", "FORMULA", "FORMATTED_VALUE", "FORMULA")]
+
+
+def test_evidence_still_rejects_source_change_between_reads(monkeypatch):
+    original, source, state, identity, pending = fixture()
+    store = CloudDispatchStore(original.spreadsheet)
+    ws = store.spreadsheet.sheets["G正版"]
+    read, value_reads = ws.get, []
+
+    def change_on_second_value_read(area, value_render_option=None):
+        if value_render_option == "FORMATTED_VALUE":
+            value_reads.append(area)
+            if len(value_reads) == 2:
+                ws.rows[0][1] = "另一個視窗已更換商品"
+        return read(area, value_render_option=value_render_option)
+
+    monkeypatch.setattr(ws, "get", change_on_second_value_read)
+    with pytest.raises(ValueError, match="原表已變動"):
+        save_evidence(store, pending)
+    assert value_reads == ["A1:L6", "A1:L6"]
+    assert EVIDENCE_SHEET not in store.spreadsheet.sheets
+
+
 def test_missing_stale_and_unread_original_are_distinguished_without_auto_review():
     store, source, state, identity, pending = fixture()
     report, formulas = store.cost_audit(source)
