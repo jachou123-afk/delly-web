@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, vendor_options as canonical_vendor_
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.18")
+st.title("🪐 半自動 - 採購報價彙整表 V87.19")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -73,12 +73,8 @@ def get_all_sheets_data():
         creds = get_credentials()
         client = gspread.authorize(creds)
         spreadsheet = open_spreadsheet(client)
-        all_data = {}
-        for ws in spreadsheet.worksheets():
-            if ws.title.startswith("_"):
-                continue
-            all_data[ws.title] = ws.get_all_values()
-        return all_data
+        from quote_sheet_reads import read_public_sheet_values
+        return read_public_sheet_values(spreadsheet)
     except Exception as e:
         st.error(f"讀取雲端失敗:{e}")
         return None
@@ -496,6 +492,12 @@ def get_dispatch_store():
 
 def get_category_codes():
     return get_dispatch_store().category_settings()["codes"]
+
+
+@st.cache_data(ttl=300)
+def get_quote_category_codes():
+    """Short-lived choices only; persisted products are always rechecked on save."""
+    return get_category_codes()
 
 
 def persist_quote_images(category, base_row, expected_block, assets):
@@ -1841,6 +1843,7 @@ def get_fresh_line_ad_block(category_name, base_row, expected_block):
 
 # --- 5. LINE 廣告文案（只讀取既有雲表，不改動採購資料） ---
 if dispatch_tab.open:
+    get_quote_category_codes.clear()
     with dispatch_tab:
         render_dispatch_manager(get_dispatch_store, correction_tools={"parse": parse_text, "formulas": build_cost_formulas})
     st.stop()
@@ -2037,30 +2040,145 @@ if user_input.strip():
         help="原位修正不新增列、不更改 NO 或原日期，也不處理圖片與格式。",
         key=draft_key + "operation",
     )
-    try:
-        quote_category_codes = get_category_codes()
-    except Exception as exc:
-        st.error(f"分類設定讀取失敗：{exc}，請重新載入後再保存。")
-        st.stop()
-    final_category = st.selectbox(
-        "📂 分頁",
-        [""] + list(dict.fromkeys((*QUOTE_CATEGORIES, *quote_category_codes))),
-        index=0,
-        format_func=lambda value: value or "請選擇本款分頁",
-        key=draft_key + "category",
-    )
-
     to_save_df = edited_df[
         (edited_df["寫入"] == True)
         & ((edited_df["貨號"] != "") | (edited_df["名稱"] != ""))
     ]
     hard_reasons = []
-    invalid_names = any(
-        not normalize_name(row["名稱"]) for _, row in to_save_df.iterrows()
-    )
+    invalid_names = any(not normalize_name(row["名稱"]) for _, row in to_save_df.iterrows())
     if len(to_save_df) != 1 or invalid_names:
         hard_reasons.append("每次只能選擇一款有完整品名的商品")
+    source_product = None
+    if len(to_save_df) == 1:
+        source_row = to_save_df.iloc[0]
+        source_product = {"code": normalize_code(source_row["貨號"]),
+                          "name": normalize_name(source_row["名稱"])}
 
+    try:
+        quote_category_codes = get_quote_category_codes()
+    except Exception as exc:
+        st.error(f"分類設定讀取失敗：{exc}，請重新載入後再保存。")
+        st.stop()
+    category_options = [""] + list(dict.fromkeys((*QUOTE_CATEGORIES, *quote_category_codes)))
+
+    if operation == "新增商品":
+        from quote_create_form import render_create_form
+
+        cost_inputs = dict(price=final_price, qty=final_qty, unit=final_qty_unit,
+                           carton_kg=final_carton_weight_kg, unit_g=final_unit_weight_g,
+                           dom_rate=final_dom, intl_rate=intl_rate, ex_rate=ex_rate)
+        cost_notes = ("報價操作者已勾選逐欄核對。沿用現行規則：毛利率 10%；重量加計 5%；"
+                      "木架／木框不列入，其他附加費用須已涵蓋於進價及重量。\n" + final_extra)
+        quote_images = []
+        if source_product:
+            image_key = "quote_create_images_" + hashlib.sha256(
+                repr((draft_key, source_product)).encode()).hexdigest()
+            quote_images, image_errors = render_quote_images(image_key)
+            hard_reasons.extend(image_errors)
+        for reason in dict.fromkeys(hard_reasons):
+            st.error(f"停止存檔：{reason}")
+        st.caption("分頁、廠商與確認可連續填完，按「新增商品」才一起檢查並儲存。")
+        st.caption("商品、完整原文與當次成本參數會保存到原 Google 雲表並讀回核對。")
+        if quote_images:
+            st.caption("勾選確認也表示：上方原圖屬於這款商品，成功保存後才綁定。")
+        basis = dict(draft=draft_key, raw=user_input, products=to_save_df.to_dict("records"),
+                     inputs=cost_inputs, product_size=final_prod_size, color_size=final_color_size,
+                     outer_size=final_outer_size, extra=final_extra,
+                     issues=block_reasons + hard_reasons,
+                     images=[asset["sha256"] for asset in quote_images])
+        submission = render_create_form(
+            basis=basis, categories=category_options, vendors=canonical_vendor_options()[0],
+            disabled=bool(block_reasons or hard_reasons),
+            key_prefix="quote_create_" + draft_key,
+        )
+        if submission is None:
+            st.stop()
+        final_category = submission["category"]
+        final_vendor = normalize_vendor(submission["vendor"])
+        if not final_category or final_category not in category_options:
+            hard_reasons.append("尚未選擇本款分頁")
+        if not final_vendor or final_vendor not in canonical_vendor_options()[0]:
+            hard_reasons.append("尚未選擇本款廠商")
+        if not submission["confirmed"]:
+            hard_reasons.append("請逐欄對照原文並勾選確認後再新增")
+        if block_reasons or hard_reasons:
+            for reason in dict.fromkeys(block_reasons + hard_reasons):
+                st.error(f"停止存檔：{reason}")
+            st.stop()
+
+        with st.spinner("正在核對雲端商品並儲存…"):
+            all_sheets_data = get_all_sheets_data()
+            if all_sheets_data is None:
+                st.error("雲表讀取失敗，停止所有存檔；不可把讀取失敗當成空表。")
+                st.stop()
+            if final_category not in all_sheets_data:
+                st.error("找不到指定分頁，已停止；不會自動新建分頁。")
+                st.stop()
+            duplicate_warnings = duplicate_messages([source_product], all_sheets_data)
+            if duplicate_warnings:
+                for warning in duplicate_warnings:
+                    st.error(f"🚨 撞單雷達警告：{warning}")
+                st.stop()
+            target_data = all_sheets_data[final_category]
+            true_last_row = len(target_data)
+            max_no = 0
+            for existing_row in target_data:
+                if existing_row and existing_row[0]:
+                    match = re.search(r"no(\d+)", str(existing_row[0]), re.I)
+                    if match:
+                        max_no = max(max_no, int(match.group(1)))
+            start_row = true_last_row + 2 if true_last_row > 0 else 1
+            next_no = f"no{max_no + 1}"
+            today = datetime.datetime.now(ZoneInfo("Asia/Taipei"))
+            today_str = f"{today.year}/{today.month}/{today.day}"
+            source_row = to_save_df.iloc[0]
+            new_block = build_product_block(
+                next_no,
+                today_str,
+                start_row + 1,
+                source_row["名稱"],
+                source_row["貨號"],
+                final_price,
+                final_qty,
+                final_qty_unit,
+                final_carton_weight_kg,
+                final_unit_weight_g,
+                final_dom,
+                intl_rate,
+                ex_rate,
+                final_vendor,
+                final_prod_size,
+                final_color_size,
+                final_outer_size,
+                final_extra,
+                blocked=False,
+            )
+            if save_bulk_to_worksheet(
+                final_category,
+                new_block,
+                start_row,
+                block_size=6,
+                expected_rows=target_data,
+            ):
+                get_all_sheets_data.clear()
+                st.success(
+                    f"✅ 寫入並核對成功！已將商品存入【{final_category}】，"
+                    f"編號【{next_no}】，廠商【{final_vendor}】。"
+                )
+                evidence_saved = persist_quote_evidence(final_category, start_row, new_block, user_input,
+                                                       cost_inputs, common_data, cost_notes)
+                persist_quote_images(final_category, start_row, new_block, quote_images)
+                if not evidence_saved:
+                    st.rerun()
+
+        st.stop()
+
+    # Corrections still need a live target and a reviewed before/after diff.
+    final_category = st.selectbox(
+        "📂 分頁", category_options, index=0,
+        format_func=lambda value: value or "請選擇本款分頁",
+        key=draft_key + "category",
+    )
     all_sheets_data = get_all_sheets_data()
     if all_sheets_data is None:
         st.error("雲表讀取失敗，停止所有存檔；不可把讀取失敗當成空表。")
@@ -2079,14 +2197,6 @@ if user_input.strip():
     target_worksheet_id = None
     identity_verified = False
     identity_evidence = ""
-    source_product = None
-    if len(to_save_df) == 1:
-        source_row = to_save_df.iloc[0]
-        source_product = {
-            "code": normalize_code(source_row["貨號"]),
-            "name": normalize_name(source_row["名稱"]),
-        }
-
     if operation == "修正既有商品" and source_product and final_category in all_sheets_data:
         candidates = find_update_candidates(source_product, all_sheets_data[final_category])
         candidate_map = {
@@ -2205,11 +2315,7 @@ if user_input.strip():
         st.success("✅ 此廠商廣州包郵")
 
     duplicate_warnings = []
-    if source_product and operation == "新增商品":
-        duplicate_warnings = duplicate_messages(
-            [source_product], all_sheets_data
-        )
-    elif (
+    if (
         source_product
         and operation == "修正既有商品"
         and selected_target
@@ -2341,107 +2447,46 @@ if user_input.strip():
         if quote_images:
             st.caption("本次確認也包含：上方原圖屬於這款商品。成功保存商品後才綁定；既有不同圖庫圖片不會被自動覆蓋。")
 
-        if operation == "新增商品":
-            create_disabled = bool(
-                not final_confirm
-                or block_reasons
-                or duplicate_warnings
-                or hard_reasons
-                or len(to_save_df) != 1
-            )
-            if st.button("💾 新增商品", type="primary", disabled=create_disabled):
-                target_data = all_sheets_data[final_category]
-                true_last_row = len(target_data)
-                max_no = 0
-                for existing_row in target_data:
-                    if existing_row and existing_row[0]:
-                        match = re.search(r"no(\d+)", str(existing_row[0]), re.I)
-                        if match:
-                            max_no = max(max_no, int(match.group(1)))
-                start_row = true_last_row + 2 if true_last_row > 0 else 1
-                next_no = f"no{max_no + 1}"
-                today = datetime.datetime.now(ZoneInfo("Asia/Taipei"))
-                today_str = f"{today.year}/{today.month}/{today.day}"
-                source_row = to_save_df.iloc[0]
-                new_block = build_product_block(
-                    next_no,
-                    today_str,
-                    start_row + 1,
-                    source_row["名稱"],
-                    source_row["貨號"],
-                    final_price,
-                    final_qty,
-                    final_qty_unit,
-                    final_carton_weight_kg,
-                    final_unit_weight_g,
-                    final_dom,
-                    intl_rate,
-                    ex_rate,
-                    final_vendor,
-                    final_prod_size,
-                    final_color_size,
-                    final_outer_size,
-                    final_extra,
-                    blocked=False,
-                )
-                if save_bulk_to_worksheet(
-                    final_category,
-                    new_block,
-                    start_row,
-                    block_size=6,
-                    expected_rows=target_data,
-                ):
-                    get_all_sheets_data.clear()
+        update_disabled = bool(
+            not final_confirm
+            or hard_reasons
+            or not selected_target
+            or not identity_verified
+            or target_formula_block is None
+            or not update_has_changes
+            or (duplicate_warnings and not safety_only)
+        )
+        button_label = (
+            "🛡️ 原位清除不安全的衍生數字"
+            if safety_only else
+            "🛠️ 套用原位修正"
+        )
+        if st.button(button_label, type="primary", disabled=update_disabled):
+            if update_existing_product(
+                final_category,
+                selected_target["row_index"],
+                selected_target["no"],
+                target_worksheet_id,
+                all_sheets_data[final_category],
+                target_formula_block,
+                planned_update_block,
+                safety_only=safety_only,
+                identity_evidence=identity_evidence,
+            ):
+                get_all_sheets_data.clear()
+                get_target_formula_block.clear()
+                if safety_only:
                     st.success(
-                        f"✅ 寫入並核對成功！已將商品存入【{final_category}】，"
-                        f"編號【{next_no}】，廠商【{final_vendor}】。"
+                        f"✅ 已原位清除【{final_category} {selected_target['no']}】"
+                        "的報價、重量、運費與成本；NO、日期、原始資料、圖片及格式均保留。"
                     )
-                    evidence_saved = persist_quote_evidence(final_category, start_row, new_block, user_input,
-                                                           cost_inputs, common_data, cost_notes)
-                    persist_quote_images(final_category, start_row, new_block, quote_images)
+                else:
+                    st.success(
+                        f"✅ 已原位修正並核對【{final_category} {selected_target['no']}】；"
+                        "沒有新增列，NO、原日期、圖片及格式均保留。"
+                    )
+                    evidence_saved = persist_quote_evidence(final_category, selected_target["row_index"], planned_update_block,
+                                                           user_input, cost_inputs, common_data, cost_notes)
+                    persist_quote_images(final_category, selected_target["row_index"], planned_update_block, quote_images)
                     if not evidence_saved:
                         st.rerun()
-        else:
-            update_disabled = bool(
-                not final_confirm
-                or hard_reasons
-                or not selected_target
-                or not identity_verified
-                or target_formula_block is None
-                or not update_has_changes
-                or (duplicate_warnings and not safety_only)
-            )
-            button_label = (
-                "🛡️ 原位清除不安全的衍生數字"
-                if safety_only else
-                "🛠️ 套用原位修正"
-            )
-            if st.button(button_label, type="primary", disabled=update_disabled):
-                if update_existing_product(
-                    final_category,
-                    selected_target["row_index"],
-                    selected_target["no"],
-                    target_worksheet_id,
-                    all_sheets_data[final_category],
-                    target_formula_block,
-                    planned_update_block,
-                    safety_only=safety_only,
-                    identity_evidence=identity_evidence,
-                ):
-                    get_all_sheets_data.clear()
-                    get_target_formula_block.clear()
-                    if safety_only:
-                        st.success(
-                            f"✅ 已原位清除【{final_category} {selected_target['no']}】"
-                            "的報價、重量、運費與成本；NO、日期、原始資料、圖片及格式均保留。"
-                        )
-                    else:
-                        st.success(
-                            f"✅ 已原位修正並核對【{final_category} {selected_target['no']}】；"
-                            "沒有新增列，NO、原日期、圖片及格式均保留。"
-                        )
-                        evidence_saved = persist_quote_evidence(final_category, selected_target["row_index"], planned_update_block,
-                                                               user_input, cost_inputs, common_data, cost_notes)
-                        persist_quote_images(final_category, selected_target["row_index"], planned_update_block, quote_images)
-                        if not evidence_saved:
-                            st.rerun()

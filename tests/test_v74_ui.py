@@ -31,10 +31,10 @@ def app_source(existing=False, failure=False, same_identity=False, ad_failure=Fa
         "get_category_codes": "from category_codes import DEFAULT_CATEGORY_CODES\nreturn dict(DEFAULT_CATEGORY_CODES)",
         "persist_quote_evidence": "st.session_state['test_evidence'] = dict(raw=raw_source, inputs=inputs, parsed=parsed, notes=notes)\nreturn True",
         "get_settings_cached": "return dict(ex_rate=4.8, intl_rate=8.5, dom_rate=1.5)",
-        "get_all_sheets_data": f"return {None if failure else fake_sheets!r}",
+        "get_all_sheets_data": "st.session_state['test_cloud_reads'] = st.session_state.get('test_cloud_reads', 0) + 1\n" + f"return {None if failure else fake_sheets!r}",
         "get_target_formula_block": f"return {{'worksheet_id': 123, 'block': {formula_rows!r}}}",
         "get_fresh_line_ad_block": "raise ValueError('雲表商品已變更')" if ad_failure else f"return {rows!r}",
-        "save_bulk_to_worksheet": "st.session_state['test_saved_rows'] = bulk_rows\nreturn True",
+        "save_bulk_to_worksheet": "st.session_state['test_save_calls'] = st.session_state.get('test_save_calls', 0) + 1\nst.session_state['test_saved_category'] = category_name\nst.session_state['test_saved_rows'] = bulk_rows\nreturn True",
         "update_existing_product": (
             "st.session_state['test_updated'] = {"
             "'category': category_name, 'base_row': base_row, 'no': expected_no, "
@@ -45,6 +45,11 @@ def app_source(existing=False, failure=False, same_identity=False, ad_failure=Fa
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in replacements:
             node.body = ast.parse(replacements[node.name]).body
+    for index, node in enumerate(tree.body):
+        if isinstance(node, ast.FunctionDef) and node.name == "get_all_sheets_data":
+            node.decorator_list = []
+            tree.body.insert(index + 1, ast.parse("get_all_sheets_data.clear = lambda: None").body[0])
+            break
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)
 
@@ -54,8 +59,7 @@ def paste(raw, select_source=True, **kwargs):
     app.text_area[0].set_value(raw).run()
     if select_source:
         next(s for s in app.selectbox if s.label == "📂 分頁").set_value("G正版").run()
-        if not kwargs.get("failure"):
-            next(s for s in app.selectbox if s.label == "🏷️ 廠商").set_value("v菲凡").run()
+        next(s for s in app.selectbox if s.label == "🏷️ 廠商").set_value("v菲凡").run()
     assert not app.exception
     return app
 
@@ -100,6 +104,7 @@ def correction_button(app):
 
 def enter_correction_mode(app):
     next(r for r in app.radio if r.label == "操作方式").set_value("修正既有商品").run()
+    next(s for s in app.selectbox if s.label == "📂 分頁").set_value("G正版").run()
     return app
 
 
@@ -137,8 +142,9 @@ def test_line_ad_preview_reads_saved_block_and_filters_internal_fields():
 
 def test_manual_paste_review_then_save():
     app = paste(VALID)
-    assert save_button(app).disabled
-    app.checkbox[-1].check().run()
+    assert not app.checkbox[-1].value
+    assert app.session_state.filtered_state.get("test_cloud_reads", 0) == 0
+    app.checkbox[-1].check()
     assert not save_button(app).disabled
     save_button(app).click().run()
     assert not app.exception
@@ -149,6 +155,32 @@ def test_manual_paste_review_then_save():
     assert app.session_state["test_evidence"]["raw"] == VALID
     assert app.session_state["test_evidence"]["inputs"]["ex_rate"] == 4.8
     assert app.session_state["test_evidence"]["parsed"]["price"] == 9.3
+    assert app.session_state["test_cloud_reads"] == 1
+    assert app.session_state["test_save_calls"] == 1
+    assert not app.checkbox[-1].value
+
+
+def test_one_submission_uses_all_three_choices_without_intermediate_cloud_reads():
+    app = paste(VALID, select_source=False)
+    assert app.session_state.filtered_state.get("test_cloud_reads", 0) == 0
+    next(s for s in app.selectbox if s.label == "📂 分頁").set_value("S生活用品")
+    next(s for s in app.selectbox if s.label == "🏷️ 廠商").set_value("v多品村")
+    app.checkbox[-1].check()
+    save_button(app).click().run()
+    assert not app.exception
+    assert app.session_state["test_saved_category"] == "S生活用品"
+    assert app.session_state["test_saved_rows"][0][11] == "v多品村"
+    assert app.session_state["test_saved_rows"][2][8] == "廣州包郵"
+    assert app.session_state["test_cloud_reads"] == app.session_state["test_save_calls"] == 1
+    # Ordinary reruns and another click cannot reuse the previous confirmation.
+    app.run()
+    save_button(app).click().run()
+    assert app.session_state["test_cloud_reads"] == app.session_state["test_save_calls"] == 1
+    # A new supplier quote must never inherit the submitted category or vendor.
+    app.text_area[0].set_value(VENDOR_INLINE_CARTON).run()
+    assert next(s for s in app.selectbox if s.label == "📂 分頁").value == ""
+    assert next(s for s in app.selectbox if s.label == "🏷️ 廠商").value == ""
+    assert not app.checkbox[-1].value
 
 
 def test_vendor_inline_carton_weight_renders_and_can_save():
@@ -175,14 +207,19 @@ def test_incomplete_or_uncertain_remains_disabled_after_review(raw):
 
 def test_duplicate_conflict_cannot_save():
     app = paste(VALID, existing=True)
-    app.checkbox[-1].check().run()
-    assert save_button(app).disabled
+    app.checkbox[-1].check()
+    save_button(app).click().run()
     assert any("同貨號不同品名" in e.value for e in app.error)
+    assert "test_saved_rows" not in app.session_state
 
 
 def test_failed_read_cannot_save():
     app = paste(VALID, failure=True)
-    assert not any(b.label == "💾 新增商品" for b in app.button)
+    app.checkbox[-1].check()
+    save_button(app).click().run()
+    assert any("雲表讀取失敗" in e.value for e in app.error)
+    assert "test_saved_rows" not in app.session_state
+    assert not app.checkbox[-1].value
 
 
 def test_confirmation_resets_after_edit():
@@ -190,7 +227,10 @@ def test_confirmation_resets_after_edit():
     app.checkbox[-1].check().run()
     assert not save_button(app).disabled
     next(n for n in app.number_input if n.label == "進價(RMB)").set_value(10.0).run()
-    assert save_button(app).disabled
+    assert not app.checkbox[-1].value
+    save_button(app).click().run()
+    assert "test_saved_rows" not in app.session_state
+    assert app.session_state.filtered_state.get("test_cloud_reads", 0) == 0
 
 
 def test_manual_non_rack_fee_note_reactivates_blocker():
@@ -310,11 +350,15 @@ def test_new_product_never_guesses_supplier_or_category():
     app = paste(VALID, select_source=False)
     assert next(s for s in app.selectbox if s.label == "📂 分頁").value == ""
     assert next(s for s in app.selectbox if s.label == "🏷️ 廠商").value == ""
-    app.checkbox[-1].check().run()
-    assert save_button(app).disabled
-    next(s for s in app.selectbox if s.label == "📂 分頁").set_value("S生活用品").run()
-    app.checkbox[-1].check().run()
-    assert save_button(app).disabled
+    app.checkbox[-1].check()
+    save_button(app).click().run()
+    assert any("尚未選擇本款分頁" in e.value for e in app.error)
+    next(s for s in app.selectbox if s.label == "📂 分頁").set_value("S生活用品")
+    app.checkbox[-1].check()
+    save_button(app).click().run()
+    assert any("尚未選擇本款廠商" in e.value for e in app.error)
+    assert "test_saved_rows" not in app.session_state
+    assert app.session_state.filtered_state.get("test_cloud_reads", 0) == 0
 
 
 def test_switch_supplier_format_clears_draft_and_confirmation():
@@ -331,7 +375,7 @@ def test_switch_supplier_format_clears_draft_and_confirmation():
     assert next(n for n in app.number_input if n.label == "內陸運費(R/kg)").value == 1.5
     assert next(n for n in app.number_input if n.label == "整箱毛重(kg)").value == 27.5
     assert not app.checkbox[-1].value
-    assert save_button(app).disabled
+    assert "test_saved_rows" not in app.session_state
     next(s for s in app.selectbox if s.label == "📂 分頁").set_value("S生活用品").run()
     next(s for s in app.selectbox if s.label == "🏷️ 廠商").set_value("v菲凡").run()
     app.checkbox[-1].check().run()
