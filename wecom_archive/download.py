@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import csv
 import ctypes
 from datetime import datetime, timedelta, timezone
@@ -16,7 +17,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -27,11 +28,77 @@ SDK_DIR = BASE / "sdk-v3"
 PRIVATE_KEY = BASE / "archive_private_key.pem"
 DATABASE = BASE / "messages.sqlite"
 MEDIA_DIR = BASE / "media"
+CREDENTIALS = BASE / "credentials.json"
+DEFAULT_EXPORT = Path(__file__).resolve().parents[1] / "wecom_archive_data" / "wecom-conversations.zip"
 TAIPEI = timezone(timedelta(hours=8))
 
 
 class ArchiveError(Exception):
     pass
+
+
+def _dpapi(data: bytes, *, protect: bool) -> bytes:
+    """Encrypt or decrypt for the current Windows user, without a shared password."""
+    if os.name != "nt":
+        raise ArchiveError("排程憑證僅支援 Windows")
+
+    class Blob(ctypes.Structure):
+        _fields_ = [("size", ctypes.c_ulong), ("data", ctypes.POINTER(ctypes.c_ubyte))]
+
+    source_buffer = ctypes.create_string_buffer(data)
+    source = Blob(len(data), ctypes.cast(source_buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    result = Blob()
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    method = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
+    method.argtypes = [ctypes.POINTER(Blob), ctypes.c_void_p, ctypes.c_void_p,
+                       ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(Blob)]
+    method.restype = ctypes.c_int
+    if not method(ctypes.byref(source), None, None, None, None, 1, ctypes.byref(result)):
+        action = "加密" if protect else "解開"
+        raise ArchiveError(f"無法使用本機 Windows 帳號{action}排程憑證（{ctypes.get_last_error()}）")
+    try:
+        return ctypes.string_at(result.data, result.size)
+    finally:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree(ctypes.cast(result.data, ctypes.c_void_p))
+
+
+def configure(corp_id: str | None, *, secret_stdin: bool = False) -> None:
+    corp_id = (corp_id or input("企業 ID：")).strip()
+    secret = (sys.stdin.readline() if secret_stdin else getpass.getpass(
+        "會話內容存檔 Secret（輸入時不顯示）："
+    )).strip()
+    if not corp_id or not secret.strip():
+        raise ArchiveError("企業 ID 和 Secret 都不能空白")
+    encrypted = base64.b64encode(_dpapi(secret.encode("utf-8"), protect=True)).decode("ascii")
+    BASE.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=BASE,
+                                     suffix=".tmp", delete=False) as stream:
+        temporary = Path(stream.name)
+        json.dump({"version": 1, "corp_id": corp_id, "secret_dpapi": encrypted}, stream)
+    try:
+        os.replace(temporary, CREDENTIALS)
+    finally:
+        temporary.unlink(missing_ok=True)
+    print("排程憑證已加密保存於目前 Windows 帳號")
+
+
+def _credentials(saved: bool) -> tuple[str, str]:
+    if saved:
+        if not CREDENTIALS.is_file():
+            raise ArchiveError("尚未設定排程憑證，請先執行 configure")
+        saved_data = json.loads(CREDENTIALS.read_text(encoding="utf-8"))
+        if saved_data.get("version") != 1:
+            raise ArchiveError("排程憑證格式不支援")
+        return saved_data["corp_id"], _dpapi(
+            base64.b64decode(saved_data["secret_dpapi"], validate=True), protect=False
+        ).decode("utf-8")
+    corp_id = input("企業 ID（我的企業 → 企業資訊）：").strip()
+    secret = getpass.getpass("會話內容存檔 Secret（輸入時不顯示）：").strip()
+    if not corp_id or not secret:
+        raise ArchiveError("企業 ID 和會話內容存檔 Secret 都不能空白")
+    return corp_id, secret
 
 
 def _cstr(value: str) -> bytes:
@@ -248,14 +315,11 @@ def _sync_media(sdk: FinanceSdk, connection: sqlite3.Connection) -> tuple[int, i
     return succeeded, failed
 
 
-def sync(limit: int, max_pages: int | None) -> None:
+def sync(limit: int, max_pages: int | None, *, saved_credentials: bool = False) -> None:
     if not PRIVATE_KEY.is_file():
         raise ArchiveError(f"找不到私鑰：{PRIVATE_KEY}")
     private_key = serialization.load_pem_private_key(PRIVATE_KEY.read_bytes(), password=None)
-    corp_id = input("企業 ID（我的企業 → 企業資訊）：").strip()
-    secret = getpass.getpass("會話內容存檔 Secret（輸入時不顯示）：").strip()
-    if not corp_id or not secret:
-        raise ArchiveError("企業 ID 和會話內容存檔 Secret 都不能空白")
+    corp_id, secret = _credentials(saved_credentials)
     connection = _database()
     pages = 0
     added = 0
@@ -382,7 +446,8 @@ def export(output: Path) -> None:
             archive.writestr(
                 "manifest.json",
                 json.dumps(
-                    {"messages": len(records), "media_files": len(media), "exported_at": datetime.now(timezone.utc).isoformat()},
+                    {"messages": len(records), "last_seq": records[-1][0] if records else 0,
+                     "media_files": len(media), "exported_at": datetime.now(timezone.utc).isoformat()},
                     ensure_ascii=False,
                     indent=2,
                 ),
@@ -398,24 +463,76 @@ def export(output: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _archive_current(output: Path) -> bool:
+    if not output.is_file():
+        return False
+    connection = _database()
+    try:
+        messages, last_seq = connection.execute(
+            "SELECT COUNT(*), COALESCE(MAX(seq), 0) FROM messages"
+        ).fetchone()
+        media = connection.execute("SELECT COUNT(*) FROM media WHERE ready=1").fetchone()[0]
+        pending = connection.execute("SELECT COUNT(*) FROM media WHERE ready=0").fetchone()[0]
+    finally:
+        connection.close()
+    if pending:
+        raise ArchiveError(f"仍有 {pending} 個附件待下載；保留前次 ZIP，不標示為最新")
+    try:
+        with ZipFile(output) as archive:
+            old = json.loads(archive.read("manifest.json"))
+    except (OSError, KeyError, ValueError, BadZipFile):
+        return False
+    return (old.get("messages"), old.get("last_seq"), old.get("media_files")) == (
+        messages, last_seq, media
+    )
+
+
+def run(output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    status = output.with_name("wecom-sync-status.txt")
+    now = datetime.now(TAIPEI).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        sync(100, None, saved_credentials=True)
+        if _archive_current(output):
+            print("資料沒有變動，沿用現有 ZIP")
+        else:
+            export(output)
+        status.write_text(f"{now}（台灣時間）同步成功。下載檔：{output.name}\n", encoding="utf-8")
+    except Exception as exc:
+        status.write_text(
+            f"{now}（台灣時間）同步失敗：{exc}\n現有 ZIP 可能較舊。\n", encoding="utf-8"
+        )
+        raise
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="企業微信會話存檔下載與匯出")
     commands = parser.add_subparsers(dest="command", required=True)
     sync_parser = commands.add_parser("sync", help="拉取新對話和附件")
     sync_parser.add_argument("--limit", type=int, default=100)
     sync_parser.add_argument("--max-pages", type=int)
+    sync_parser.add_argument("--saved-credentials", action="store_true")
     export_parser = commands.add_parser("export", help="匯出完整 ZIP")
     export_parser.add_argument("--output", type=Path, required=True)
+    configure_parser = commands.add_parser("configure", help="將 Secret 加密保存給本機排程使用")
+    configure_parser.add_argument("--corp-id")
+    configure_parser.add_argument("--secret-stdin", action="store_true", help=argparse.SUPPRESS)
+    run_parser = commands.add_parser("run", help="使用加密憑證同步並更新固定 ZIP")
+    run_parser.add_argument("--output", type=Path, default=DEFAULT_EXPORT)
     args = parser.parse_args()
     try:
         if args.command == "sync":
             if not 1 <= args.limit <= 1000 or (args.max_pages is not None and args.max_pages < 1):
                 raise ArchiveError("limit 必須為 1–1000，max-pages 必須大於 0")
-            sync(args.limit, args.max_pages)
+            sync(args.limit, args.max_pages, saved_credentials=args.saved_credentials)
+        elif args.command == "configure":
+            configure(args.corp_id, secret_stdin=args.secret_stdin)
+        elif args.command == "run":
+            run(args.output)
         else:
             export(args.output)
         return 0
-    except (ArchiveError, ValueError, KeyError, OSError, EOFError) as exc:
+    except (ArchiveError, ValueError, KeyError, OSError, EOFError, binascii.Error, UnicodeError) as exc:
         print(f"未完成：{exc}", file=sys.stderr)
         return 1
 
