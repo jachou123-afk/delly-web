@@ -1,5 +1,7 @@
 # 企業微信會話內容存檔下載工具
 
+換電腦接手或處理目前的 `301042` 同步失敗，先讀 [交接文件](HANDOFF.md)。
+
 這是獨立的 Windows 工具，不會啟動或修改採購報價網站。它使用[企業微信官方會話存檔 SDK](https://developer.work.weixin.qq.com/document/path/91774)拉取已開通存檔的會話，解密後保留完整訊息 JSON，並可匯出 CSV、JSONL 與媒體檔案。
 
 ## 前置設定

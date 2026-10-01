@@ -6,6 +6,7 @@
 
 - [LINE 商品廣告 Computer Use 執行 SOP](quote_dispatch/LINE_COMPUTER_USE_SOP.md)：跨電腦先重讀；保留第二次檢查，通過後用凍結圖文快速工作台。實際查驗後完成並下一則；連續執行模式可保留逐款證據後整批回寫。重新執行不等於整批重發。
 - [交接狀態](HANDOFF_STATE.md)：版本、既有驗收與限制。
+- [企業微信存檔交接](wecom_archive/HANDOFF.md)：定時下載設定、目前同步失敗與換電腦接續步驟。
 - [報價轉發規則](quote_dispatch/README.md)：廠商規則與共用文案規則。
 
 讀取或修改文件不代表已授權發送 LINE。執行者必須依使用者本次指定的批次、聊天室及範圍操作，並遵守當下工具的安全規則。
