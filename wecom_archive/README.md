@@ -15,7 +15,7 @@
    ```
 
 2. 私鑰保留在 `%LOCALAPPDATA%\WeComArchive\archive_private_key.pem`。使用者在企業微信管理端的「會話內容存檔」將消息加密公鑰設定為同目錄 `archive_public_key.pem` 的完整內容，並記錄儲存後顯示的**實際公鑰版本**。不要猜版本，也不要上傳私鑰。確認公司對外 IP 已在可信 IP 清單、存檔成員與服務設定有效。後台切換前，家裡原存檔與鏡像工作維持停止。
-3. 準備下方所列官方 Windows SDK；在公司一般 Windows 帳號執行 `configure`，以隱藏輸入設定自己的 Secret。不要搬家裡的 DPAPI 憑證。
+3. 準備下方所列官方 Windows SDK；在公司一般 Windows 檔案總管雙擊 [`configure-local.cmd`](configure-local.cmd)，或用下方命令執行 `configure`，以隱藏輸入設定自己的 Secret。設定入口會詢問企業 ID 與 Secret，只保存目前 Windows 帳號的加密憑證，不拉取對話、不啟用排程；若已有憑證則停止，不直接覆蓋。不要搬家裡的 DPAPI 憑證。
 4. 由使用者在存檔範圍內產生一則切換後的新對話，再執行首次同步：
 
    ```powershell
