@@ -6,7 +6,7 @@
 
 - 本機程式已與 GitHub `main` 的 `203f74c28cd3eecb1f36918b64a698b6af0f6d12` 一致；專案位置為 `C:\Users\User\Documents\ChatGPT\半自動-採購表\work\delly-web-repo`。
 - 已建立專案 `.venv`，使用 64 位元 Python 3.12.14 與 cryptography 50.0.2；依賴檢查、程式說明入口及一般 Windows 帳號下的 Python 執行檢查通過。
-- 一般 Windows 的 `%LOCALAPPDATA%\WeComArchive` 尚不存在；本機未安裝 `WeCom Conversation Archive Sync` 排程，常用資料夾未找到原私鑰、歷史資料庫或官方 SDK。
+- 公司一般 Windows 的 `%LOCALAPPDATA%\WeComArchive` 接收資料夾已建立，`sdk-v3/` 目前為空。原私鑰、SDK DLL、排程憑證與資料庫均尚未搬入或建立；本機未安裝 `WeCom Conversation Archive Sync` 排程。
 - 使用者已確認原本成功下載的來源是家裡電腦，並轉述家裡存檔排程已停用、鏡像排程已暫停、下載程序已結束，原檔均保留。此為家裡執行端的回報，公司端尚未直接驗證。尚待安全搬移原私鑰 `archive_private_key.pem`、`messages.sqlite`、`media/` 與原官方 `sdk-v3/`；Secret 須在公司電腦以隱藏輸入重新設定，不貼在聊天、GitHub 或交接文件中。
 - 本次查得兩個對外 IP 查詢結果一致；實際 IP 須在安裝與驗收當下重新核對。本次未修改管理端可信 IP、公鑰、Secret 或服務設定。
 - 尚未拉取對話、匯出新 ZIP、安裝排程或更新私人下載頁；本機準備完成不等於存檔已接手成功。下方的成功、失敗、排程與 ZIP 紀錄均為原執行電腦的交接證據。
@@ -18,6 +18,13 @@
 - 使用者指出家裡與公司的 NAS 路徑不同；家裡實際可用的路徑或入口尚待提供。上述 UNC 路徑僅在公司端驗證，不可直接當成家裡的連線位置。先核對兩邊是否為同一台 NAS 與同一個資料夾，再依各自入口操作；若為不同 NAS，另行確認安全傳送方式。
 - 若家裡仍拒絕存取，回報確切錯誤，勿猜帳密、改用商品共用資料夾或將私鑰貼到聊天。公司搬移資料夾限其個人資料夾擁有者存取；取得家裡入口後仍須實際核對讀取權限。
 - 家裡確認下載程序已結束後，再複製指定四項並逐檔核對內容一致。保留家裡原檔，不複製 `credentials.json`、不產生新金鑰；已有同名資料先比較，不直接覆蓋。
+
+### 家裡 NAS 無法連線時的直接傳檔（2026-10-01）
+
+- 家裡執行端回報本機 `C:\Users\user\SynologyDrive\` 對應 NAS「圖片區」，沒有可用映射磁碟；公司指定的私人資料夾尚未讀取或核對。使用者再次回報家裡無法連線 NAS，不以本機可讀的 SynologyDrive 目錄認定 NAS 已可同步。
+- 公司接收位置已在一般 Windows 環境建立並核對為 `C:\Users\User\AppData\Local\WeComArchive`。可使用現有遠端工具的檔案傳輸（若支援）或 USB，將家裡一般 Windows `%LOCALAPPDATA%\WeComArchive` 的原 `archive_private_key.pem` 與 `sdk-v3/` 直接複製到該位置。
+- 此方式沿用既有企業微信公鑰與原私鑰，公司端可用新資料庫開始；家裡歷史資料庫與附件原地保留，不保證能重新拉回全部歷史訊息。不複製家裡的 `credentials.json`，公司端須重新隱藏輸入 Secret。
+- 私鑰不貼到聊天、不放商品共用的「圖片區」或 GitHub。私鑰與 SDK 實際送達後，先核對檔案，再驗收同步及排程；目前只有空接收資料夾，尚未下載新對話。
 
 ## 原執行電腦的狀態與待處理問題
 
