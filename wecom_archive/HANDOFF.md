@@ -7,9 +7,16 @@
 - 本機程式已與 GitHub `main` 的 `203f74c28cd3eecb1f36918b64a698b6af0f6d12` 一致；專案位置為 `C:\Users\User\Documents\ChatGPT\半自動-採購表\work\delly-web-repo`。
 - 已建立專案 `.venv`，使用 64 位元 Python 3.12.14 與 cryptography 50.0.2；依賴檢查、程式說明入口及一般 Windows 帳號下的 Python 執行檢查通過。
 - 一般 Windows 的 `%LOCALAPPDATA%\WeComArchive` 尚不存在；本機未安裝 `WeCom Conversation Archive Sync` 排程，常用資料夾未找到原私鑰、歷史資料庫或官方 SDK。
-- 使用者已確認原本成功下載的來源是家裡電腦。尚待從家裡電腦安全搬移原私鑰 `archive_private_key.pem`、`messages.sqlite` 與 `media/`，並確認家裡電腦的同步已停止。SDK 需使用官方 Windows v3；Secret 須在公司電腦以隱藏輸入重新設定，不貼在聊天、GitHub 或交接文件中。
+- 使用者已確認原本成功下載的來源是家裡電腦，並轉述家裡存檔排程已停用、鏡像排程已暫停、下載程序已結束，原檔均保留。此為家裡執行端的回報，公司端尚未直接驗證。尚待安全搬移原私鑰 `archive_private_key.pem`、`messages.sqlite`、`media/` 與原官方 `sdk-v3/`；Secret 須在公司電腦以隱藏輸入重新設定，不貼在聊天、GitHub 或交接文件中。
 - 本次查得兩個對外 IP 查詢結果一致；實際 IP 須在安裝與驗收當下重新核對。本次未修改管理端可信 IP、公鑰、Secret 或服務設定。
 - 尚未拉取對話、匯出新 ZIP、安裝排程或更新私人下載頁；本機準備完成不等於存檔已接手成功。下方的成功、失敗、排程與 ZIP 紀錄均為原執行電腦的交接證據。
+
+### NAS 搬移位置（2026-10-01）
+
+- 已在公司一般 Windows 環境驗證 NAS 可連線，並建立 `\\Nas_d224\homes\jachou\WeComArchive-transfer`。新資料夾停用權限繼承，僅允許個人資料夾擁有者完整存取；未修改其他資料夾權限。
+- 搬移說明 `README-transfer.txt` 寫入後已讀回一致。此時資料夾只有該說明檔，私鑰、資料庫、附件與 SDK 尚未複製。
+- 家裡執行端先以一般 Windows 權限確認同一 NAS 位置可讀取，NAS 帳號須為對應的 `jachou`。公司可讀寫不代表家裡的網路與帳號也已通過；若仍拒絕存取，回報確切錯誤，勿猜帳密、改用商品共用資料夾或將私鑰貼到聊天。
+- 家裡確認下載程序已結束後，再複製指定四項並逐檔核對內容一致。保留家裡原檔，不複製 `credentials.json`、不產生新金鑰；已有同名資料先比較，不直接覆蓋。
 
 ## 原執行電腦的狀態與待處理問題
 
