@@ -20,12 +20,14 @@ import tempfile
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 
 BASE = Path(os.environ["LOCALAPPDATA"]) / "WeComArchive"
 SDK_DIR = BASE / "sdk-v3"
 PRIVATE_KEY = BASE / "archive_private_key.pem"
+PUBLIC_KEY = BASE / "archive_public_key.pem"
+FRESH_SETUP = BASE / "fresh-setup.json"
 DATABASE = BASE / "messages.sqlite"
 MEDIA_DIR = BASE / "media"
 CREDENTIALS = BASE / "credentials.json"
@@ -35,6 +37,83 @@ TAIPEI = timezone(timedelta(hours=8))
 
 class ArchiveError(Exception):
     pass
+
+
+def prepare_fresh() -> None:
+    """Prepare a new key pair without replacing existing archive files."""
+    BASE.mkdir(parents=True, exist_ok=True)
+    if any(path.exists() for path in (PRIVATE_KEY, PUBLIC_KEY, FRESH_SETUP, DATABASE, CREDENTIALS)):
+        raise ArchiveError("已有金鑰、資料庫或憑證，未重新產生或覆蓋；請先核對現有設定")
+    if MEDIA_DIR.exists() and any(MEDIA_DIR.iterdir()):
+        raise ArchiveError("已有附件，未重新產生金鑰；請先核對現有存檔")
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_bytes = private_key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    public_bytes = private_key.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    # Exclusive creation keeps repeated preparation from replacing the private key.
+    with PRIVATE_KEY.open("xb") as stream:
+        stream.write(private_bytes)
+    with PUBLIC_KEY.open("xb") as stream:
+        stream.write(public_bytes)
+    with FRESH_SETUP.open("x", encoding="utf-8") as stream:
+        json.dump({"format": 1, "publickey_fingerprint": _key_fingerprint(private_key)}, stream)
+    print(f"新金鑰已建立。管理端使用的公鑰檔：{PUBLIC_KEY}")
+    print("尚未切換管理端公鑰或開始存檔；請保留這組私鑰")
+
+
+def _metadata(connection: sqlite3.Connection) -> dict[str, str]:
+    return dict(connection.execute("SELECT name,value FROM metadata"))
+
+
+def _set_metadata(connection: sqlite3.Connection, name: str, value) -> None:
+    connection.execute(
+        "INSERT INTO metadata(name,value) VALUES(?,?) "
+        "ON CONFLICT(name) DO UPDATE SET value=excluded.value", (name, str(value)),
+    )
+
+
+def _key_fingerprint(private_key) -> str:
+    return hashlib.sha256(private_key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo,
+    )).hexdigest()
+
+
+def _fresh_scope(connection: sqlite3.Connection, requested: int | None,
+                 fingerprint: str) -> tuple[int | None, bool]:
+    metadata = _metadata(connection)
+    saved = metadata.get("fresh_key_version")
+    if requested is not None and requested < 1:
+        raise ArchiveError("新公鑰版本必須大於 0，並以管理端實際版本為準")
+    if saved is not None:
+        version = int(saved)
+        if requested is not None and requested != version:
+            raise ArchiveError("新存檔已固定公鑰版本，不能改版本後略過既有訊息")
+        if metadata.get("fresh_key_fingerprint") != fingerprint:
+            raise ArchiveError("目前私鑰與新存檔建立時不同，已停止同步")
+        return version, True
+    if requested is not None:
+        messages = connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        media = connection.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+        if messages or media or int(metadata.get("last_seq", "0")):
+            raise ArchiveError("全新模式只適用空資料庫；既有歷史與接續序號未更動")
+    return requested, False
+
+
+def _scope_manifest(connection: sqlite3.Connection) -> dict:
+    metadata = _metadata(connection)
+    if "fresh_key_version" not in metadata:
+        return {}
+    return {
+        "archive_scope": "fresh_key_version_only",
+        "fresh_key_version": int(metadata["fresh_key_version"]),
+        "scope_verified_at": metadata["scope_verified_at"],
+        "skipped_old_messages": int(metadata.get("skipped_old_messages", "0")),
+        "sync_cursor": int(metadata.get("last_seq", "0")),
+    }
 
 
 def _dpapi(data: bytes, *, protect: bool) -> bytes:
@@ -315,40 +394,65 @@ def _sync_media(sdk: FinanceSdk, connection: sqlite3.Connection) -> tuple[int, i
     return succeeded, failed
 
 
-def sync(limit: int, max_pages: int | None, *, saved_credentials: bool = False) -> None:
+def sync(limit: int, max_pages: int | None, *, saved_credentials: bool = False,
+         fresh_key_version: int | None = None) -> None:
     if not PRIVATE_KEY.is_file():
         raise ArchiveError(f"找不到私鑰：{PRIVATE_KEY}")
     private_key = serialization.load_pem_private_key(PRIVATE_KEY.read_bytes(), password=None)
-    corp_id, secret = _credentials(saved_credentials)
     connection = _database()
     pages = 0
     added = 0
     try:
+        fingerprint = _key_fingerprint(private_key)
+        version, verified = _fresh_scope(connection, fresh_key_version, fingerprint)
+        if FRESH_SETUP.is_file():
+            prepared = json.loads(FRESH_SETUP.read_text(encoding="utf-8"))
+            if prepared.get("format") != 1 or prepared.get("publickey_fingerprint") != fingerprint:
+                raise ArchiveError("全新建置紀錄與目前私鑰不符，已停止同步")
+            if version is None:
+                raise ArchiveError("全新金鑰尚未驗證；首次執行請指定 --fresh-key-version 後台實際版本")
+        corp_id, secret = _credentials(saved_credentials)
+        seq = int(_metadata(connection).get("last_seq", "0"))
+        pending_skipped = 0
         with FinanceSdk(corp_id, secret) as sdk:
             while max_pages is None or pages < max_pages:
-                row = connection.execute(
-                    "SELECT value FROM metadata WHERE name='last_seq'"
-                ).fetchone()
-                seq = int(row[0]) if row else 0
                 batch = sdk.get_chat_data(seq, limit)
                 if not batch:
                     break
                 decoded = []
                 max_seq = seq
+                skipped = 0
                 for record in batch:
                     current_seq = int(record["seq"])
                     if current_seq <= seq:
                         raise ArchiveError("SDK 回傳的序號未前進，已停止以避免重複")
+                    record_version = int(record["publickey_ver"])
+                    if record_version < 1:
+                        raise ArchiveError("訊息公鑰版本無效，已停止同步")
+                    max_seq = max(max_seq, current_seq)
+                    if version is not None:
+                        if record_version < version:
+                            skipped += 1
+                            continue
+                        if record_version > version:
+                            raise ArchiveError("訊息使用較新的公鑰版本，已停止；請核對管理端與私鑰")
                     try:
                         random_key = _decrypt_random_key(record, private_key)
                     except ValueError as exc:
+                        key_help = ("請核對新私鑰與管理端公鑰是否配對" if version is not None
+                                    else "請保留該版本的原私鑰")
                         raise ArchiveError(
                             "目前私鑰無法解開公鑰版本 "
-                            f"{record.get('publickey_ver')} 的訊息；請保留該版本的原私鑰"
+                            f"{record.get('publickey_ver')} 的訊息；{key_help}"
                         ) from exc
                     message = sdk.decrypt_data(random_key, record["encrypt_chat_msg"])
                     decoded.append((current_seq, record, message))
-                    max_seq = max(max_seq, current_seq)
+                pages += 1
+                pending_skipped += skipped
+                seq = max_seq
+                if version is not None and not verified and not decoded:
+                    # Scan old batches, but save no cursor until the new key is proven.
+                    continue
                 with connection:
                     for current_seq, record, message in decoded:
                         before = connection.total_changes
@@ -369,14 +473,27 @@ def sync(limit: int, max_pages: int | None, *, saved_credentials: bool = False) 
                                 "INSERT OR IGNORE INTO media(sdkfileid,filename) VALUES(?,?)",
                                 (sdkfileid, filename),
                             )
-                    connection.execute(
-                        "INSERT INTO metadata(name,value) VALUES('last_seq',?) "
-                        "ON CONFLICT(name) DO UPDATE SET value=excluded.value",
-                        (str(max_seq),),
-                    )
-                pages += 1
+                    _set_metadata(connection, "last_seq", max_seq)
+                    if version is not None:
+                        if not verified:
+                            _set_metadata(connection, "fresh_key_version", version)
+                            _set_metadata(connection, "fresh_key_fingerprint", fingerprint)
+                            _set_metadata(connection, "scope_verified_at",
+                                          datetime.now(TAIPEI).isoformat())
+                        previous = int(_metadata(connection).get("skipped_old_messages", "0"))
+                        _set_metadata(connection, "skipped_old_messages", previous + pending_skipped)
+                verified = version is not None
+                pending_skipped = 0
                 print(f"已保存 {added} 則訊息；接續序號 {max_seq}")
+            if version is not None and not verified:
+                raise ArchiveError(
+                    f"尚未驗證公鑰版本 {version} 的新訊息，接續序號未保存；"
+                    "請核對版本，並由使用者產生一則切換後的新對話再試"
+                )
             media_ok, media_failed = _sync_media(sdk, connection)
+        if version is not None:
+            skipped_total = int(_metadata(connection).get("skipped_old_messages", "0"))
+            print(f"存檔範圍：公鑰版本 {version}；略過舊版本 {skipped_total} 則，未匯入舊歷史")
         print(f"同步結束：新增 {added} 則訊息，附件成功 {media_ok}，待重試 {media_failed}")
     finally:
         connection.close()
@@ -405,6 +522,7 @@ def export(output: Path) -> None:
             "SELECT seq,publickey_ver,body FROM messages ORDER BY seq"
         ).fetchall()
         media = connection.execute("SELECT filename FROM media WHERE ready=1 ORDER BY filename").fetchall()
+        scope = _scope_manifest(connection)
     finally:
         connection.close()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -447,7 +565,8 @@ def export(output: Path) -> None:
                 "manifest.json",
                 json.dumps(
                     {"messages": len(records), "last_seq": records[-1][0] if records else 0,
-                     "media_files": len(media), "exported_at": datetime.now(timezone.utc).isoformat()},
+                     "media_files": len(media), "exported_at": datetime.now(timezone.utc).isoformat(),
+                     **scope},
                     ensure_ascii=False,
                     indent=2,
                 ),
@@ -473,6 +592,7 @@ def _archive_current(output: Path) -> bool:
         ).fetchone()
         media = connection.execute("SELECT COUNT(*) FROM media WHERE ready=1").fetchone()[0]
         pending = connection.execute("SELECT COUNT(*) FROM media WHERE ready=0").fetchone()[0]
+        scope = _scope_manifest(connection)
     finally:
         connection.close()
     if pending:
@@ -484,20 +604,28 @@ def _archive_current(output: Path) -> bool:
         return False
     return (old.get("messages"), old.get("last_seq"), old.get("media_files")) == (
         messages, last_seq, media
-    )
+    ) and all(old.get(name) == value for name, value in scope.items())
 
 
-def run(output: Path) -> None:
+def run(output: Path, *, fresh_key_version: int | None = None) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     status = output.with_name("wecom-sync-status.txt")
     now = datetime.now(TAIPEI).strftime("%Y-%m-%d %H:%M:%S")
     try:
-        sync(100, None, saved_credentials=True)
+        sync(100, None, saved_credentials=True, fresh_key_version=fresh_key_version)
         if _archive_current(output):
             print("資料沒有變動，沿用現有 ZIP")
         else:
             export(output)
-        status.write_text(f"{now}（台灣時間）同步成功。下載檔：{output.name}\n", encoding="utf-8")
+        connection = _database()
+        try:
+            scope = _scope_manifest(connection)
+        finally:
+            connection.close()
+        scope_text = (f"僅含公鑰版本 {scope['fresh_key_version']} 的新對話，未匯入舊歷史。\n"
+                      if scope else "")
+        status.write_text(f"{now}（台灣時間）同步成功。下載檔：{output.name}\n{scope_text}",
+                          encoding="utf-8")
     except Exception as exc:
         status.write_text(
             f"{now}（台灣時間）同步失敗：{exc}\n現有 ZIP 可能較舊。\n", encoding="utf-8"
@@ -508,10 +636,13 @@ def run(output: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="企業微信會話存檔下載與匯出")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("prepare-fresh", help="在空存檔位置建立新金鑰，不覆蓋原檔")
     sync_parser = commands.add_parser("sync", help="拉取新對話和附件")
     sync_parser.add_argument("--limit", type=int, default=100)
     sync_parser.add_argument("--max-pages", type=int)
     sync_parser.add_argument("--saved-credentials", action="store_true")
+    sync_parser.add_argument("--fresh-key-version", type=int,
+                             help="全新存檔使用的管理端實際公鑰版本；舊版本只略過")
     export_parser = commands.add_parser("export", help="匯出完整 ZIP")
     export_parser.add_argument("--output", type=Path, required=True)
     configure_parser = commands.add_parser("configure", help="將 Secret 加密保存給本機排程使用")
@@ -519,16 +650,21 @@ def main() -> int:
     configure_parser.add_argument("--secret-stdin", action="store_true", help=argparse.SUPPRESS)
     run_parser = commands.add_parser("run", help="使用加密憑證同步並更新固定 ZIP")
     run_parser.add_argument("--output", type=Path, default=DEFAULT_EXPORT)
+    run_parser.add_argument("--fresh-key-version", type=int,
+                            help="首次全新存檔的管理端實際公鑰版本")
     args = parser.parse_args()
     try:
         if args.command == "sync":
             if not 1 <= args.limit <= 1000 or (args.max_pages is not None and args.max_pages < 1):
                 raise ArchiveError("limit 必須為 1–1000，max-pages 必須大於 0")
-            sync(args.limit, args.max_pages, saved_credentials=args.saved_credentials)
+            sync(args.limit, args.max_pages, saved_credentials=args.saved_credentials,
+                 fresh_key_version=args.fresh_key_version)
+        elif args.command == "prepare-fresh":
+            prepare_fresh()
         elif args.command == "configure":
             configure(args.corp_id, secret_stdin=args.secret_stdin)
         elif args.command == "run":
-            run(args.output)
+            run(args.output, fresh_key_version=args.fresh_key_version)
         else:
             export(args.output)
         return 0

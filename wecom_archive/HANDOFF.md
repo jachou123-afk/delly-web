@@ -4,6 +4,18 @@
 
 ## 公司電腦接續準備（2026-10-01）
 
+### 目前方向：公司全新建置
+
+- NAS 與 TeamViewer 傳檔尚未成功，改採公司建立新金鑰、切換後只存新版本對話。家裡原私鑰、歷史資料庫與附件原地保留，不再以搬移原私鑰作為公司新存檔的前置條件。下方 NAS／直接傳檔段落是先前方案，僅保留交接紀錄。
+- 公司一般 Windows 的 `C:\Users\User\AppData\Local\WeComArchive` 已建立一組 RSA 2048 金鑰：`archive_private_key.pem`（1704 bytes）與 `archive_public_key.pem`（451 bytes）。已核對公私鑰配對；未覆蓋原檔。私鑰只在公司本機，未提交 GitHub、貼到聊天或傳入 NAS。
+- 已新增 `prepare-fresh` 與首次 `run --fresh-key-version <後台實際版本>`。全新建置紀錄會阻止未指定版本的首次同步；略過舊訊息前必須成功解密新版本訊息。版本及公鑰指紋保存後不可直接改版或換私鑰。ZIP 明示僅含新版本對話，不宣稱完整歷史。
+- 16 項離線測試通過，包含舊批次掃描、首次版本驗證、同批失敗不保存訊息或游標、API 失敗、既有歷史保護、金鑰替換拒絕、排程沿用及匯出範圍。測試使用臨時資料，不拉取真實對話。
+- **尚未完成**：使用者在管理端儲存公司新公鑰並確認實際版本、可信 IP 與服務設定；安裝官方 SDK；公司隱藏輸入 Secret；產生新對話並實跑驗收；啟用公司排程與更新原私人下載頁。公司目前 SDK／憑證／資料庫仍不存在，未同步對話。
+- 本次工具的網站安全政策阻擋企業微信後台及官方 SDK 文件的瀏覽操作；未改用其他介面繞過。後台設定與官方下載由使用者自行操作，程式及本機準備可先完成。
+- 家裡排程停止與鏡像暫停為使用者轉述；公司未遠端驗證。切換完成後不啟動家裡舊私鑰的下載工作。先前 `301042` 的原因仍未確認，新金鑰建置不代表該錯誤已修復。
+
+### 以下為先前接續／搬移準備紀錄
+
 - 本機程式已與 GitHub `main` 的 `203f74c28cd3eecb1f36918b64a698b6af0f6d12` 一致；專案位置為 `C:\Users\User\Documents\ChatGPT\半自動-採購表\work\delly-web-repo`。
 - 已建立專案 `.venv`，使用 64 位元 Python 3.12.14 與 cryptography 50.0.2；依賴檢查、程式說明入口及一般 Windows 帳號下的 Python 執行檢查通過。
 - 公司一般 Windows 的 `%LOCALAPPDATA%\WeComArchive` 接收資料夾已建立，`sdk-v3/` 目前為空。原私鑰、SDK DLL、排程憑證與資料庫均尚未搬入或建立；本機未安裝 `WeCom Conversation Archive Sync` 排程。
@@ -55,7 +67,7 @@ GitHub 保存下載程式、排程安裝腳本與文件。以下內容留在執�
 
 | 本機項目 | 換電腦時的處理 |
 | --- | --- |
-| `%LOCALAPPDATA%\WeComArchive\archive_private_key.pem` | 必須安全搬移原私鑰，與管理端既有公鑰配對；不要產生新私鑰代替它 |
+| `%LOCALAPPDATA%\WeComArchive\archive_private_key.pem` | 接續舊版加密訊息時必須搬移配對原私鑰；公司本次採上方全新建置，新金鑰不能解開舊版訊息 |
 | 同目錄的 `messages.sqlite` 與 `media/` | 停止舊機同步並確認程序結束後，安全搬移這兩項，保留已存歷史與接續序號；目前工具沒有 ZIP 匯入功能 |
 | 同目錄的 `sdk-v3/` | 使用官方 Windows SDK v3；可重新從官方文件取得 |
 | 同目錄的 `credentials.json` | Windows DPAPI 加密憑證；在新電腦／新帳號重新執行 `configure`，不要把舊檔當作可用憑證直接複製 |
@@ -66,6 +78,8 @@ Secret、私鑰、資料庫、聊天 ZIP 都不得放進 GitHub。聊天 ZIP 已
 本次曾遇到 Codex 封裝環境將 AppData 重導向到應用程式的 `LocalCache`，造成 Codex 內手動同步成功、一般 Windows 排程卻看不到檔案或無法解密。已在一般 Windows 排程環境建立真正的 `%LOCALAPPDATA%\WeComArchive`，並實跑成功。搬移時從一般 Windows 檔案總管／PowerShell 核對真實來源；新機也必須用實際排程帳號驗收，不能只憑 Codex 終端機的成功結果。
 
 ## 下一台電腦的接手順序
+
+本節適用搬移並接續原歷史；公司本次全新建置以最上方目前方向及 README 的新流程為準。
 
 1. 確認 GitHub `main` 最新版本與本機修改。乾淨且只有落後時才能 `git pull --ff-only`；有未提交修改先保留並比較。
 2. 先讀最新同步狀態並排查 `301042`。本次沒有暫停舊機排程；正式接手前停止舊機同步並確認程序結束，避免兩台同時更新同一份 OneDrive ZIP。
