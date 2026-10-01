@@ -33,6 +33,7 @@ MEDIA_DIR = BASE / "media"
 CREDENTIALS = BASE / "credentials.json"
 DEFAULT_EXPORT = Path(__file__).resolve().parents[1] / "wecom_archive_data" / "wecom-conversations.zip"
 TAIPEI = timezone(timedelta(hours=8))
+EXPORT_FORMAT = 2
 
 
 class ArchiveError(Exception):
@@ -510,6 +511,23 @@ def _timestamp(value) -> str:
         return ""
 
 
+def _media_export_name(path: Path) -> str:
+    """Give image copies their actual extension without changing stored bytes."""
+    with path.open("rb") as stream:
+        header = stream.read(16)
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        suffix = ".png"
+    elif header.startswith(b"\xff\xd8\xff"):
+        suffix = ".jpg"
+    elif header.startswith((b"GIF87a", b"GIF89a")):
+        suffix = ".gif"
+    elif header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        suffix = ".webp"
+    else:
+        return path.name
+    return path.with_suffix(suffix).name
+
+
 def export(output: Path) -> None:
     if not DATABASE.is_file():
         raise ArchiveError("尚無本機對話資料；請先執行 sync")
@@ -521,17 +539,25 @@ def export(output: Path) -> None:
         records = connection.execute(
             "SELECT seq,publickey_ver,body FROM messages ORDER BY seq"
         ).fetchall()
-        media = connection.execute("SELECT filename FROM media WHERE ready=1 ORDER BY filename").fetchall()
+        media = connection.execute(
+            "SELECT sdkfileid,filename FROM media WHERE ready=1 ORDER BY filename"
+        ).fetchall()
         scope = _scope_manifest(connection)
     finally:
         connection.close()
+    media_exports = {}
+    for sdkfileid, filename in media:
+        path = MEDIA_DIR / filename
+        if not path.is_file():
+            raise ArchiveError(f"附件檔案遺失：{filename}")
+        media_exports[sdkfileid] = "media/" + _media_export_name(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=output.parent, suffix=".zip", delete=False) as tmp:
         temporary = Path(tmp.name)
     try:
         csv_text = io.StringIO(newline="")
         writer = csv.writer(csv_text)
-        writer.writerow(["序號", "時間（台灣）", "發送者", "接收者", "群組ID", "類型", "內容", "原始JSON"])
+        writer.writerow(["序號", "時間（台灣）", "發送者", "接收者", "群組ID", "類型", "內容", "原始JSON", "附件檔案"])
         json_lines = []
         for seq, publickey_ver, body in records:
             message = json.loads(body)
@@ -557,6 +583,7 @@ def export(output: Path) -> None:
                 _safe_spreadsheet_text(kind),
                 _safe_spreadsheet_text(str(content)),
                 body,
+                "\n".join(sorted({media_exports[sdkfileid] for sdkfileid in _media_ids(message)})),
             ])
         with ZipFile(temporary, "w", compression=ZIP_DEFLATED) as archive:
             archive.writestr("messages.jsonl", "\n".join(json_lines) + ("\n" if json_lines else ""))
@@ -564,18 +591,19 @@ def export(output: Path) -> None:
             archive.writestr(
                 "manifest.json",
                 json.dumps(
-                    {"messages": len(records), "last_seq": records[-1][0] if records else 0,
+                    {"export_format": EXPORT_FORMAT,
+                     "messages": len(records), "last_seq": records[-1][0] if records else 0,
                      "media_files": len(media), "exported_at": datetime.now(timezone.utc).isoformat(),
                      **scope},
                     ensure_ascii=False,
                     indent=2,
                 ),
             )
-            for (filename,) in media:
+            for sdkfileid, filename in media:
                 path = MEDIA_DIR / filename
                 if not path.is_file():
                     raise ArchiveError(f"附件檔案遺失：{filename}")
-                archive.write(path, "media/" + filename)
+                archive.write(path, media_exports[sdkfileid])
         os.replace(temporary, output)
         print(f"匯出完成：{output}；對話 {len(records)} 則、附件 {len(media)} 個")
     finally:
@@ -602,7 +630,9 @@ def _archive_current(output: Path) -> bool:
             old = json.loads(archive.read("manifest.json"))
     except (OSError, KeyError, ValueError, BadZipFile):
         return False
-    return (old.get("messages"), old.get("last_seq"), old.get("media_files")) == (
+    return old.get("export_format") == EXPORT_FORMAT and (
+        old.get("messages"), old.get("last_seq"), old.get("media_files")
+    ) == (
         messages, last_seq, media
     ) and all(old.get(name) == value for name, value in scope.items())
 
