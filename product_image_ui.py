@@ -13,9 +13,10 @@ def clear_library_cache():
             st.session_state.pop(key, None)
 
 
-def render_quote_images(key):
-    st.markdown("#### 本款原圖（隨報價保存到圖庫）")
-    st.caption("選填；每款最多 5 張，單張 2 MB。原圖只需提供一次，之後發送管理自動帶入；不改雲表原有圖片。")
+def render_quote_images(key, *, title="本款原圖（隨報價保存到圖庫）",
+                        caption="選填；每款最多 5 張，單張 2 MB。原圖只需提供一次，之後發送管理自動帶入；不改雲表原有圖片。"):
+    st.markdown("#### " + title)
+    st.caption(caption)
     uploads = st.file_uploader("本款商品原圖", type=["jpg", "jpeg", "png", "webp"],
                                accept_multiple_files=True, max_upload_size=2, key=key)
     assets, errors = {}, []

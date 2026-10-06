@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, vendor_options as canonical_vendor_
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.20")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -541,7 +541,7 @@ def persist_quote_images(category, base_row, expected_block, assets, *, store=No
         return True
     except Exception as exc:
         st.error(f"商品已寫入，但圖片綁定未完成：{exc}")
-        st.warning("不要重複新增商品；請到發送管理保存／補配圖片。")
+        st.warning("不要重複新增商品；請到「商品補圖」搜尋本款 NO 或貨號，單獨保存圖片。")
         return False
 
 
@@ -569,9 +569,14 @@ if st.session_state.get("quote_evidence_notice"):
     st.success(st.session_state.pop("quote_evidence_notice"))
 render_pending_evidence(get_dispatch_store)
 
-quote_tab, dispatch_tab = st.tabs(
-    ["📝 報價整理", "📣 發送管理"], key="tool_page", on_change="rerun"
+quote_tab, dispatch_tab, image_repair_tab = st.tabs(
+    ["📝 報價整理", "📣 發送管理", "🖼️ 商品補圖"], key="tool_page", on_change="rerun"
 )
+if image_repair_tab.open:
+    from quote_image_repair_ui import render_image_repair
+    with image_repair_tab:
+        render_image_repair(get_dispatch_store)
+    st.stop()
 # --- 側邊欄設定 ---
 if not dispatch_tab.open:
     settings = get_settings_cached()
