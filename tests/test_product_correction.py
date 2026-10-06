@@ -58,11 +58,11 @@ def test_financial_changes_require_saved_parameters_and_never_today_defaults():
         plan(snapshot, proposal, ('price',))
     _, snapshot, proposal = setup(True)
     result = plan(snapshot, proposal, ('price',))
-    assert result['parameters'] == dict(dom_rate='0', intl_rate='8.5', ex_rate='4.8')
+    assert result['parameters'] == dict(dom_rate='0', intl_rate='9', ex_rate='4.8')
     assert result['after'][1][6] == '10'
     assert result['after'][4][1] == '貨號 TEST-1'
     assert result['after'][3][1] == snapshot['formulas'][3][1]
-    assert next(r for r in result['impacts'] if r['項目'] == '到手成本 TWD')['修正後'] == '50.9'
+    assert next(r for r in result['impacts'] if r['項目'] == '到手成本 TWD')['修正後'] == '51.1'
     assert next(r for r in result['impacts'] if r['項目'] == '廣告售價')['修正後'] == '57'
     snapshot['evidence']['source_hash'] = 'stale'
     with pytest.raises(DispatchError):
@@ -113,7 +113,7 @@ def test_price_write_checks_formula_and_display_values():
     store.spreadsheet.plan = result
     saved = apply_correction(store, result, uuid.uuid4().hex)
     assert saved['source']['price'] == '57'
-    assert saved['source']['block'][1][10] == '50.9'
+    assert saved['source']['block'][1][10] == '51.1'
 
 
 def test_uncertain_commit_is_query_only_and_never_appended_again():
@@ -186,6 +186,7 @@ def test_other_supplier_keeps_its_own_domestic_rate():
                              notes='合成歷史參數：境內費率2', origin='review_attachment')
     result = plan(load_snapshot(store, source), parse_proposal(RAW, TOOLS['parse']), ('price',))
     assert result['parameters']['dom_rate'] == '2'
+    assert result['parameters']['intl_rate'] == '8.5'
     assert next(r for r in result['impacts'] if r['項目'] == '到手成本 TWD')['修正後'] == '51.6'
 
 

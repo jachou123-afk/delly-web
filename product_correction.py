@@ -5,6 +5,7 @@ import re
 
 from cost_audit import RULE_VERSION, INPUT_LABELS, UNITS, block, calculate, fingerprint, fmt, legacy_inputs, number
 from dispatch_manager import DispatchError
+from supplier_names import international_rate_for_vendor
 
 FIELDS = {'name': '商品名稱', 'supplier_code': '廠商貨號', 'price': '進價 RMB',
           'qty': '每箱數量', 'unit': '計價／裝箱單位', 'carton_kg': '整箱毛重 kg',
@@ -125,6 +126,7 @@ def plan_correction(snapshot, selected, edits, proposal, *, actor, basis, formul
         if proposal.get('issues'):
             raise DispatchError('原文解析仍有疑義，請先釐清：' + '；'.join(proposal['issues']))
         params = retained_parameters(source, before, snapshot.get('evidence'))
+        params['intl_rate'] = fmt(number(international_rate_for_vendor(source['vendor'], params['intl_rate'])))
         inputs = {**{k: values[k] for k in FINANCIAL}, **params}
         computed = calculate(inputs, source['vendor'])
         numbers = {k: float(number(v)) for k, v in inputs.items() if k != 'unit'}

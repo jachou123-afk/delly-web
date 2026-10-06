@@ -18,11 +18,11 @@ from category_codes import QUOTE_CATEGORIES
 from product_image_ui import render_quote_images, clear_library_cache
 from dispatch_storage import CloudDispatchStore
 from dispatch_ui import render_dispatch_manager
-from supplier_names import normalize_vendor, vendor_options as canonical_vendor_options
+from supplier_names import normalize_vendor, international_rate_for_vendor, vendor_options as canonical_vendor_options
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.1")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.2")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -449,7 +449,8 @@ def build_cost_formulas(
     unit_literal = formula_number(unit_weight_g)
     qty_literal = formula_number(final_qty)
     domestic_rate_literal = formula_number(final_dom)
-    international_rate_literal = formula_number(intl_rate)
+    from supplier_names import international_rate_for_vendor
+    international_rate_literal = formula_number(international_rate_for_vendor(vendor, intl_rate))
     exchange_rate_literal = formula_number(ex_rate)
 
     if weight_state["source"] == "missing":
@@ -586,6 +587,7 @@ if not dispatch_tab.open:
     st.sidebar.header("⚙️ 成本參數設定")
     ex_rate = st.sidebar.number_input("匯率", value=settings["ex_rate"], step=0.05, format="%.2f")
     intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=settings["intl_rate"], step=0.5)
+    st.sidebar.caption("多品村國際運費固定為 9 RMB/kg；其他廠商使用上方費率。")
     dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=settings["dom_rate"], step=0.5)
     if st.sidebar.button("📌 將目前數值設為預設"):
         if save_settings({"ex_rate": ex_rate, "intl_rate": intl_rate, "dom_rate": dom_rate_def}):
@@ -2129,6 +2131,7 @@ if user_input.strip():
             st.stop()
         final_category = submission["category"]
         final_vendor = normalize_vendor(submission["vendor"])
+        cost_inputs["intl_rate"] = international_rate_for_vendor(final_vendor, intl_rate)
         if not final_category or final_category not in category_options:
             hard_reasons.append("尚未選擇本款分頁")
         if not final_vendor or final_vendor not in canonical_vendor_options()[0]:
@@ -2437,7 +2440,7 @@ if user_input.strip():
     if not to_save_df.empty:
         cost_inputs = dict(price=final_price, qty=final_qty, unit=final_qty_unit,
                            carton_kg=final_carton_weight_kg, unit_g=final_unit_weight_g,
-                           dom_rate=final_dom, intl_rate=intl_rate, ex_rate=ex_rate)
+                           dom_rate=final_dom, intl_rate=international_rate_for_vendor(final_vendor, intl_rate), ex_rate=ex_rate)
         cost_notes = ("報價操作者已勾選逐欄核對。沿用現行規則：毛利率 10%；重量加計 5%；"
                       "木架／木框不列入，其他附加費用須已涵蓋於進價及重量。\n" + final_extra)
         st.caption("按一次儲存：商品寫入後，完整廠商原文、擷取值與當次參數會另存到同一份 Google 雲表的「_報價依據」分頁並讀回確認；修改保留歷史，不改成本公式。")

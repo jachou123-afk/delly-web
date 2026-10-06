@@ -1,4 +1,4 @@
-# Release V87.21.1: reset product selection on each image-repair search.
+# Release V87.21.2: fixed international freight of 9 RMB/kg for 多品村.
 streamlit==1.63.0
 pandas
 gspread==6.2.1
