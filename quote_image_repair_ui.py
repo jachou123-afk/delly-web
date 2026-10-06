@@ -18,6 +18,9 @@ def render_image_repair(get_store):
         query = st.text_input("搜尋已保存商品（NO、貨號或品名）", key=PREFIX + "query")
         search = st.form_submit_button("搜尋商品")
     if search:
+        selector_generation = st.session_state.get(PREFIX + "selector_generation", 0)
+        st.session_state.pop(PREFIX + "target_" + str(selector_generation), None)
+        st.session_state[PREFIX + "selector_generation"] = selector_generation + 1
         st.session_state.pop(PREFIX + "plan", None)
         st.session_state.pop(PREFIX + "report", None)
         st.session_state.pop(PREFIX + "matches", None)
@@ -47,7 +50,8 @@ def render_image_repair(get_store):
     if not products:
         return
     by_id = {p["identity"]: p for p in products}
-    chosen = st.selectbox("選擇要補圖的商品", list(by_id), key=PREFIX + "target",
+    target_key = PREFIX + "target_" + str(st.session_state.get(PREFIX + "selector_generation", 0))
+    chosen = st.selectbox("選擇要補圖的商品", list(by_id), key=target_key,
                           format_func=lambda identity: " · ".join(str(by_id[identity].get(k, ""))
                           for k in ("identity", "supplier_code", "name", "vendor")))
     plan = st.session_state.get(PREFIX + "plan")

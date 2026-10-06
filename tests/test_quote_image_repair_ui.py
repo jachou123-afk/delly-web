@@ -189,6 +189,54 @@ def test_switching_product_requires_reload_and_does_not_reuse_old_uploads():
     assert_originals_unchanged(app)
 
 
+@pytest.mark.parametrize("same_no_other_category", [False, True])
+def test_successive_searches_replace_selector_identity_and_load_new_product(same_no_other_category):
+    from dispatch_fakes import FakeWorksheet, product_rows
+
+    app = start()
+    sheet = app.session_state["test_sheet"]
+    if same_no_other_category:
+        other_rows = product_rows((2,), category="W玩具")["W玩具"]
+        sheet.sheets["W玩具"] = FakeWorksheet("W玩具", other_rows)
+    products_before = {name: deepcopy(worksheet.rows) for name, worksheet in sheet.sheets.items()}
+    load(search(app, "no1"))
+    first_selector_key = widget(app, "selectbox", "選擇要補圖的商品").key
+    first_image_key = app.session_state["test_image_key"]
+    first_upload_generation = app.session_state[PREFIX + "generation"]
+    first_selector_generation = app.session_state[PREFIX + "selector_generation"]
+    select_images(app, [synthetic_image(21)])
+    save(app)
+    assert app.success
+
+    search(app, "no2")
+    selector = widget(app, "selectbox", "選擇要補圖的商品")
+    assert selector.key != first_selector_key
+    assert first_selector_key not in app.session_state
+    assert app.session_state[PREFIX + "selector_generation"] == first_selector_generation + 1
+    assert app.session_state[PREFIX + "generation"] == first_upload_generation
+    assert selector.value == "G正版:no2"
+    expected = {"G正版:no2", "W玩具:no2"} if same_no_other_category else {"G正版:no2"}
+    assert {option.split(" · ")[0] for option in selector.options} == expected
+    assert all("no1" not in option for option in selector.options)
+    assert PREFIX + "plan" not in app.session_state
+    assert PREFIX + "report" not in app.session_state
+    assert not app.success
+    assert not any(button.label == "只保存本款圖片" for button in app.button)
+
+    load(app)
+    assert app.session_state[PREFIX + "plan"]["source"]["identity"] == "G正版:no2"
+    assert app.session_state["test_image_key"] != first_image_key
+    assert widget(app, "button", "只保存本款圖片").disabled
+    assert any("G正版:no2" in row.value and "TEST-2" in row.value for row in app.markdown)
+    assert not any("G正版:no1" in row.value for row in app.markdown)
+    select_images(app, [synthetic_image(22)])
+    save(app)
+    assert app.success
+    assert [call["identity"] for call in app.session_state["test_save_calls"]] == ["G正版:no1", "G正版:no2"]
+    assert set(CloudDispatchStore(sheet).product_image_bindings()) == {"G正版:no1", "G正版:no2"}
+    assert all(sheet.sheets[name].rows == rows for name, rows in products_before.items())
+
+
 @pytest.mark.parametrize("assets,errors", [([], []), ([synthetic_image(3)], ["合成圖片超過大小限制"])])
 def test_missing_or_invalid_images_disable_save(assets, errors):
     app = load(search(start(), "TEST-1"))
