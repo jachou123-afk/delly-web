@@ -46,10 +46,12 @@ class ProductImageStoreMixin:
 
     def put_assets(self, assets):
         """Store original bytes in bounded requests; never split a record write."""
-        from dispatch_storage import IMAGE_SHEET, asset_bytes, encode_record, validate_image
+        from dispatch_storage import IMAGE_SHEET, asset_bytes, encode_record, require_legacy_image_size, validate_image
         unique = {}
         for asset in assets:
-            clean = validate_image(asset_bytes(asset), asset["name"])
+            raw = asset_bytes(asset)
+            require_legacy_image_size(raw)
+            clean = validate_image(raw, asset["name"])
             unique[clean["sha256"]] = clean
         if len(unique) > 750 or sum(len(a["data"]) for a in unique.values()) > 70 * 1024 * 1024:
             raise DispatchError("本次原圖總量太大，請將圖片包分批保存")

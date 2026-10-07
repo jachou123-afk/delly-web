@@ -3,7 +3,7 @@ import streamlit as st
 
 from dispatch_images import extract_sheet_images, match_image_pack
 from dispatch_manager import digest
-from dispatch_storage import asset_bytes, validate_image
+from dispatch_storage import MAX_IMAGE_MB, asset_bytes, validate_image
 from product_images import subject_key, unique_proposals
 
 
@@ -14,11 +14,11 @@ def clear_library_cache():
 
 
 def render_quote_images(key, *, title="本款原圖（隨報價保存到圖庫）",
-                        caption="選填；每款最多 5 張，單張 2 MB。原圖只需提供一次，之後發送管理自動帶入；不改雲表原有圖片。"):
+                        caption=f"選填；每款最多 5 張，單張 {MAX_IMAGE_MB} MB（超過 2 MB 需使用 NAS 商品圖庫）。原圖只需提供一次，之後發送管理自動帶入；不改雲表原有圖片。"):
     st.markdown("#### " + title)
     st.caption(caption)
     uploads = st.file_uploader("本款商品原圖", type=["jpg", "jpeg", "png", "webp"],
-                               accept_multiple_files=True, max_upload_size=2, key=key)
+                               accept_multiple_files=True, max_upload_size=MAX_IMAGE_MB, key=key)
     assets, errors = {}, []
     for upload in uploads or []:
         try:

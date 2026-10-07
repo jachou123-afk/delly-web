@@ -5,7 +5,7 @@ from cost_audit import INPUT_LABELS, UNITS, audit, evidence_status, fingerprint
 from quote_evidence import clear_evidence_caches
 
 
-def render_cost_review(store, source, prefix, actor):
+def render_cost_review(store, source, prefix, actor, *, evidence_saver=None):
     st.markdown("#### 報價表重算與原文（內部，不會放進 LINE 文案）")
     cache_key = "dispatch_cost_" + source["identity"] + source["source_hash"]
     if cache_key not in st.session_state:
@@ -77,9 +77,12 @@ def render_cost_review(store, source, prefix, actor):
                     st.error("請確認來源及參數，並填寫核對人。")
                 else:
                     try:
-                        store.put_quote_evidence(source, formulas, raw, inputs,
-                                                 notes=f"核對人：{actor}\n{notes.strip()}" if notes.strip() else "",
-                                                 origin="review_attachment")
+                        saved_notes = f"核對人：{actor}\n{notes.strip()}" if notes.strip() else ""
+                        if evidence_saver is None:
+                            store.put_quote_evidence(source, formulas, raw, inputs,
+                                                     notes=saved_notes, origin="review_attachment")
+                        else:
+                            evidence_saver(raw, inputs, notes=saved_notes)
                         clear_evidence_caches(st.session_state)
                         st.session_state["dispatch_notice"] = "原文與參數已存入 Google 雲表「_報價依據」並讀回確認；商品與價格未改。舊驗算結果已清除，請重新驗算與核對。"
                         st.rerun()

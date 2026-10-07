@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.4")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.5")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -570,9 +570,14 @@ if st.session_state.get("quote_evidence_notice"):
     st.success(st.session_state.pop("quote_evidence_notice"))
 render_pending_evidence(get_dispatch_store)
 
-quote_tab, dispatch_tab, image_repair_tab = st.tabs(
-    ["📝 報價整理", "📣 發送管理", "🖼️ 商品補圖"], key="tool_page", on_change="rerun"
+quote_tab, dispatch_tab, image_repair_tab, evidence_repair_tab = st.tabs(
+    ["📝 報價整理", "📣 發送管理", "🖼️ 商品補圖", "📄 原文補存"], key="tool_page", on_change="rerun"
 )
+if evidence_repair_tab.open:
+    from quote_evidence_repair_ui import render_evidence_repair
+    with evidence_repair_tab:
+        render_evidence_repair(get_dispatch_store)
+    st.stop()
 if image_repair_tab.open:
     from quote_image_repair_ui import render_image_repair
     with image_repair_tab:

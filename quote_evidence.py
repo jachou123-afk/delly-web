@@ -1,10 +1,63 @@
 """Retry only an already-written product's evidence, never its quotation write."""
 from copy import deepcopy
 
-from cost_audit import block, fingerprint, number
+from cost_audit import audit, block, fingerprint, make_evidence, number
 from dispatch_manager import catalog
 
 PENDING_KEY = "pending_quote_evidence"
+
+
+def _unique_evidence_source(store, identity):
+    products = store.catalog()
+    matches = [source for source in products if source["identity"] == identity]
+    if len(matches) != 1:
+        raise ValueError("商品不存在或 NO 重複，不能補存原文；請重新搜尋")
+    source = matches[0]
+    if (type(source.get("row")) is not int or source["row"] < 1
+            or sum(p["category"] == source["category"] and p["row"] == source["row"]
+                   for p in products) != 1):
+        raise ValueError("商品位置無法唯一識別，不能補存原文")
+    return deepcopy(source)
+
+
+def prepare_evidence_repair(store, identity):
+    """Capture one current quote without creating products or dispatch drafts."""
+    source = _unique_evidence_source(store, identity)
+    snapshot = {"source": source, "formulas": block(store.read_cost_source(source))}
+    return {**snapshot, "snapshot_digest": fingerprint(snapshot)}
+
+
+def save_evidence_repair(store, plan, raw_source, inputs, *, notes):
+    """Supplement evidence only when the current source and costs agree exactly."""
+    try:
+        snapshot = {key: plan[key] for key in ("source", "formulas")}
+        if fingerprint(snapshot) != plan["snapshot_digest"]:
+            raise ValueError
+        identity = plan["source"]["identity"]
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("原文補存快照不完整或已變更，請重新載入") from None
+    source = _unique_evidence_source(store, identity)
+    if fingerprint(source) != fingerprint(plan["source"]):
+        raise ValueError("商品來源已變更，未補存原文；請重新載入")
+    formulas = block(store.read_cost_source(source))
+    if formulas != plan["formulas"]:
+        raise ValueError("原公式已變更，未補存原文；請重新載入")
+    evidence = make_evidence(source, formulas, raw_source, inputs, notes=notes,
+                             origin="review_attachment")
+    report = audit(source, formulas, evidence)
+    if not report["math_pass"]:
+        raise ValueError("原文參數與原商品尚未核對一致，未保存：" + "；".join(report["errors"]))
+    store._evidence_index = None
+    store._evidence_row_index = None
+    saved = store.put_quote_evidence(source, formulas, raw_source, inputs,
+                                     notes=notes, origin="review_attachment")
+    store._evidence_index = None
+    store._evidence_row_index = None
+    report, _ = store.cost_audit(source)
+    if (not report["source_ready"] or not report["math_pass"]
+            or report.get("saved_evidence") != evidence or saved != evidence):
+        raise ValueError("原文補存讀回尚未確認，請重新讀取本款依據；不要新增商品")
+    return saved
 
 
 def clear_evidence_caches(state):

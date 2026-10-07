@@ -22,7 +22,9 @@ EVIDENCE_SHEET = "_報價依據"
 INTERNAL_SHEETS = {BATCH_SHEET, IMAGE_SHEET, EVIDENCE_SHEET, PRODUCT_IMAGE_SHEET, CATEGORY_SHEET, ISSUE_SHEET}
 HEADER = ["record_id", "entity_id", "parent", "part", "total", "sha256", "payload", "created_at"]
 CHUNK_SIZE = 20000  # Also below 50k UTF-16 units for all-emoji content.
-MAX_IMAGE_BYTES = 2 * 1024 * 1024
+MAX_IMAGE_MB = 20
+MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
+MAX_LEGACY_IMAGE_BYTES = 2 * 1024 * 1024  # Larger originals use NAS, not Sheets payloads.
 
 
 def serialize(value):
@@ -77,7 +79,7 @@ def decode_records(rows):
 
 def validate_image(data, name):
     if not data or len(data) > MAX_IMAGE_BYTES:
-        raise DispatchError("每張圖片需為非空檔案且不超過 2 MB；保留原檔，不自動壓縮")
+        raise DispatchError(f"每張圖片需為非空檔案且不超過 {MAX_IMAGE_MB} MB；保留原檔，不自動壓縮")
     try:
         with Image.open(BytesIO(data)) as image:
             if image.format not in ("JPEG", "PNG", "WEBP") or image.width * image.height > 25000000:
@@ -102,6 +104,11 @@ def asset_bytes(asset):
     if len(data) > MAX_IMAGE_BYTES or hashlib.sha256(data).hexdigest() != asset["sha256"]:
         raise DispatchError("圖片校驗失敗，請重新核對")
     return data
+
+
+def require_legacy_image_size(data):
+    if len(data) > MAX_LEGACY_IMAGE_BYTES:
+        raise DispatchError("超過 2 MB 的原圖需使用 NAS 商品圖庫；舊雲表圖庫維持 2 MB 上限，保留原檔、不自動壓縮")
 
 
 class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewIssueStoreMixin):
@@ -323,6 +330,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
 
     def put_asset(self, data, name):
         asset = validate_image(data, name)
+        require_legacy_image_size(data)
         ws = self._sheet(IMAGE_SHEET, create=True)
         if self._asset_rows(ws, {asset["sha256"]}):
             self.get_asset(asset["sha256"])
