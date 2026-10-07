@@ -1,6 +1,7 @@
 """Synthetic NAS transport only: no credentials, real NAS or network access."""
 import hashlib
 import json
+import traceback
 
 import pytest
 import requests
@@ -8,7 +9,7 @@ import requests
 from dispatch_manager import DispatchError
 from dispatch_storage import asset_bytes, validate_image
 from dispatch_fakes import image_data
-from synology_image_store import API_VERSIONS, NasConfig, SynologyImageStore
+from synology_image_store import API_VERSIONS, NAS_REDIRECT_ERROR, NasConfig, SynologyImageStore
 
 
 def config(**changes):
@@ -258,3 +259,108 @@ def test_network_details_never_leak_in_error_and_discovery_does_not_login():
             pass
     assert "synthetic-secret" not in str(error.value)
     assert len(session.calls) == 1 and session.closed
+
+
+SENSITIVE = "https://private-user:private-password@private.invalid/upload?sid=private-sid secret-body"
+
+
+def assert_sanitized(error):
+    rendered = str(error) + repr(error) + "".join(traceback.format_exception(error))
+    for value in ("private-user", "private-password", "private.invalid", "private-sid", "secret-body"):
+        assert value not in rendered
+
+
+@pytest.mark.parametrize("failure_class,label", [
+    (requests.exceptions.ConnectTimeout, "連線逾時"),
+    (requests.exceptions.ReadTimeout, "等待回應／讀取逾時"),
+    (requests.exceptions.Timeout, "逾時（未能細分階段）"),
+    (requests.exceptions.SSLError, "TLS／憑證驗證失敗"),
+    (requests.exceptions.ConnectionError, "連線中斷／失敗"),
+    (requests.RequestException, "網路請求失敗"),
+    (DispatchError, "未分類錯誤"),
+])
+def test_upload_transport_diagnostic_is_sanitized_and_never_retries_or_reads_back(failure_class, label):
+    session = Session()
+    def fail(params):
+        if params["api"] == "SYNO.FileStation.Upload":
+            raise failure_class(SENSITIVE)
+    session.override = fail
+    with SynologyImageStore(config(), lambda: session) as store:
+        with pytest.raises(DispatchError, match="結果待確認") as error:
+            store.put_asset(original())
+        assert "上傳 API：" + label in str(error.value)
+        assert_sanitized(error.value)
+        assert sum(p["data"]["api"] == "SYNO.FileStation.Upload" for _, p in session.calls) == 1
+        assert not any(p["data"]["api"] == "SYNO.FileStation.Download" for _, p in session.calls)
+        assert not session.objects
+
+
+@pytest.mark.parametrize("response,label", [
+    (Response(SENSITIVE.encode(), status=302), "入口轉向；HTTP 302"),
+    (Response(SENSITIVE.encode(), status=413), "HTTP 回應失敗；HTTP 413"),
+    (Response(SENSITIVE.encode(), status=502), "HTTP 回應失敗；HTTP 502"),
+    (Response({"success": False, "error": {"code": 1800, "message": SENSITIVE}}), "NAS API 回報失敗；API 代碼 1800"),
+    (Response({"success": False, "error": {"code": 413, "message": SENSITIVE}}), "NAS API 回報失敗；API 代碼 413"),
+    (Response({"success": False, "error": {"code": SENSITIVE}}), "NAS API 回報失敗"),
+    (Response({"success": False, "error": {"code": True}}), "NAS API 回報失敗"),
+    (Response({"success": False, "error": {"code": 12345678901234567890}}), "NAS API 回報失敗"),
+    (Response(SENSITIVE.encode(), mime="text/html"), "回應不是有效 JSON"),
+    (Response({"success": True, "data": SENSITIVE}), "API 回應結構不完整"),
+    (Response({}, length=SENSITIVE), "回應長度不合法"),
+    (Response(SENSITIVE.encode(), length=99999999), "回應超過大小限制"),
+])
+def test_upload_http_api_and_response_diagnostics_preserve_only_safe_codes(response, label):
+    session = Session()
+    response.headers["Location"] = SENSITIVE
+    session.override = lambda p: response if p["api"] == "SYNO.FileStation.Upload" else None
+    with SynologyImageStore(config(), lambda: session) as store:
+        with pytest.raises(DispatchError, match="結果待確認") as error:
+            store.put_asset(original())
+        assert "上傳 API：" + label in str(error.value)
+        assert_sanitized(error.value)
+        assert "12345678901234567890" not in str(error.value)
+        assert "API 代碼 True" not in str(error.value)
+        assert sum(p["data"]["api"] == "SYNO.FileStation.Upload" for _, p in session.calls) == 1
+        assert not any(p["data"]["api"] == "SYNO.FileStation.Download" for _, p in session.calls)
+        assert response.closed
+
+
+def test_original_redirect_text_stays_compatible_and_never_follows_location():
+    session = Session()
+    response = Response(SENSITIVE.encode(), status=307)
+    response.headers["Location"] = SENSITIVE
+    session.override = lambda p: response
+    with pytest.raises(DispatchError) as error:
+        with SynologyImageStore(config(), lambda: session):
+            pass
+    assert str(error.value) == NAS_REDIRECT_ERROR
+    assert error.value.safe_summary() == "入口轉向；HTTP 307"
+    assert_sanitized(error.value)
+    assert len(session.calls) == 1
+    assert session.calls[0][1]["allow_redirects"] is False
+
+
+def test_upload_timeout_can_be_followed_by_original_read_only_verification_without_another_upload():
+    session = Session()
+    with SynologyImageStore(config(), lambda: session) as store:
+        session.fail_upload_after_write = True
+        with pytest.raises(DispatchError, match="上傳 API：逾時"):
+            store.put_asset(original())
+        assert len(session.objects) == 1
+        session.fail_upload_after_write = False
+        assert asset_bytes(store.get_asset(store._metadata(original()))) == image_data()
+        assert sum(p["data"]["api"] == "SYNO.FileStation.Upload" for _, p in session.calls) == 1
+
+
+def test_download_timeout_is_not_mislabeled_as_upload_pending():
+    session = Session()
+    def fail(params):
+        if params["api"] == "SYNO.FileStation.Download":
+            raise requests.exceptions.ReadTimeout(SENSITIVE)
+    session.override = fail
+    with SynologyImageStore(config(), lambda: session) as store:
+        with pytest.raises(DispatchError, match="等待回應／讀取逾時") as error:
+            store.put_asset(original())
+        assert "上傳 API" not in str(error.value) and "結果待確認" not in str(error.value)
+        assert_sanitized(error.value)
+        assert len(session.objects) == 1

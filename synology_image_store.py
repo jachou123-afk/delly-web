@@ -26,6 +26,33 @@ EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 NAS_REDIRECT_ERROR = "NAS 入口已轉向；請重新確認網址，未跟隨或向轉向網址傳送帳密"
 
 
+class NasDiagnosticError(DispatchError):
+    """Only allowlisted categories and bounded numeric codes may reach upload UI."""
+    LABELS = {
+        "redirect": "入口轉向", "http": "HTTP 回應失敗",
+        "connect_timeout": "連線逾時", "read_timeout": "等待回應／讀取逾時",
+        "timeout": "逾時（未能細分階段）", "tls": "TLS／憑證驗證失敗",
+        "connection": "連線中斷／失敗", "request": "網路請求失敗",
+        "response_length": "回應長度不合法", "response_size": "回應超過大小限制",
+        "invalid_json": "回應不是有效 JSON", "api": "NAS API 回報失敗",
+        "response_shape": "API 回應結構不完整",
+    }
+
+    def __init__(self, message, *, kind, http_status=None, api_code=None):
+        super().__init__(message)
+        self.kind = kind if kind in self.LABELS else "unknown"
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
+        self.api_code = api_code if type(api_code) is int and 0 <= api_code <= 999999 else None
+
+    def safe_summary(self):
+        fields = [self.LABELS.get(self.kind, "未分類錯誤")]
+        if self.http_status is not None:
+            fields.append(f"HTTP {self.http_status}")
+        if self.api_code is not None:
+            fields.append(f"API 代碼 {self.api_code}")
+        return "；".join(fields)
+
+
 @dataclass(frozen=True)
 class NasConfig:
     base_url: str
@@ -125,27 +152,41 @@ class SynologyImageStore:
                 verify=True, stream=True,
             )
             if 300 <= response.status_code < 400:
-                raise DispatchError(NAS_REDIRECT_ERROR)
+                raise NasDiagnosticError(NAS_REDIRECT_ERROR, kind="redirect", http_status=response.status_code)
             if response.status_code != 200:
-                raise DispatchError(f"NAS 讀寫失敗（HTTP {response.status_code}）；未視為缺圖")
+                raise NasDiagnosticError(f"NAS 讀寫失敗（HTTP {response.status_code}）；未視為缺圖",
+                                         kind="http", http_status=response.status_code)
             length = response.headers.get("Content-Length")
             if length is not None:
                 try:
                     length = int(length)
                 except ValueError:
-                    raise DispatchError("NAS 回應長度不合法") from None
+                    raise NasDiagnosticError("NAS 回應長度不合法", kind="response_length") from None
                 if length < 0 or length > limit:
-                    raise DispatchError("NAS 回應超過允許大小，已停止讀取")
+                    raise NasDiagnosticError("NAS 回應超過允許大小，已停止讀取", kind="response_size")
             chunks, size = [], 0
             for chunk in response.iter_content(chunk_size=64 * 1024):
                 size += len(chunk)
                 if size > limit:
-                    raise DispatchError("NAS 回應超過允許大小，已停止讀取")
+                    raise NasDiagnosticError("NAS 回應超過允許大小，已停止讀取", kind="response_size")
                 chunks.append(chunk)
             return b"".join(chunks), response.headers.get("Content-Type", "").lower()
-        except requests.RequestException:
+        except requests.RequestException as exc:
             # Requests exceptions can contain URLs, proxy details or credentials.
-            raise DispatchError("NAS 網路／憑證連線失敗；請確認連線，勿關閉憑證驗證") from None
+            if isinstance(exc, requests.exceptions.ConnectTimeout):
+                kind = "connect_timeout"
+            elif isinstance(exc, requests.exceptions.ReadTimeout):
+                kind = "read_timeout"
+            elif isinstance(exc, requests.exceptions.Timeout):
+                kind = "timeout"
+            elif isinstance(exc, requests.exceptions.SSLError):
+                kind = "tls"
+            elif isinstance(exc, requests.exceptions.ConnectionError):
+                kind = "connection"
+            else:
+                kind = "request"
+            label = NasDiagnosticError.LABELS[kind]
+            raise NasDiagnosticError(f"NAS {label}；請確認連線，勿關閉憑證驗證", kind=kind) from None
         finally:
             if response is not None:
                 response.close()
@@ -155,15 +196,16 @@ class SynologyImageStore:
         try:
             result = json.loads(raw)
         except (ValueError, UnicodeDecodeError):
-            raise DispatchError("NAS 未回傳有效 API 資料，可能為登入或轉接頁") from None
+            raise NasDiagnosticError("NAS 未回傳有效 API 資料，可能為登入或轉接頁", kind="invalid_json") from None
         if not isinstance(result, dict) or result.get("success") is not True:
             # Never echo remote error bodies, which may include private paths.
             code = result.get("error", {}).get("code") if isinstance(result, dict) and isinstance(result.get("error"), dict) else None
-            safe_code = str(code) if isinstance(code, int) and not isinstance(code, bool) else "未知"
-            raise DispatchError(f"NAS API 未完成（錯誤碼 {safe_code}）；未重試登入或寫入")
+            safe_code = code if type(code) is int and 0 <= code <= 999999 else None
+            raise NasDiagnosticError(f"NAS API 未完成（錯誤碼 {safe_code if safe_code is not None else '未知'}）；未重試登入或寫入",
+                                     kind="api", api_code=safe_code)
         data = result.get("data", {})
         if not isinstance(data, dict):
-            raise DispatchError("NAS API 回應結構不完整")
+            raise NasDiagnosticError("NAS API 回應結構不完整", kind="response_shape")
         return data
 
     def _discover(self):
@@ -281,10 +323,11 @@ class SynologyImageStore:
             self._json_call("SYNO.FileStation.Upload", "upload", {
                 "path": folder, "create_parents": True, "overwrite": False,
             }, files={"file": (filename, asset_bytes(clean), clean["mime"])})
-        except DispatchError:
+        except DispatchError as exc:
             # The server may have accepted the image before the connection died.
             # Do not blindly retry writes or publish an unverified reference.
-            raise DispatchError("NAS 原圖保存結果待確認；未發布圖片索引，請只重試圖片核對") from None
+            detail = exc.safe_summary() if isinstance(exc, NasDiagnosticError) else "未分類錯誤"
+            raise DispatchError(f"NAS 原圖保存結果待確認（上傳 API：{detail}）；未發布圖片索引，請只重試圖片核對") from None
         if thumbnail:
             self.get_thumbnail(metadata)
         else:

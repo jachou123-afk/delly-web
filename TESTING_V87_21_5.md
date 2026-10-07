@@ -28,7 +28,10 @@
 
 ## 發布狀態
 
-目前完成本機實作與離線驗證；尚未推送、部署或 live 驗收。正式站是否顯示 V87.21.5、獨立入口可操作，以及真實原文在原雲表讀回成功，仍由發布後驗收確認。
+- 程式已推送既有 GitHub `main`：`bf03413158bd2937ee38b5a44744ebf0951b68f8`；發布執行者已確認正式站顯示 V87.21.5，並完成獨立「原文補存」入口的一筆既有商品補存。
+- 2026-10-07 17:19:24（台灣時間）保存的正式 `_報價依據` 讀回檔已獨立核對：完整原文與來源 manifest 逐字一致、8 項輸入參數一致、商品身分及來源雜湊一致；保存方式為 `review_attachment`，`parsed` 為空，不偽造最初擷取值。
+- 該次存證讀回相較補存前僅增加 1 筆，既有 78 筆內容不變。商品補存前與重新開啟的六列讀回檔位元組一致；進價、重量、運費、成本及報價顯示值與採用參數的獨立計算一致。此次 TSV 是顯示值讀回，未據此宣稱獨立驗證所有原公式字串。
+- 私人原文、商品資料及逐項驗收檔保留在原作業資料夾，不加入 GitHub。20 MB 原圖功能已隨本版部署，但正式 NAS 大於 2 MB 的保存與 SHA-256 讀回尚未 live 驗收，不能與本次原文補存成功混稱。
 
 ## NAS 商品原圖上限
 
@@ -39,3 +42,13 @@
 - 新測試 `tests/test_original_image_limits.py`：9 passed。以 3／13／20 MiB 合成有效 PNG 核對 NAS 上傳、商品綁定與重新開啟後原始位元組一致；另測試 20 MiB 邊界、超限拒絕、舊圖庫拒絕大型原圖、雜湊破損、格式／動畫／像素／張數守門及實際 UI 上傳限制。
 - 回歸指令：`python -m pytest tests/test_original_image_limits.py tests/test_dispatch_storage.py tests/test_product_image_library.py tests/test_dispatch_images.py tests/test_quote_image_repair.py tests/test_quote_image_repair_ui.py tests/test_synology_image_store.py tests/test_nas_dispatch_storage.py tests/test_thumbnails.py -q`：191 passed。
 - 全部測試僅使用合成圖片、FakeSpreadsheet 與假的 NAS transport，不連正式服務、不存入私人原圖。正式 NAS 超過 2 MB 的實際保存與 SHA-256 讀回仍需發布後驗收。
+
+## NAS 上傳失敗的安全診斷補強
+
+- 上傳 API 的失敗仍顯示「原圖保存結果待確認」，只補充白名單錯誤類型、HTTP 狀態及數字 API 代碼，以區分連線逾時、讀取逾時、TLS／憑證、連線失敗、轉向、HTTP／API 回應與格式錯誤；無法細分的情形維持未分類，不推測原因。
+- 不顯示 URL、Location、回應本文、帳密、SID 或原始例外訊息／repr。API 代碼只接受有界整數，HTTP 代碼只接受合法範圍數字。
+- 未變更 `TIMEOUT=(8,30)`、NAS 端限制、`allow_redirects=False`、TLS 驗證、原圖大小／SHA-256 核對與 `overwrite=False`。未知結果不自動重送、不發布索引，後續明確核對仍須讀回同一原圖。
+- 原始轉向錯誤文字保持相容；上傳後的原圖下載逾時不會被誤標為上傳 API 失敗。
+- 測試指令：`python -m pytest tests/test_synology_image_store.py tests/test_nas_dispatch_storage.py tests/test_quote_image_repair.py tests/test_original_image_limits.py -q`：131 passed。
+- 合成測試包含敏感例外與回應不外洩、HTTP／API 413 區分、轉向不跟隨、連線／讀取逾時分類、未知結果只發一次上傳，以及原檔已保存後可僅下載核對而不再次上傳。
+- 此診斷補強目前僅完成本機實作與測試，尚未推送或部署；未據此認定正式 NAS 失敗原因，也未宣稱大型原圖已保存。
