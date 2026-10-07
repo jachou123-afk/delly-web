@@ -31,7 +31,7 @@
 - 程式已推送既有 GitHub `main`：`bf03413158bd2937ee38b5a44744ebf0951b68f8`；發布執行者已確認正式站顯示 V87.21.5，並完成獨立「原文補存」入口的一筆既有商品補存。
 - 2026-10-07 17:19:24（台灣時間）保存的正式 `_報價依據` 讀回檔已獨立核對：完整原文與來源 manifest 逐字一致、8 項輸入參數一致、商品身分及來源雜湊一致；保存方式為 `review_attachment`，`parsed` 為空，不偽造最初擷取值。
 - 該次存證讀回相較補存前僅增加 1 筆，既有 78 筆內容不變。商品補存前與重新開啟的六列讀回檔位元組一致；進價、重量、運費、成本及報價顯示值與採用參數的獨立計算一致。此次 TSV 是顯示值讀回，未據此宣稱獨立驗證所有原公式字串。
-- 私人原文、商品資料及逐項驗收檔保留在原作業資料夾，不加入 GitHub。20 MB 原圖功能已隨本版部署，但正式 NAS 大於 2 MB 的保存與 SHA-256 讀回尚未 live 驗收，不能與本次原文補存成功混稱。
+- 私人原文、商品資料及逐項驗收檔保留在原作業資料夾，不加入 GitHub。20 MB 原圖功能已隨本版部署；一張 13,298,650 bytes 的 JPEG 及兩張約 3 MB 的 PNG 均已經 FileStation 保存，再由正式站「只核對 NAS 已存在的本款原圖」完成原檔讀回與綁定；各項結果詳見下方正式驗收紀錄。
 
 ## NAS 商品原圖上限
 
@@ -41,7 +41,7 @@
 - 發送管理「加入商品圖片」的獨立 2 MB 上傳限制，以及縮圖限制維持不變。
 - 新測試 `tests/test_original_image_limits.py`：9 passed。以 3／13／20 MiB 合成有效 PNG 核對 NAS 上傳、商品綁定與重新開啟後原始位元組一致；另測試 20 MiB 邊界、超限拒絕、舊圖庫拒絕大型原圖、雜湊破損、格式／動畫／像素／張數守門及實際 UI 上傳限制。
 - 回歸指令：`python -m pytest tests/test_original_image_limits.py tests/test_dispatch_storage.py tests/test_product_image_library.py tests/test_dispatch_images.py tests/test_quote_image_repair.py tests/test_quote_image_repair_ui.py tests/test_synology_image_store.py tests/test_nas_dispatch_storage.py tests/test_thumbnails.py -q`：191 passed。
-- 全部測試僅使用合成圖片、FakeSpreadsheet 與假的 NAS transport，不連正式服務、不存入私人原圖。正式 NAS 超過 2 MB 的實際保存與 SHA-256 讀回仍需發布後驗收。
+- 以上離線測試僅使用合成圖片、FakeSpreadsheet 與假的 NAS transport，不連正式服務、不存入私人原圖。正式驗收已確認三張大於 2 MB 的原圖經 FileStation 保存後可讀回並綁定；此結果不等同應用程式的 Upload API 已完成大型原圖上傳驗收，也不代表其他待補圖片或整批商品已完成。
 
 ## NAS 上傳失敗的安全診斷補強
 
@@ -51,7 +51,7 @@
 - 原始轉向錯誤文字保持相容；上傳後的原圖下載逾時不會被誤標為上傳 API 失敗。
 - 測試指令：`python -m pytest tests/test_synology_image_store.py tests/test_nas_dispatch_storage.py tests/test_quote_image_repair.py tests/test_original_image_limits.py -q`：131 passed。
 - 合成測試包含敏感例外與回應不外洩、HTTP／API 413 區分、轉向不跟隨、連線／讀取逾時分類、未知結果只發一次上傳，以及原檔已保存後可僅下載核對而不再次上傳。
-- 此診斷補強目前僅完成本機實作與測試，尚未推送或部署；未據此認定正式 NAS 失敗原因，也未宣稱大型原圖已保存。
+- 此診斷補強已推送既有 GitHub `main`：`fc00ad501c6f639dd45a97d88930e36e13212475`，並隨後續核對模式部署至正式站。診斷只顯示已知錯誤類別，不據此推測 NAS 失敗原因；大型原圖是否保存依個別原檔讀回結果判定。
 
 ## 單獨核對 NAS 已存在的原圖
 
@@ -64,4 +64,7 @@
 - 合成回歸指令：`python -m pytest tests/test_existing_nas_image_repair.py tests/test_quote_image_repair.py tests/test_quote_image_repair_ui.py tests/test_nas_dispatch_storage.py tests/test_synology_image_store.py tests/test_original_image_limits.py tests/test_product_image_library.py -q`：197 passed。UI 測試 mock 隔離調整後另覆跑 `tests/test_quote_image_repair_ui.py`：16 passed。
 - 測試禁止呼叫 NAS `put_asset`、Upload API、舊圖庫讀寫；另檢查不存在上傳檔案內容。涵蓋多圖其中一張失敗不得先建索引、其他圖庫指標、來源／公式／revision 競爭、最終讀回變更、未知索引寫入明確重試，以及獨立按鈕不觸發一般保存。
 - 獨立覆核同組 197 passed；另外模擬綁定追加已實際寫入後拋錯，首次維持待處理，明確重試讀回既有綁定且不重複索引／綁定列，原圖位元組與順序不變，沒有 Upload 呼叫。
-- 目前僅完成本機實作與合成測試，尚待推送、部署及正式原圖讀回驗收；測試不含私人原圖、貨號、真實路徑或憑證。
+- 程式已推送既有 GitHub `main`：`cb9308a34f99efb9424b983b1e59f8544e204bc6`；正式站已出現「只核對 NAS 已存在的本款原圖」入口。上述合成測試不含私人原圖、貨號、真實路徑或憑證。
+- 2026-10-07 正式驗收：一張 13,298,650 bytes 的 JPEG 原檔先經 FileStation 保存至同一 SHA-256 對應路徑，再執行此核對模式。約 4 分鐘後，正式 UI 顯示「圖片已保存並完成讀回核對；原商品與原文保留」，結果表為「已綁定」。此流程核對 NAS 已存在原圖，沒有由核對模式重新上傳原檔。
+- 另兩張約 3 MB 的 PNG 亦已沿用 FileStation 保存原檔，再由此模式完成正式原檔讀回及綁定；本次三張大型原圖均已正式驗收成功。私人圖片、SHA 路徑及驗收證據留在原作業資料，不納入程式庫。
+- 同輪最後一筆一般大小原圖也已透過原有「只保存本款圖片」完成正式驗收，UI 顯示保存與讀回核對成功、結果表為「已綁定」；此項與上方大型原圖的既有 NAS 核對模式分開記錄。

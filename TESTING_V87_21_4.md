@@ -25,4 +25,5 @@ python -m pytest tests/test_metadata_pollution.py tests/test_weight_safety.py te
 
 ## 部署狀態
 
-本文件記錄本機測試與程式審查結果；正式 GitHub 推送與 Streamlit 顯示版本仍須由主執行者驗證，不以本機測試宣稱已上線。
+- 程式已推送既有 GitHub `main`：`2d4a89cf1c8a6d07b868a5dea953249cf14741b9`；主執行者已確認正式 Streamlit 站顯示 V87.21.4。
+- 本輪保溫袋組合商品已完成正式站驗證；配件重量保留為備註，完整原文及箱重依據保留，未重複加算袋重。私人商品及逐項驗收明細保留在原作業資料，不加入 GitHub。
