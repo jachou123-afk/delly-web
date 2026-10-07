@@ -63,6 +63,7 @@ class WeightSafetyTests(unittest.TestCase):
                 "is_order_condition_line",
                 "is_fulfilment_condition_line",
                 "carton_qualifier_notes",
+                "included_thermal_bag_weight_note",
                 "metadata_format_issues",
                 "is_name_metadata_line",
                 "parse_text",

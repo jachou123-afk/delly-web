@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.3")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.4")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -739,6 +739,51 @@ def carton_qualifier_notes(value):
     return list(dict.fromkeys(notes))
 
 
+def included_thermal_bag_weight_note(text):
+    """Recognize one accessory weight without treating it as a cost weight."""
+    lines = [unicodedata.normalize("NFKC", line).strip()
+             for line in str(text or "").splitlines()]
+    # Require an explicit meal-container + bag product, not a standalone bag
+    # or an optional/additional accessory. The carton weight stays unchanged.
+    combination_lines = [line for line in lines if re.search(
+        r"(?:餐盤|飯盒)\s*\+\s*保溫袋(?:$|[\s(])", line,
+    )]
+    if len(combination_lines) != 1 or any(re.search(
+        r"不含|未含|不包|未包|未計|未算|不計|不算|僅計|只計|另購|另加|另計|另算|"
+        r"選配|加購|待定|待確認|需另|需要另|額外|"
+        r"(?:重量|箱重).*?(?:僅|只)|(?:僅|只).*?(?:重量|箱重|餐盤|飯盒)", line,
+    ) for line in lines):
+        return ""
+    carton_lines = [line for line in lines if re.match(
+        r"^(?:整箱毛重|整箱重量|箱重|毛重|整箱毛淨重|箱毛淨重|毛淨重|⚖)", line,
+    )]
+    bag_lines = [line for line in lines if re.match(r"^保溫袋重量", line)]
+    if len(carton_lines) != 1 or len(bag_lines) != 1:
+        return ""
+    number_and_unit = r"\s*[:：]?\s*(?:約\s*)?(\d+(?:\.\d+)?)\s*(kg|公斤|千克|g|公克|克)\s*"
+    carton = re.fullmatch(r"(?:整箱毛重|整箱重量|箱重)" + number_and_unit,
+                         carton_lines[0], re.I)
+    bag = re.fullmatch(r"保溫袋重量" + number_and_unit, bag_lines[0], re.I)
+    if not carton or not bag or not all(
+        math.isfinite(float(match[1])) and float(match[1]) > 0
+        for match in (carton, bag)
+    ):
+        return ""
+    # Reject a visible impossibility: the bags alone cannot outweigh the
+    # carton of complete sets. This check never adds bag weight to the cost.
+    quantities = re.findall(
+        r"^(?:每箱數量|箱數|裝箱量|裝箱數量|裝箱數|裝箱|一箱)\s*[:：]?\s*"
+        r"(\d+)\s*(?:pcs|pc|個|套)\s*$", "\n".join(lines), re.M | re.I,
+    )
+    if len(quantities) != 1 or int(quantities[0]) <= 0:
+        return ""
+    carton_g = float(carton[1]) * (1000 if carton[2].lower() in {"kg", "公斤", "千克"} else 1)
+    bag_g = float(bag[1]) * (1000 if bag[2].lower() in {"kg", "公斤", "千克"} else 1)
+    if bag_g * int(quantities[0]) > carton_g:
+        return ""
+    return bag_lines[0]
+
+
 def metadata_format_issues(text):
     """Find ambiguous metadata formats that must block derived costs."""
     issues = []
@@ -752,10 +797,12 @@ def metadata_format_issues(text):
             str(text or ""),
         )
     )
+    thermal_bag_weight_note = included_thermal_bag_weight_note(text)
     for source_line in str(text or "").splitlines():
         line = unicodedata.normalize("NFKC", source_line).strip()
         weight_info = weight_field_info(line)
-        if weight_info and not re.search(r"木架|木框", line):
+        if (weight_info and not re.search(r"木架|木框", line)
+                and line != thermal_bag_weight_note):
             if weight_info["label"] == "重量" and not weight_info["scope"]:
                 issues.append("重量欄位「重量」未標明單個或整箱，須確認重量範圍")
             elif not weight_info["supported_label"]:

@@ -202,6 +202,30 @@ def test_vendor_inline_carton_weight_renders_and_can_save():
     assert "(27.5/30)*1000*1.05" in rows[1][7]
 
 
+def test_meal_bag_set_keeps_full_source_and_uses_only_explicit_carton_weight():
+    raw = (
+        "測試餐盤+保溫袋\n型號:TEST-BAG-SET\n每箱數量:24pcs\n"
+        "單個價格:30元\n整箱重量:12kg\n保溫袋尺寸:25*18*8cm\n"
+        "保溫袋重量:120g\n包裝:餐盤與保溫袋分開裝"
+    )
+    app = paste(raw)
+    values = {item.label: item.value for item in app.number_input}
+    assert values["整箱毛重(kg)"] == 12
+    assert values["單個重量(g)"] == 0
+    assert not app.error
+    app.checkbox[-1].check().run()
+    assert not save_button(app).disabled
+    save_button(app).click().run()
+    rows = app.session_state["test_saved_rows"]
+    assert "(12/24)*1000*1.05" in rows[1][7]
+    assert "保溫袋重量:120g" in rows[1][1]
+    assert "保溫袋尺寸:25*18*8cm" in rows[1][1]
+    assert "餐盤與保溫袋分開裝" in rows[1][1]
+    assert app.session_state["test_evidence"]["raw"] == raw
+    assert app.session_state["test_evidence"]["inputs"]["carton_kg"] == 12
+    assert app.session_state["test_evidence"]["inputs"]["unit_g"] == 0
+
+
 @pytest.mark.parametrize("raw", [VALID.replace("单价：9.3元\n", ""), VALID.replace("重量：68g(单个)", ""), VALID+"\n包裝費另加:15元", VALID+"\n整箱重量:90kg"])
 def test_incomplete_or_uncertain_remains_disabled_after_review(raw):
     app = paste(raw)

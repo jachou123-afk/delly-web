@@ -212,6 +212,76 @@ def test_unknown_weight_label_blocks_even_with_another_valid_weight():
     assert any("未識別重量欄位「整鞋重量」" in reason for reason in blockers(common))
 
 
+THERMAL_BAG_SET = (
+    "測試餐盤+保溫袋\n型號:TEST-BAG-SET\n每箱數量:24pcs\n"
+    "單個價格:30元\n整箱重量:12kg\n保溫袋尺寸:25*18*8cm\n"
+    "保溫袋重量:120g\n包裝:餐盤與保溫袋分開裝"
+)
+
+
+@pytest.mark.parametrize("meal_name", ["餐盤", "飯盒"])
+@pytest.mark.parametrize("bag_weight", ["120g", "0.12kg", "約120公克"])
+def test_explicit_meal_and_bag_set_preserves_accessory_weight_as_note(
+    meal_name, bag_weight
+):
+    raw = THERMAL_BAG_SET.replace("餐盤", meal_name).replace("120g", bag_weight)
+    common, products = parse(raw)
+
+    assert products == [{"code": "TEST-BAG-SET", "name": f"測試{meal_name}+保溫袋"}]
+    assert common["raw_text"] == raw
+    assert (common["weight"], common["unit_weight_g"]) == (12, 0)
+    assert (common["price"], common["qty"]) == (30, 24)
+    assert f"保溫袋重量:{bag_weight}" in common["extra_tags"].splitlines()
+    assert "保溫袋尺寸:25*18*8cm" in common["extra_tags"].splitlines()
+    assert f"包裝:{meal_name}與保溫袋分開裝" in common["extra_tags"].splitlines()
+    assert common["issues"] == []
+    assert blockers(common) == []
+
+
+@pytest.mark.parametrize("old,new", [
+    ("測試餐盤+保溫袋", "測試保溫袋"),
+    ("測試餐盤+保溫袋", "測試餐盤與保溫袋"),
+    ("測試餐盤+保溫袋", "測試餐盤（另購保溫袋）"),
+    ("測試餐盤+保溫袋", "測試餐盤+保溫袋（不含保溫袋）"),
+    ("測試餐盤+保溫袋", "測試餐盤+保溫袋\n保溫袋需加購"),
+    ("測試餐盤+保溫袋", "測試餐盤+保溫袋\n保溫袋不包括在上述重量中"),
+    ("測試餐盤+保溫袋", "測試餐盤+保溫袋\n以上箱重只計餐盤，袋子未計重"),
+    ("測試餐盤+保溫袋", "測試餐盤+保溫袋\n上述重量僅為餐盤"),
+    ("每箱數量:24pcs", "每箱數量:24件"),
+    ("每箱數量:24pcs", ""),
+    ("每箱數量:24pcs", "每箱數量:0pcs"),
+    ("整箱重量:12kg", "單個重量:500g"),
+    ("整箱重量:12kg", ""),
+    ("整箱重量:12kg", "整箱重量:0kg"),
+    ("整箱重量:12kg", "整箱重量:2kg"),
+    ("整箱重量:12kg", "整箱重量:2000g"),
+    ("整箱重量:12kg", "整箱重量:12"),
+    ("整箱重量:12kg", "整箱重量:12-14kg"),
+    ("整箱重量:12kg", "整箱重量:12斤"),
+    ("整箱重量:12kg", "整箱重量:12kg\n箱重:12kg"),
+    ("整箱重量:12kg", "整箱重量:12kg\n箱重:14kg"),
+    ("保溫袋重量:120g", "保溫袋重量:120"),
+    ("保溫袋重量:120g", "保溫袋重量:0g"),
+    ("保溫袋重量:120g", "保溫袋重量:120-150g"),
+    ("保溫袋重量:120g", "保溫袋重量:不詳"),
+    ("保溫袋重量:120g", "保溫袋重量:120g\n保溫袋重量:150g"),
+])
+def test_bag_weight_exception_requires_explicit_set_carton_and_quantity(old, new):
+    common, _ = parse(THERMAL_BAG_SET.replace(old, new))
+    assert any("未識別重量欄位「保溫袋重量」" in issue for issue in common["issues"])
+    assert blockers(common)
+
+
+def test_bag_weight_note_does_not_exempt_other_unknown_weight_or_extra_fee():
+    common, _ = parse(THERMAL_BAG_SET + "\n整鞋重量:1kg")
+    assert any("未識別重量欄位「整鞋重量」" in issue for issue in common["issues"])
+    assert blockers(common)
+
+    common, _ = parse(THERMAL_BAG_SET + "\n保溫袋另加:3元")
+    assert any("未識別重量欄位「保溫袋重量」" in issue for issue in common["issues"])
+    assert blockers(common)
+
+
 def test_bare_weight_with_unit_has_unknown_scope_and_is_not_guessed():
     common, products = parse(
         "万圣节按键灯蒸笼包钥匙扣\n展示盒24个\n价格：2.4\n"
