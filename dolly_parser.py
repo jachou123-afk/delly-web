@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.2")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.3")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -597,7 +597,7 @@ if not dispatch_tab.open:
     st.sidebar.caption(f"目前雲端預設:匯率 {settings['ex_rate']} / 國際 {settings['intl_rate']} / 內陸 {settings['dom_rate']}")
 # --- 4. 解析引擎 V12 ---
 # 注意：zhconv 會把「只」轉成「隻」，所有單位 pattern 都需含「隻」
-UNIT_PAT = r'(?:盒|pcs|PCS|只|隻|個|个|套|瓶|罐)'
+UNIT_PAT = r'(?:盒|pcs|PCS|只|隻|個|个|雙|双|套|瓶|罐)'
 EMOJI_PAT = r'[📦💰✅🔥✨🎈🍦🔫⚖️🚜🎯🛻🚗⭐️🎁🎉]'
 
 def clean_product_name(name):
@@ -742,6 +742,16 @@ def carton_qualifier_notes(value):
 def metadata_format_issues(text):
     """Find ambiguous metadata formats that must block derived costs."""
     issues = []
+    # Shoe lengths separated by '/' are alternatives, not L x W x H.
+    # Only accept this notation for shoes explicitly priced per pair; leave
+    # the source line in notes rather than coercing it into a dimension field.
+    shoe_pair_context = bool(
+        re.search(r"鞋", str(text or ""))
+        and re.search(
+            r"(?:單|每)\s*雙\s*(?:價格|價)\s*[:：]?\s*\d",
+            str(text or ""),
+        )
+    )
     for source_line in str(text or "").splitlines():
         line = unicodedata.normalize("NFKC", source_line).strip()
         weight_info = weight_field_info(line)
@@ -762,6 +772,14 @@ def metadata_format_issues(text):
                 )
         dimension_info = labeled_dimension_info(line)
         if dimension_info:
+            shoe_size_choices = bool(
+                shoe_pair_context
+                and dimension_info["label"] in {"產品尺寸", "單個尺寸", "尺寸", "產品"}
+                and re.fullmatch(
+                    r"\d+(?:\.\d+)?(?:\s*[/／]\s*\d+(?:\.\d+)?)+\s*(?:cm|mm|公分|毫米)",
+                    dimension_info["value"], re.I,
+                )
+            )
             if dimension_info["decimal_comma"]:
                 issues.append(
                     f"尺寸欄位「{dimension_info['label']}」含小數逗號，須確認原值"
@@ -770,7 +788,7 @@ def metadata_format_issues(text):
                 issues.append(
                     f"尺寸欄位「{dimension_info['label']}」缺少單位，須確認 cm 或 mm"
                 )
-            elif not dimension_info["valid"]:
+            elif not dimension_info["valid"] and not shoe_size_choices:
                 issues.append(
                     f"尺寸欄位「{dimension_info['label']}」格式不明，須核對原文"
                 )
@@ -1056,6 +1074,8 @@ def parse_text_legacy(text):
     return common, products
 def canonical_unit(unit):
     unit = (unit or "").lower()
+    if unit == "双":
+        return "雙"
     return "個" if unit in ("pcs", "pc", "只", "隻", "个", "件") else unit
 
 
@@ -1213,7 +1233,7 @@ def parse_text(text):
     if not normalized.strip():
         return common, []
     number = r"\d+(?:\.\d+)?"
-    units = r"pcs|pc|個|隻|只|盒|套|瓶|罐|包|袋|件"
+    units = r"pcs|pc|個|隻|只|雙|盒|套|瓶|罐|包|袋|件"
     issues = common["issues"]
     issues.extend(metadata_format_issues(normalized))
     # 未知的「單X價格」不能悄悄退回只有數字、沒有計價單位的成本。
@@ -1247,7 +1267,14 @@ def parse_text(text):
         tail = price_basis_text[prices[0].end():]
         suffix_unit = re.match(rf"\s*元\s*/\s*({units})", tail, re.I)
         if suffix_unit:
-            common["price_unit"] = canonical_unit(suffix_unit[1])
+            canonical_suffix = canonical_unit(suffix_unit[1])
+            if "雙" in (common["price_unit"], canonical_suffix) and common["price_unit"] and common["price_unit"] != canonical_suffix:
+                issues.append("價格前後計價單位不同，須先確認原文")
+            else:
+                common["price_unit"] = canonical_suffix
+            extra_suffix = re.match(rf"\s*[/／]\s*({units})", tail[suffix_unit.end():], re.I)
+            if extra_suffix and "雙" in (common["price_unit"], canonical_suffix, canonical_unit(extra_suffix[1])):
+                issues.append("價格含多個計價單位，須先確認原文")
         if re.match(r"\s*[-~～,]\s*\d", tail):
             issues.append("價格含範圍或不明數字格式，請確認單一進價")
         if re.match(r"\s*元?\s*起", tail):
@@ -1273,6 +1300,18 @@ def parse_text(text):
         )
         if has_range_suffix or has_decimal_suffix:
             issues.append("裝箱量含範圍或小數，請確認整數裝箱量")
+        qty_line_tail = qty_tail.split("\n", 1)[0]
+        # Newly supported pairs need one clear carton basis; do not change
+        # existing non-pair packaging qualifiers in this focused repair.
+        pair_quantity_context = bool(
+            common["qty_unit"] == "雙"
+            or re.search(r"(?:\d|[/／])\s*雙", qty_line_tail)
+        )
+        if pair_quantity_context and (
+            re.search(rf"{number}\s*(?:{units})(?![A-Za-z])", qty_line_tail, re.I)
+            or re.match(rf"\s*[/／]\s*(?:{units})(?![A-Za-z])", qty_line_tail, re.I)
+        ):
+            issues.append("裝箱量含多個數量或單位，須先確認每箱計價數量")
     if len(qty_matches) > 1:
         issues.append("存在多個裝箱量，請拆開獨立報價")
     # Explicit units and scope. Bare KG does not establish a carton weight.
@@ -1353,6 +1392,7 @@ def parse_text(text):
                     continue
             if (
                 re.match(meta, line, re.I)
+                or re.match(r"^(?:碼數|鞋碼|尺碼)\s*[:：]", line)
                 or is_name_metadata_line(line)
                 or re.search(r"木架|木框", line)
                 or supplemental_uncertainty_issues(line)
@@ -1396,6 +1436,8 @@ def parse_text(text):
         ):
             notes.append(line)
         if is_order_condition_line(line) or is_fulfilment_condition_line(line):
+            notes.append(line)
+        if re.match(r"^(?:碼數|鞋碼|尺碼)\s*[:：]", line):
             notes.append(line)
         if re.fullmatch(r"\([^()]*\)", line) and re.search(r"編織袋|貼紙|標貼|貼箱", line):
             notes.append(line)
@@ -2018,7 +2060,7 @@ packaging_key = draft_key + "packaging_v87_18_"
 final_color_size = c7.text_input("彩盒尺寸（僅有彩盒依據時填）", value=common_data["color_box_size"], key=packaging_key + "color_size")
 final_outer_size = st.text_input("外箱尺寸 (沒抓到可手動輸入)", value=common_data["outer_box_size"], key=draft_key + "outer_size")
 final_extra = st.text_area("額外備註（保留顏色、材質、端盒、木架等）", value=common_data["extra_tags"], key=packaging_key + "extra")
-unit_options = ["", "個", "盒", "套", "瓶", "罐", "包", "袋"]
+unit_options = ["", "個", "雙", "盒", "套", "瓶", "罐", "包", "袋"]
 parsed_unit = common_data["qty_unit"]
 final_qty_unit = st.selectbox("装箱及計價單位（必須一致；不同時先人工換算）", unit_options,
                                 index=unit_options.index(parsed_unit) if parsed_unit in unit_options else 0,
