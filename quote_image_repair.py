@@ -99,12 +99,19 @@ def save_image_repair(store, plan, assets, *, actor):
     A pending outcome is returned unchanged. A later explicit submission reads
     current bindings and originals again, including after an uncertain write.
     """
+    return _save_image_repair(store, plan, assets, actor=actor,
+                              origin="quote_image_repair")
+
+
+def _save_image_repair(store, plan, assets, *, actor, origin, expected_revision=None):
     if not isinstance(actor, str) or not actor.strip():
         raise DispatchError("請填圖片保存人")
     assets = checked_assets(assets)
     source = _current_source(store, plan)
     binding = store.product_image_bindings().get(source["identity"])
     _matching_binding(binding, source, assets)
+    if expected_revision is not None and (binding or {}).get("_revision", "") != expected_revision:
+        raise DispatchError("商品圖片版本在核對期間已變更；請重新載入後核對")
     if binding:
         binding = _verify_saved_images(store, source, assets)
         by_id = {asset["sha256"]: asset for asset in assets}
@@ -115,12 +122,16 @@ def save_image_repair(store, plan, assets, *, actor):
     result = store.save_product_images(
         [{"source": source, "assets": assets,
           "expected_revision": binding["_revision"] if binding else ""}],
-        actor=actor.strip(), origin="quote_image_repair", replace=False,
+        actor=actor.strip(), origin=origin, replace=False,
     )
     if not isinstance(result, list) or len(result) != 1 or not isinstance(result[0], dict):
         raise DispatchError("圖片保存結果待確認，請重新載入後只重試補圖")
     if result[0].get("結果") in {"已綁定", "已存在"}:
-        _verify_saved_images(store, source, assets)
+        verified_binding = _verify_saved_images(store, source, assets)
+        if expected_revision is not None:
+            observed = store.product_image_bindings().get(source["identity"])
+            if not observed or observed["_revision"] != verified_binding["_revision"]:
+                raise DispatchError("圖片綁定版本在讀回期間已變更，未確認補圖成功")
         try:
             _current_source(store, plan)
         except DispatchError:
@@ -128,3 +139,30 @@ def save_image_repair(store, plan, assets, *, actor):
                 "圖片保存後商品來源或公式已變更；保存結果待核對，請重新載入商品與圖片"
             ) from None
     return result
+
+
+def save_existing_nas_image_repair(store, plan, assets, *, actor):
+    """Verify existing physical NAS originals, then bind; never upload files."""
+    from nas_existing_originals import ExistingNasOriginalStore
+
+    if not isinstance(actor, str) or not actor.strip():
+        raise DispatchError("請填圖片保存人")
+    assets = checked_assets(assets)
+    source = _current_source(store, plan)
+    binding = store.product_image_bindings().get(source["identity"])
+    _matching_binding(binding, source, assets)
+    revision = (binding or {}).get("_revision", "")
+
+    def before_publish():
+        current = _current_source(strict, plan)
+        observed = strict.product_image_bindings().get(current["identity"])
+        _matching_binding(observed, current, assets)
+        if (observed or {}).get("_revision", "") != revision:
+            raise DispatchError("商品圖片版本在核對期間已變更；未發布索引，請重新載入")
+
+    strict = ExistingNasOriginalStore(store, assets, before_publish=before_publish)
+    # Recover missing location metadata only AFTER every original byte passes.
+    strict.put_assets(assets)
+    return _save_image_repair(strict, plan, assets, actor=actor,
+                              origin="quote_image_repair_existing_nas",
+                              expected_revision=revision)

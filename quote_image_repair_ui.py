@@ -6,7 +6,8 @@ import streamlit as st
 from dispatch_manager import digest
 from dispatch_storage import MAX_IMAGE_MB
 from product_image_ui import clear_library_cache, render_quote_images
-from quote_image_repair import prepare_image_repair, save_image_repair
+from quote_image_repair import (prepare_image_repair, save_image_repair,
+                                save_existing_nas_image_repair)
 
 
 PREFIX = "quote_image_repair_"
@@ -89,11 +90,16 @@ def render_image_repair(get_store):
     for error in errors:
         st.error(error)
     st.caption("只保存本款原圖與商品配對；不修改品名、價格、原文或發送狀態。失敗時保留本次圖片，可再次按保存重試。")
-    if st.button("只保存本款圖片", key=PREFIX + "save", disabled=not assets or bool(errors)):
+    save_clicked = st.button("只保存本款圖片", key=PREFIX + "save", disabled=not assets or bool(errors))
+    st.caption("已透過 NAS 檔案管理放入原圖時，可改用下方核對：只讀取原圖並核對後綁定，不重新上傳；缺檔或不一致會停止。")
+    existing_clicked = st.button("只核對 NAS 已存在的本款原圖", key=PREFIX + "existing_nas",
+                                 disabled=not assets or bool(errors))
+    if save_clicked or existing_clicked:
         st.session_state.pop(PREFIX + "report", None)
         try:
             with st.spinner("保存圖片並讀回核對…"):
-                report = save_image_repair(get_store(), plan, assets, actor="報價補圖操作者")
+                saver = save_existing_nas_image_repair if existing_clicked else save_image_repair
+                report = saver(get_store(), plan, assets, actor="報價補圖操作者")
             st.session_state[PREFIX + "report"] = report
             st.session_state[PREFIX + "report_selection"] = selection
             if report and all(row["結果"] in {"已綁定", "已存在"} for row in report):

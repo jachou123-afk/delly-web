@@ -304,6 +304,39 @@ def test_save_exception_keeps_upload_for_retry_and_does_not_report_success():
     assert_originals_unchanged(app)
 
 
+@pytest.mark.parametrize("failed", [False, True])
+def test_existing_nas_button_is_separate_and_never_calls_normal_upload(failed):
+    existing_app = APP.replace("real_save = ui.save_image_repair", '''
+def existing_images(store, plan, assets, **kwargs):
+    st.session_state["test_existing_calls"] = st.session_state.get("test_existing_calls", 0) + 1
+    if st.session_state.get("test_existing_fail"):
+        raise RuntimeError("合成 NAS 既有原圖缺檔")
+    return [{"商品": plan["source"]["identity"], "結果": "已存在", "原因": "合成原圖核對"}]
+
+real_save = ui.save_image_repair''')
+    existing_app = existing_app.replace(
+        'patch.object(ui, "save_image_repair", save_images),',
+        'patch.object(ui, "save_image_repair", save_images), '
+        'patch.object(ui, "save_existing_nas_image_repair", existing_images),')
+    app = assert_clean_run(AppTest.from_string(existing_app, default_timeout=20).run())
+    load(search(app, "TEST-1"))
+    assert widget(app, "button", "只核對 NAS 已存在的本款原圖").disabled
+    select_images(app, [synthetic_image(9)])
+    key = app.session_state["test_image_key"]
+    app.session_state["test_existing_fail"] = failed
+    widget(app, "button", "只核對 NAS 已存在的本款原圖").click().run()
+    assert_clean_run(app)
+    assert app.session_state["test_existing_calls"] == 1
+    assert app.session_state["test_save_calls"] == []
+    assert app.session_state["test_image_key"] == key
+    assert bool(app.success) is (not failed)
+    assert app.session_state["test_cache_clears"] == (0 if failed else 1)
+    if failed:
+        assert any("既有原圖缺檔" in row.value for row in app.error)
+        assert PREFIX + "report" not in app.session_state
+    assert_originals_unchanged(app)
+
+
 def test_main_app_routes_to_image_repair_without_cost_settings_parsing_or_cloud_reads():
     import ast
     from test_v74_ui import app_source as quote_app_source

@@ -52,3 +52,16 @@
 - 測試指令：`python -m pytest tests/test_synology_image_store.py tests/test_nas_dispatch_storage.py tests/test_quote_image_repair.py tests/test_original_image_limits.py -q`：131 passed。
 - 合成測試包含敏感例外與回應不外洩、HTTP／API 413 區分、轉向不跟隨、連線／讀取逾時分類、未知結果只發一次上傳，以及原檔已保存後可僅下載核對而不再次上傳。
 - 此診斷補強目前僅完成本機實作與測試，尚未推送或部署；未據此認定正式 NAS 失敗原因，也未宣稱大型原圖已保存。
+
+## 單獨核對 NAS 已存在的原圖
+
+- 「商品補圖」新增獨立按鈕「只核對 NAS 已存在的本款原圖」。操作者先選定唯一商品並載入來源快照，再選取同一組本機原檔供程式計算 SHA-256；此模式不重新上傳至 NAS，也不退回舊圖庫。
+- 檔案須已由既有 NAS 檔案管理方式放在已設定專用圖庫的 `originals/<SHA 前兩碼>/<完整 SHA>.<實際格式副檔名>`。程式從目前驗證過的 NAS 設定與原檔導出 root、library_id、SHA、大小及 MIME，不接受另外輸入的 URL、路徑或手寫位置索引。
+- NAS 只執行現有登入、指定圖庫檢查與 FileStation.Download 唯讀 API。該下載 API 沿用 HTTP POST 傳遞參數，沒有檔案上傳內容；不呼叫 FileStation.Upload，不建立 NAS 資料夾，不改原圖，也沒有失敗後上傳的分支。
+- 一款所有原檔均須通過長度、SHA-256、實際格式與逐位元組核對，並重新核對商品唯一身分、原表來源、六列內容、公式及既有圖片 revision，才發布位置索引與綁定。索引、綁定及原檔均重新讀回，讀回期間有變動不顯示成功。
+- 缺檔、HTTP 403／404／500、API 錯誤、轉向、TLS、逾時、連線失敗、大小／雜湊／格式不符皆停止；不把錯誤當成允許上傳的缺檔訊號。保留現有 timeout、TLS 驗證、禁止轉向，以及 20 MiB／2500 萬像素／靜態格式／每款 5 張／整批總量限制。
+- 不修改商品、價格、原文、批次、核對或 LINE 紀錄。已有不同圖片時停止；同組圖片明確重試不重複追加。索引或綁定寫入結果未知時維持待確認，保留已寫入紀錄供下一次明確核對，不刪除或盲目重寫。
+- 合成回歸指令：`python -m pytest tests/test_existing_nas_image_repair.py tests/test_quote_image_repair.py tests/test_quote_image_repair_ui.py tests/test_nas_dispatch_storage.py tests/test_synology_image_store.py tests/test_original_image_limits.py tests/test_product_image_library.py -q`：197 passed。UI 測試 mock 隔離調整後另覆跑 `tests/test_quote_image_repair_ui.py`：16 passed。
+- 測試禁止呼叫 NAS `put_asset`、Upload API、舊圖庫讀寫；另檢查不存在上傳檔案內容。涵蓋多圖其中一張失敗不得先建索引、其他圖庫指標、來源／公式／revision 競爭、最終讀回變更、未知索引寫入明確重試，以及獨立按鈕不觸發一般保存。
+- 獨立覆核同組 197 passed；另外模擬綁定追加已實際寫入後拋錯，首次維持待處理，明確重試讀回既有綁定且不重複索引／綁定列，原圖位元組與順序不變，沒有 Upload 呼叫。
+- 目前僅完成本機實作與合成測試，尚待推送、部署及正式原圖讀回驗收；測試不含私人原圖、貨號、真實路徑或憑證。
