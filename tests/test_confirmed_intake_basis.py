@@ -3,6 +3,29 @@ from copy import deepcopy
 from test_v74_safety import ns, block
 
 
+def test_reviewed_dimension_requires_valid_value_and_preserves_other_guards():
+    issue = "尺寸欄位「外箱尺寸」格式不明，須核對原文"
+    other = "原文價格矛盾"
+    for value in ("", "35*34+39.2cm", "35*34*39.2"):
+        assert ns["confirmed_dimension_basis"]([issue, other], {"外箱尺寸": value}, confirmed=True, evidence="已確認") == [issue, other]
+    assert ns["confirmed_dimension_basis"]([issue, other], {"外箱尺寸": "35*34*39.2cm"}, confirmed=True, evidence="已確認") == [other]
+    assert ns["confirmed_dimension_basis"]([issue], {"外箱尺寸": "35*34*39.2cm"}, confirmed=True) == [issue]
+
+
+def test_ui_dimension_review_preserves_raw_and_resets_when_value_changes():
+    from test_v74_ui import paste, save_button
+    raw = "新品測試牙刷\n編號:TESTDIM\n單價:4.4元\n每箱數量:144套\n整箱重量:9kg\n外箱尺寸:35*34+39.2cm"
+    app = paste(raw)
+    assert save_button(app).disabled
+    next(x for x in app.text_input if x.label == "外箱尺寸 (沒抓到可手動輸入)").set_value("35*34*39.2cm").run()
+    next(x for x in app.text_input if x.label == "尺寸校正確認依據").set_value("使用者已確認加號為乘號").run()
+    next(x for x in app.checkbox if x.label.startswith("已核對來源並確認上方尺寸")).check().run()
+    assert not save_button(app).disabled
+    assert app.text_area[0].value == raw
+    next(x for x in app.text_input if x.label == "外箱尺寸 (沒抓到可手動輸入)").set_value("35*34*40cm").run()
+    assert save_button(app).disabled
+
+
 def test_dimension_includes_cord_is_preserved_but_unknown_suffix_stays_blocked():
     raw = "新品電子掛表\n編號:C0019\n箱數:600pcs\n單價:3.6元\n尺寸:21cm(含繩)\n箱重:約17kg"
     common, _ = ns["parse_text"](raw)

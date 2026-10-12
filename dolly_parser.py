@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.7")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.8")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -1614,6 +1614,19 @@ def confirmed_cost_basis(issues, price_unit, qty_unit, *, unit_confirmed=False,
     return result, price_unit
 
 
+def confirmed_dimension_basis(issues, dimensions, *, confirmed=False, evidence=""):
+    """Resolve only the exact dimension-format issue with a reviewed valid value."""
+    resolved = set()
+    if confirmed and evidence.strip():
+        for label, value in dimensions.items():
+            if label not in {"產品尺寸", "單個尺寸", "尺寸", "产品", "產品", "彩盒尺寸", "彩盒", "外箱尺寸", "外箱規格", "外箱"}:
+                continue
+            info = labeled_dimension_info(f"{label}:{value}")
+            if info and info["valid"]:
+                resolved.add(f"尺寸欄位「{label}」格式不明，須核對原文")
+    return [issue for issue in issues if issue not in resolved]
+
+
 def duplicate_messages(incoming, sheets, exclude=None, *, approved_code_conflicts=()):
     """回報重複／衝突；原位修正時只排除已明確選定的那一個 NO。"""
     messages = []
@@ -2203,6 +2216,20 @@ if unit_needs_review or weight_needs_review:
         weight_confirmed=reviewed_weight, evidence=reviewed_basis)
     if reviewed_basis.strip() and (reviewed_unit or reviewed_weight):
         final_extra += "\n人工確認依據：" + reviewed_basis.strip()
+dimension_fields = {"產品尺寸": final_prod_size, "單個尺寸": final_prod_size, "尺寸": final_prod_size,
+                    "產品": final_prod_size, "彩盒尺寸": final_color_size, "彩盒": final_color_size,
+                    "外箱尺寸": final_outer_size, "外箱規格": final_outer_size, "外箱": final_outer_size}
+dimension_corrections = {label: value for label, value in dimension_fields.items()
+                         if f"尺寸欄位「{label}」格式不明，須核對原文" in active_issues}
+if dimension_corrections:
+    dimension_key = hashlib.sha256(repr((user_input, dimension_corrections)).encode()).hexdigest()
+    dimension_basis = st.text_input("尺寸校正確認依據", key="dimension_basis_" + dimension_key)
+    dimension_reviewed = st.checkbox("已核對來源並確認上方尺寸校正值，完整原文保留", key="dimension_review_" + dimension_key)
+    prior_dimension_issues = list(active_issues)
+    active_issues = confirmed_dimension_basis(active_issues, dimension_corrections,
+                                              confirmed=dimension_reviewed, evidence=dimension_basis)
+    if active_issues != prior_dimension_issues:
+        final_extra += "\n尺寸校正：" + "；".join(f"{label}={value}" for label, value in dimension_corrections.items()) + "；依據：" + dimension_basis.strip()
 block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
                              final_dom, intl_rate, ex_rate, active_issues, effective_price_unit, final_qty_unit)
 if block_reasons:
