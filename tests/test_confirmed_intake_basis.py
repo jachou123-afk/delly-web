@@ -3,6 +3,15 @@ from copy import deepcopy
 from test_v74_safety import ns, block
 
 
+def test_dimension_includes_cord_is_preserved_but_unknown_suffix_stays_blocked():
+    raw = "新品電子掛表\n編號:C0019\n箱數:600pcs\n單價:3.6元\n尺寸:21cm(含繩)\n箱重:約17kg"
+    common, _ = ns["parse_text"](raw)
+    assert common["prod_size"] == "21cm（含繩）"
+    assert ns["labeled_dimension_info"]("尺寸:21cm(含繩)")["valid"]
+    assert not ns["labeled_dimension_info"]("尺寸:21cm(待確認)")["valid"]
+    assert not ns["labeled_dimension_info"]("外箱:21cm(含繩)")["valid"]
+
+
 def test_reviewed_weight_does_not_remove_unrelated_cost_guards():
     ambiguous = "重量欄位「重量」未標明單個或整箱，須確認重量範圍"
     issues, unit = ns["confirmed_cost_basis"](

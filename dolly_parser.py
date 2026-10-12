@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.6")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.7")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -653,6 +653,10 @@ def labeled_dimension_info(value):
     numeric_shape = rf"{number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*"
     dimension_value = numeric_shape + r"\s*(?:cm|mm|公分|毫米)"
     valid = bool(re.fullmatch(dimension_value, raw_value, re.I))
+    if not valid and label in {"產品尺寸", "單個尺寸", "尺寸", "產品"}:
+        valid = bool(re.fullmatch(
+            dimension_value + r"\s*\(\s*含繩\s*\)", raw_value, re.I,
+        ))
     if not valid and label in {"彩盒尺寸", "彩盒"}:
         valid = bool(re.fullmatch(
             dimension_value + r"\s*\(\s*展示盒\s*\)", raw_value, re.I,
@@ -1425,12 +1429,16 @@ def parse_text(text):
         for line in normalized.splitlines():
             cleaned = re.sub(EMOJI_PAT, "", line).strip()
             suffix = r"(?P<display_box>\s*\(\s*展示盒\s*\))?" if field == "color_box_size" else ""
+            if field == "prod_size":
+                suffix = r"(?P<includes_cord>\s*\(\s*含繩\s*\))?"
             match = re.search(label + size + suffix + r"\s*$", cleaned, re.I)
             if match:
                 display_box = bool(match.groupdict().get("display_box"))
                 if display_box and not re.match(r"^彩盒(?:尺寸)?\s*[:：]?\s*(?=\d)", cleaned):
                     continue
                 common[field] = match[1].strip() + ("（展示盒）" if display_box else "")
+                if match.groupdict().get("includes_cord"):
+                    common[field] += "（含繩）"
                 break
     # Named metadata must not be swallowed by the product name.
     meta = rf"^(?:型號|貨號|產品編號|編號|(?:單|每)\s*[A-Za-z0-9\u4e00-\u9fff]{{1,6}}\s*(?:價格|價)|單價|價格|每箱|箱數|裝箱|一箱|單重|單個重量|每個重量|整箱|毛重|箱重|尺寸|產品尺寸|產品\s*:|彩盒|外箱|包裝|單個包裝|材質|材積|端盒|木架|木框|帶鐳|帶雷|USB|配件|電池|\d+\s*(?:個|款|種))"
