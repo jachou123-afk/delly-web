@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.5")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.6")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -258,7 +258,7 @@ def get_target_formula_block(category_name, base_row):
         return None
 
 def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expected_rows=None,
-                           *, save_context=None):
+                           *, save_context=None, approved_code_conflicts=()):
     write_started = False
     try:
         if save_context is None:
@@ -292,7 +292,8 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
         if not bulk_rows or len(bulk_rows) % block_size:
             raise ValueError("商品區塊不完整")
         incoming = extract_saved_products(bulk_rows)
-        conflicts = duplicate_messages(incoming, live_sheets)
+        conflicts = duplicate_messages(incoming, live_sheets,
+                                       approved_code_conflicts=approved_code_conflicts)
         if conflicts:
             st.error("；".join(conflicts))
             get_all_sheets_data.clear()
@@ -1574,7 +1575,38 @@ def wooden_rack_note_integrity_issues(parsed_common, extra_text):
     return []
 
 
-def duplicate_messages(incoming, sheets, exclude=None):
+def code_conflict_key(item, title, saved, rows):
+    """Bind a different-product decision to both identities and the saved block."""
+    import hashlib
+    snapshot = pad_block(rows[saved["row_index"] - 1:saved["row_index"] + 5])
+    return hashlib.sha256(repr((normalize_code(item["code"]), normalize_name(item["name"]),
+                               title, saved["no"], saved["code"], saved["name"], snapshot)).encode()).hexdigest()
+
+
+def different_name_code_conflicts(item, sheets):
+    result = []
+    code, name = normalize_code(item["code"]), normalize_name(item["name"])
+    for title, rows in sheets.items():
+        for saved in extract_saved_products(rows):
+            if code and name and saved["name"] and code == saved["code"] and name != saved["name"]:
+                result.append(dict(key=code_conflict_key(item, title, saved, rows),
+                                   category=title, no=saved["no"], code=code, name=saved["name"]))
+    return result
+
+
+def confirmed_cost_basis(issues, price_unit, qty_unit, *, unit_confirmed=False,
+                         weight_confirmed=False, evidence=""):
+    """Resolve only explicitly reviewed unit/weight ambiguity, never other guards."""
+    result = list(issues)
+    if evidence.strip():
+        if unit_confirmed and qty_unit in ("個", "雙", "盒", "套", "瓶", "罐", "包", "袋"):
+            price_unit = qty_unit
+        if weight_confirmed:
+            result = [issue for issue in result if issue != "重量欄位「重量」未標明單個或整箱，須確認重量範圍"]
+    return result, price_unit
+
+
+def duplicate_messages(incoming, sheets, exclude=None, *, approved_code_conflicts=()):
     """回報重複／衝突；原位修正時只排除已明確選定的那一個 NO。"""
     messages = []
     excluded = {
@@ -1594,6 +1626,9 @@ def duplicate_messages(incoming, sheets, exclude=None):
             same_code = bool(code and code == saved["code"])
             same_name = bool(name and name == saved["name"])
             if same_code or same_name:
+                if (same_code and not same_name and name and saved["name"] and title in sheets
+                        and code_conflict_key(item, title, saved, sheets[title]) in approved_code_conflicts):
+                    continue
                 kind = "同貨號不同品名衝突" if same_code and not same_name else "重複或同品名待核對"
                 messages.append(f"{kind}：{code} {name} → {title} {saved.get('no', '')} {saved['name']}；停止寫入，不自動覆蓋或跳過")
         seen.append({"code": code, "name": name})
@@ -2141,8 +2176,27 @@ if any("非木架額外費用" in issue for issue in active_issues):
     if st.checkbox("已向來源確認：上述進價、重量已涵蓋全部附加費用，沒有未確認項目", key="extra_" + confirmation_key) and extra_basis.strip():
         active_issues = [issue for issue in active_issues if "非木架額外費用" not in issue]
         final_extra += "\n附加費用確認：" + extra_basis.strip()
+effective_price_unit = common_data["price_unit"]
+unit_needs_review = bool(effective_price_unit and final_qty_unit and effective_price_unit != final_qty_unit)
+weight_needs_review = "重量欄位「重量」未標明單個或整箱，須確認重量範圍" in active_issues
+if unit_needs_review or weight_needs_review:
+    review_key = hashlib.sha256(repr((draft_key, user_input, final_price, final_qty,
+                                     final_qty_unit, final_carton_weight_kg, final_unit_weight_g,
+                                     final_prod_size, final_color_size, final_outer_size,
+                                     final_extra)).encode()).hexdigest()
+    st.caption("已有來源／使用者確認時，先校正上方數值，再記錄確認依據；完整原文不變。修改數值後需重新勾選。")
+    reviewed_basis = st.text_input("本款單位／重量確認依據", key="review_basis_" + review_key)
+    reviewed_unit = unit_needs_review and st.checkbox(
+        f"已確認進價為每{final_qty_unit}，裝箱量也以{final_qty_unit}計算", key="review_unit_" + review_key)
+    reviewed_weight = weight_needs_review and st.checkbox(
+        "已確認重量範圍，且已填入正確的整箱kg或單個g欄位", key="review_weight_" + review_key)
+    active_issues, effective_price_unit = confirmed_cost_basis(
+        active_issues, effective_price_unit, final_qty_unit, unit_confirmed=reviewed_unit,
+        weight_confirmed=reviewed_weight, evidence=reviewed_basis)
+    if reviewed_basis.strip() and (reviewed_unit or reviewed_weight):
+        final_extra += "\n人工確認依據：" + reviewed_basis.strip()
 block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
-                             final_dom, intl_rate, ex_rate, active_issues, common_data["price_unit"], final_qty_unit)
+                             final_dom, intl_rate, ex_rate, active_issues, effective_price_unit, final_qty_unit)
 if block_reasons:
     st.error(
         "待確認：" + "；".join(block_reasons)
@@ -2194,11 +2248,32 @@ if user_input.strip():
     if operation == "新增商品":
         from quote_create_form import render_create_form
 
+        approved_code_conflicts = []
+        code_conflict_note = ""
+        if source_product and st.checkbox("中間商同貨號不同商品：開啟分開建檔核對", key=draft_key + "review_code_conflicts"):
+            review_sheets = get_all_sheets_data()
+            if review_sheets is None:
+                hard_reasons.append("無法讀取同貨號商品，停止分開建檔")
+            else:
+                code_conflict_candidates = different_name_code_conflicts(source_product, review_sheets)
+                if code_conflict_candidates:
+                    st.dataframe([{k: row[k] for k in ("category", "no", "code", "name")}
+                                  for row in code_conflict_candidates], hide_index=True)
+                    conflict_review_key = hashlib.sha256(repr((draft_key, user_input, source_product,
+                                                              code_conflict_candidates)).encode()).hexdigest()
+                    code_conflict_note = st.text_input("同貨號分開建檔依據", key="code_basis_" + conflict_review_key)
+                    if st.checkbox("已核對原圖及文案：本款與上列商品不同，保留原貨號並配置新的自有NO",
+                                   key="code_confirm_" + conflict_review_key) and code_conflict_note.strip():
+                        approved_code_conflicts = [row["key"] for row in code_conflict_candidates]
+                else:
+                    st.info("目前沒有同貨號不同品名商品；同款與同品名仍依原流程查重。")
         cost_inputs = dict(price=final_price, qty=final_qty, unit=final_qty_unit,
                            carton_kg=final_carton_weight_kg, unit_g=final_unit_weight_g,
                            dom_rate=final_dom, intl_rate=intl_rate, ex_rate=ex_rate)
         cost_notes = ("報價操作者已勾選逐欄核對。沿用現行規則：毛利率 10%；重量加計 5%；"
                       "木架／木框不列入，其他附加費用須已涵蓋於進價及重量。\n" + final_extra)
+        if approved_code_conflicts:
+            cost_notes += "\n同貨號不同商品分開建檔：" + code_conflict_note.strip()
         quote_images = []
         if source_product:
             image_key = "quote_create_images_" + hashlib.sha256(
@@ -2215,7 +2290,8 @@ if user_input.strip():
                      inputs=cost_inputs, product_size=final_prod_size, color_size=final_color_size,
                      outer_size=final_outer_size, extra=final_extra,
                      issues=block_reasons + hard_reasons,
-                     images=[asset["sha256"] for asset in quote_images])
+                     images=[asset["sha256"] for asset in quote_images],
+                     approved_code_conflicts=approved_code_conflicts, code_conflict_note=code_conflict_note)
         submission = render_create_form(
             basis=basis, categories=category_options, vendors=canonical_vendor_options()[0],
             disabled=bool(block_reasons or hard_reasons),
@@ -2225,6 +2301,8 @@ if user_input.strip():
             st.stop()
         final_category = submission["category"]
         final_vendor = normalize_vendor(submission["vendor"])
+        if approved_code_conflicts and final_vendor != "v多品村":
+            hard_reasons.append("同貨號分開建檔目前僅適用已確認中間商規則的多品村")
         cost_inputs["intl_rate"] = international_rate_for_vendor(final_vendor, intl_rate)
         if not final_category or final_category not in category_options:
             hard_reasons.append("尚未選擇本款分頁")
@@ -2243,7 +2321,8 @@ if user_input.strip():
                 st.stop()
             target_data = save_context["rows"]
             # The save function still checks every public sheet freshly before writing.
-            duplicate_warnings = duplicate_messages([source_product], {final_category: target_data})
+            duplicate_warnings = duplicate_messages([source_product], {final_category: target_data},
+                                                   approved_code_conflicts=approved_code_conflicts)
             if duplicate_warnings:
                 for warning in duplicate_warnings:
                     st.error(f"🚨 撞單雷達警告：{warning}")
@@ -2288,6 +2367,7 @@ if user_input.strip():
                 block_size=6,
                 expected_rows=target_data,
                 save_context=save_context,
+                approved_code_conflicts=approved_code_conflicts,
             ):
                 get_all_sheets_data.clear()
                 st.success(
