@@ -60,7 +60,7 @@ def test_writes_use_canonical_vendor_without_changing_equivalent_costs(vendor):
 
 def test_dropdown_deduplicates_aliases_but_keeps_other_suppliers():
     options, selected = vendor_options("V-卡樂星")
-    assert options == ["", "v菲凡", "v多品村", "v優娜卡樂星"]
+    assert options == ["", "v菲凡", "v多品村", "v優娜卡樂星", "v方小姐"]
     assert selected == "v優娜卡樂星"
     assert vendor_options("v東之星")[0][-1] == "v東之星"
     assert vendor_filter_label("") == "（未填廠商）"

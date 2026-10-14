@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.8")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.9")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -134,12 +134,12 @@ def normalize_name(value):
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 def is_free_shipping_vendor(vendor):
-    """多品村由廣州出貨，陸運費固定包郵。"""
+    """依已確認的廠商規則判斷內陸運費是否包含在進價中。"""
     from quote_dispatch.config import supplier_rule
     return supplier_rule(vendor).domestic_shipping == "free"
 
 def build_carton_note_row(final_qty, vendor, qty_unit="個"):
-    """建立裝箱備註列，並把多品村包郵註記放在大陸運費欄下方。"""
+    """建立裝箱備註列，並保留各廠商的包郵範圍註記。"""
     from quote_dispatch.config import supplier_rule
     row = [""] * 12
     row[1] = f"裝箱 {final_qty}{qty_unit}/箱"
@@ -349,7 +349,7 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
             if (
                 note_index < len(bulk_rows)
                 and len(bulk_rows[note_index]) > 8
-                and bulk_rows[note_index][8] == "廣州包郵"
+                and bulk_rows[note_index][8] in {"廣州包郵", "台灣包郵"}
             ):
                 formats.append({"range": f"I{base_r + 2}", "format": {
                     "backgroundColor": {"red": 0.8509804, "green": 0.91764706, "blue": 0.827451}}})
@@ -593,7 +593,7 @@ if not dispatch_tab.open:
     st.sidebar.header("⚙️ 成本參數設定")
     ex_rate = st.sidebar.number_input("匯率", value=settings["ex_rate"], step=0.05, format="%.2f")
     intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=settings["intl_rate"], step=0.5)
-    st.sidebar.caption("多品村國際運費固定為 9 RMB/kg；其他廠商使用上方費率。")
+    st.sidebar.caption("多品村國際運費固定為 9 RMB/kg；方小姐台灣包郵，內陸與國際運費均為 0；其他廠商使用上方費率。")
     dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=settings["dom_rate"], step=0.5)
     if st.sidebar.button("📌 將目前數值設為預設"):
         if save_settings({"ex_rate": ex_rate, "intl_rate": intl_rate, "dom_rate": dom_rate_def}):
@@ -2558,7 +2558,8 @@ if user_input.strip():
     if not final_vendor and not (operation == "修正既有商品" and block_reasons):
         hard_reasons.append("尚未選擇本款廠商")
     if is_free_shipping_vendor(final_vendor):
-        st.success("✅ 此廠商廣州包郵")
+        from quote_dispatch.config import supplier_rule
+        st.success("✅ 此廠商" + supplier_rule(final_vendor).domestic_shipping_note)
 
     duplicate_warnings = []
     if (

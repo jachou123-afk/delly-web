@@ -73,7 +73,7 @@ def calculate(inputs, vendor):
         weight_basis = f"取較大值（{weight_basis}，{fmt(unit)} g）"
     return {
         "weight": (weight, f"{weight_basis} × 1.05 → 向上取 2 位"),
-        "domestic": (domestic, "多品村：沿用廣州包郵規則 = 0" if free_shipping(vendor) else f"{fmt(weight)} ÷ 1000 × {fmt(values['dom_rate'])} → 向上取 2 位"),
+        "domestic": (domestic, f"{supplier_rule(vendor).canonical_name.removeprefix('v')}：沿用{supplier_rule(vendor).domestic_shipping_note}規則 = 0" if free_shipping(vendor) else f"{fmt(weight)} ÷ 1000 × {fmt(values['dom_rate'])} → 向上取 2 位"),
         "international": (international, f"{fmt(weight)} ÷ 1000 × {fmt(values['intl_rate'])} → 向上取 2 位"),
         "cost": (cost, f"（{fmt(price)} + {fmt(domestic)} + {fmt(international)}）× {fmt(values['ex_rate'])} → 四捨五入 1 位"),
         "quote": (quote, f"{fmt(cost)} ÷ 0.9 → 四捨五入 1 位（毛利率 10%，非加價 10%）"),

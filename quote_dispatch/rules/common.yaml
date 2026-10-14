@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "vendor_prefix": "v",
-  "default_vendors": ["", "v菲凡", "v多品村", "v優娜卡樂星"],
+  "default_vendors": ["", "v菲凡", "v多品村", "v優娜卡樂星", "v方小姐"],
   "vendor_aliases": {
     "非凡": "菲凡",
     "卡樂星": "優娜卡樂星",

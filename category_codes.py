@@ -3,7 +3,7 @@ import re
 
 DEFAULT_CATEGORY_CODES = {"G正版": "G", "S生活用品": "S"}
 CATEGORY_SHEET = "_分類代碼"
-QUOTE_CATEGORIES = ("G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾")
+QUOTE_CATEGORIES = ("G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾", "F方小姐")
 
 
 def validate_codes(mapping):
