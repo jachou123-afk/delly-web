@@ -135,7 +135,8 @@ def audit(source, formulas=None, evidence=None):
     formulas = block(formulas or [])
     result = {"rule": RULE_VERSION, "source_hash": source["source_hash"],
               "formula_hash": fingerprint(formulas), "evidence_hash": fingerprint(evidence) if evidence else "",
-              "source_ready": False, "math_pass": False, "errors": [], "rows": [], "input_rows": [],
+              "source_ready": False, "math_pass": False, "quote_math_pass": False,
+              "errors": [], "quote_errors": [], "rows": [], "input_rows": [],
               "raw_source": "", "notes": "", "inputs": legacy_inputs(source, formulas), "origin": "legacy",
               "saved_evidence": deepcopy(evidence) if evidence else None}
     if evidence:
@@ -187,6 +188,11 @@ def audit(source, formulas=None, evidence=None):
              ("international", "國際運費（RMB）", 9), ("cost", "到手成本（TWD）", 10),
              ("quote", "10% 報價（TWD）", 2), ("sale", "廣告售價（TWD）", None)]
     for key, title, column in specs:
+        if key == "sale":
+            # Saving quotation evidence does not authorize or require an ad.
+            # Keep the full advertising audit strict for all dispatch callers.
+            result["quote_errors"] = list(result["errors"])
+            result["quote_math_pass"] = bool(calculated and not result["quote_errors"])
         actual = source.get("price", "") if column is None else saved[1][column]
         amount, formula = calculated.get(key, (None, "缺少原始參數，不由結果倒推"))
         difference = None

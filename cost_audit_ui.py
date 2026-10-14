@@ -15,17 +15,20 @@ def render_cost_review(store, source, prefix, actor, *, evidence_saver=None):
             st.error(f"讀取成本依據失敗，不能確認：{exc}")
     loaded = st.session_state.get(cache_key)
     report, formulas = loaded if loaded else (audit(source), [])
+    quote_only = evidence_saver is not None
+    review_rows = [row for row in report["rows"] if not quote_only or row["項目"] != "廣告售價（TWD）"]
     rows = {row["項目"]: row for row in report["rows"]}
     a, b, c = st.columns(3)
     a.metric("原表到手成本（TWD）", rows["到手成本（TWD）"]["原表／原售價"])
     b.metric("獨立重算成本（TWD）", rows["到手成本（TWD）"]["重算結果"])
-    c.metric("原廣告售價（TWD）", rows["廣告售價（TWD）"]["原表／原售價"])
-    st.table(report["rows"])
-    if report["math_pass"]:
+    if not quote_only:
+        c.metric("原廣告售價（TWD）", rows["廣告售價（TWD）"]["原表／原售價"])
+    st.table(review_rows)
+    if report["quote_math_pass"] if quote_only else report["math_pass"]:
         st.success("表內重算一致：使用已保存的參數或原表／公式數字重算；不代表廠商原文已核對。")
     else:
         st.warning("計算：有差異或缺少依據，不能列為已核對。")
-        for error in report["errors"]:
+        for error in report["quote_errors"] if quote_only else report["errors"]:
             st.caption(error)
     if report["source_ready"]:
         st.info("原文已保存，供需要時查看；最後統一確認整批圖文，不必逐款勾選。")

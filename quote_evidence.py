@@ -45,8 +45,8 @@ def save_evidence_repair(store, plan, raw_source, inputs, *, notes):
     evidence = make_evidence(source, formulas, raw_source, inputs, notes=notes,
                              origin="review_attachment")
     report = audit(source, formulas, evidence)
-    if not report["math_pass"]:
-        raise ValueError("原文參數與原商品尚未核對一致，未保存：" + "；".join(report["errors"]))
+    if not report["quote_math_pass"]:
+        raise ValueError("原文參數與原商品尚未核對一致，未保存：" + "；".join(report["quote_errors"]))
     store._evidence_index = None
     store._evidence_row_index = None
     saved = store.put_quote_evidence(source, formulas, raw_source, inputs,
@@ -54,7 +54,7 @@ def save_evidence_repair(store, plan, raw_source, inputs, *, notes):
     store._evidence_index = None
     store._evidence_row_index = None
     report, _ = store.cost_audit(source)
-    if (not report["source_ready"] or not report["math_pass"]
+    if (not report["source_ready"] or not report["quote_math_pass"]
             or report.get("saved_evidence") != evidence or saved != evidence):
         raise ValueError("原文補存讀回尚未確認，請重新讀取本款依據；不要新增商品")
     return saved

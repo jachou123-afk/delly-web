@@ -41,6 +41,36 @@ def test_only_evidence_is_saved_and_reopened_with_original_text_and_manual_origi
     assert saved["product"]["no"] == "no1"
 
 
+def test_quote_only_category_can_save_evidence_without_approving_an_ad():
+    from cost_audit import blockers
+
+    sheet = FakeSpreadsheet(product_rows((1,), category="F方小姐"))
+    store = CloudDispatchStore(sheet)
+    plan = prepare_evidence_repair(store, "F方小姐:no1")
+    assert not plan["source"].get("price")
+    inputs = legacy_inputs(plan["source"], plan["formulas"])
+    before = snapshot(sheet)
+    saved = save_evidence_repair(store, plan, RAW, inputs, notes=NOTES)
+    assert {name: ws.rows for name, ws in sheet.sheets.items() if name in before} == before
+    report, _ = CloudDispatchStore(sheet).cost_audit(plan["source"])
+    assert saved["raw_source"] == RAW and report["source_ready"]
+    assert report["quote_math_pass"] and not report["math_pass"]
+    assert not report["quote_errors"]
+    assert any("廣告售價" in error for error in blockers(plan["source"], report))
+
+
+def test_quote_only_category_still_rejects_cost_mismatch_without_writing():
+    sheet = FakeSpreadsheet(product_rows((1,), category="F方小姐"))
+    store = CloudDispatchStore(sheet)
+    plan = prepare_evidence_repair(store, "F方小姐:no1")
+    inputs = legacy_inputs(plan["source"], plan["formulas"])
+    inputs["ex_rate"] = "5.9"
+    before = snapshot(sheet)
+    with pytest.raises(ValueError, match="到手成本"):
+        save_evidence_repair(store, plan, RAW, inputs, notes=NOTES)
+    assert snapshot(sheet) == before
+
+
 @pytest.mark.parametrize("change", ["price", "name", "formula", "duplicate", "snapshot"])
 def test_source_changes_and_duplicate_identity_are_blocked_before_any_evidence_write(change):
     sheet, store, plan, inputs = fixture()
