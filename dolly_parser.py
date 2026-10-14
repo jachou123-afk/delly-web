@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.10")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.11")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -499,6 +499,9 @@ def build_cost_formulas(
     for key, formula in result.items():
         if formula:
             result[key] = f'=IFERROR(IF(OR(NOT(ISNUMBER(G{v_r})),G{v_r}<=0),"",{formula[1:]}),"")'
+    if normalize_vendor(vendor) == "v方小姐":
+        # Taiwan-inclusive price: user requested a direct integer ceiling.
+        result["cost"] = f"=ROUNDUP(G{v_r}*{exchange_rate_literal},0)"
     return result
 # --- 3. 工具頁籤；發送管理只使用整理完成的商品資料 ---
 def get_dispatch_store():

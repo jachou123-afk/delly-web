@@ -66,6 +66,10 @@ def calculate(inputs, vendor):
     domestic = Decimal(0) if free_shipping(vendor) else (weight / 1000 * values["dom_rate"]).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
     international = (weight / 1000 * values["intl_rate"]).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
     cost = ((price + domestic + international) * values["ex_rate"]).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    cost_note = f"（{fmt(price)} + {fmt(domestic)} + {fmt(international)}）× {fmt(values['ex_rate'])} → 四捨五入 1 位"
+    if supplier_rule(vendor).canonical_name == "v方小姐":
+        cost = (price * values["ex_rate"]).to_integral_value(rounding=ROUND_CEILING)
+        cost_note = f"{fmt(price)} × {fmt(values['ex_rate'])} → 無條件進位整數"
     quote = (cost / Decimal("0.9")).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     sale = quote.to_integral_value(rounding=ROUND_CEILING)
     weight_basis = f"{fmt(carton)} kg ÷ {fmt(qty)} × 1000" if carton > 0 else f"{fmt(unit)} g"
@@ -75,7 +79,7 @@ def calculate(inputs, vendor):
         "weight": (weight, f"{weight_basis} × 1.05 → 向上取 2 位"),
         "domestic": (domestic, f"{supplier_rule(vendor).canonical_name.removeprefix('v')}：沿用{supplier_rule(vendor).domestic_shipping_note}規則 = 0" if free_shipping(vendor) else f"{fmt(weight)} ÷ 1000 × {fmt(values['dom_rate'])} → 向上取 2 位"),
         "international": (international, f"{fmt(weight)} ÷ 1000 × {fmt(values['intl_rate'])} → 向上取 2 位"),
-        "cost": (cost, f"（{fmt(price)} + {fmt(domestic)} + {fmt(international)}）× {fmt(values['ex_rate'])} → 四捨五入 1 位"),
+        "cost": (cost, cost_note),
         "quote": (quote, f"{fmt(cost)} ÷ 0.9 → 四捨五入 1 位（毛利率 10%，非加價 10%）"),
         "sale": (sale, f"{fmt(quote)} → 無條件進位整數"),
     }
@@ -111,6 +115,14 @@ def legacy_inputs(source, formulas):
     rates = re.findall(r"ROUND\(\(G\$?\d+\+I\$?\d+\+J\$?\d+\)\*(\d+(?:\.\d+)?),1\)", formulas[1][10].upper().replace(" ", ""))
     if len(rates) == 1:
         result["ex_rate"] = rates[0]
+    if supplier_rule(source.get("vendor", "")).canonical_name == "v方小姐":
+        row_number = source.get("row", 1) + 1
+        direct = re.fullmatch(
+            rf"=ROUNDUP\(\$?G\$?{row_number}\*(\d+(?:\.\d+)?),0\)",
+            formulas[1][10].upper().replace(" ", ""),
+        )
+        if direct:
+            result["ex_rate"] = direct[1]
     if free_shipping(source.get("vendor", "")):
         result["dom_rate"] = "0"
     return result
