@@ -151,7 +151,7 @@ def test_weightless_quote_preserves_exact_evidence_and_can_repair_later():
     report, _ = fresh.cost_audit(source)
     assert report["source_ready"] and report["quote_math_pass"]
     assert report["raw_source"] == SYNTHETIC_INLINE
-    assert not report["math_pass"]  # Still no approved advertisement price.
+    assert report["math_pass"]  # Ad price is calculable; dispatch approval remains separate.
     plan = prepare_evidence_repair(fresh,source["identity"])
     save_evidence_repair(fresh,plan,SYNTHETIC_INLINE,inputs,notes="合成補存測試")
 
@@ -190,3 +190,4 @@ def test_actual_quote_writer_accepts_blank_weight_and_reads_back_without_fabrica
     assert saved[1][7] == ""
     assert saved[3][1] == "重量 未提供" and saved[4][1] == "貨號 "
     assert saved[1][10] == "=ROUNDUP(G4*4.8,0)"
+

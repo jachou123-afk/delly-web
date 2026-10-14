@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 import re
 import unicodedata
 from category_codes import DEFAULT_CATEGORY_CODES, validate_codes
-from quote_dispatch.config import get_common_rules
+from quote_dispatch.config import get_common_rules, supplier_rule
 
 from license_markers import (
     has_affirmative_license_marker,
@@ -302,8 +302,29 @@ def validate_sheet_pricing(rows):
     # These checks apply to every supplier, independently of source grammar.
     # They establish internal consistency, not that the source was audited or
     # that historical FX/freight rates still match today's settings.
-    for col, label in ((6, "進價"), (7, "計費重量"), (8, "大陸運費"), (9, "國際運費")):
+    for col, label in ((6, "進價"), (8, "大陸運費"), (9, "國際運費")):
         _sheet_number(block[1][col], label, allow_zero=col in (8, 9))
+    rule = supplier_rule(block[0][11])
+    raw_weight = block[1][7]
+    missing_weight = raw_weight is None or (
+        isinstance(raw_weight, str) and not raw_weight.strip()
+    )
+    included_delivery = (
+        rule.canonical_name == "v方小姐"
+        and rule.domestic_shipping == "free"
+        and rule.domestic_shipping_note == "台灣包郵"
+        and _clean_text(block[2][8]) == "台灣包郵"
+        and _clean_text(block[3][1]) == "重量 未提供"
+        and missing_weight
+    )
+    if included_delivery:
+        # A saved inclusive-delivery quote may omit weight, never invent zero.
+        # Still validate both freight cells and leave the independent audit intact.
+        if any(_sheet_number(block[1][col], label, allow_zero=True) != 0
+               for col, label in ((8, "大陸運費"), (9, "國際運費"))):
+            raise ValueError("未提供重量的台灣包郵商品，內陸及國際運費必須為零")
+    else:
+        _sheet_number(raw_weight, "計費重量")
     cost = _sheet_number(block[1][10], "預估到手成本")
     quote = _sheet_number(block[1][2], "10%報價")
     expected_quote = (cost / Decimal("0.9")).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
@@ -337,3 +358,4 @@ def build_line_ad_copy_from_sheet_block(category_name, rows, category_codes=None
         carton_text=block[2][1],
         category_codes=category_codes,
     )
+
