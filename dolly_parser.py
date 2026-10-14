@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.12")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.13")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -1276,8 +1276,8 @@ def wooden_rack_cost_basis_text(text):
 
 def parse_text(text):
     """單一報價的保守解析；不把多則獨立報價套用同一組數字。"""
-    from inline_quote_parser import expand_inline_bag_quote
-    normalized = expand_inline_bag_quote(zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw"))
+    from inline_quote_parser import expand_inline_quote
+    normalized = expand_inline_quote(zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw"))
     rack_context = wooden_rack_context(normalized)
     cost_basis_text = wooden_rack_cost_basis_text(normalized)
     price_basis_text = (
