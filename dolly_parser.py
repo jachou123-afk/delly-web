@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.11")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.12")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -424,7 +424,7 @@ def build_cost_formulas(
     final_price=None,
     blocked=False,
 ):
-    """建立成本公式；沒有有效重量時，運費、成本與報價全部留白。"""
+    """建立成本公式；方小姐包郵可缺重量，其他廠商維持重量檢查。"""
     weight_cell = f"H{v_r}"
     domestic_cell = f"I{v_r}"
     international_cell = f"J{v_r}"
@@ -441,7 +441,7 @@ def build_cost_formulas(
             or ex_rate <= 0 or final_qty <= 0 or final_qty != int(final_qty)):
         return blank
     weight_state = resolve_weight_inputs(carton_weight_kg, unit_weight_g, final_qty)
-    if (blocked or final_qty <= 0 or weight_state["source"] == "missing"
+    if (blocked or final_qty <= 0 or (weight_state["source"] == "missing" and normalize_vendor(vendor) != "v方小姐")
             or weight_state["mismatch_ratio"] >= 0.2
             or (final_price is not None and (not math.isfinite(final_price) or final_price <= 0))):
         return blank
@@ -495,6 +495,10 @@ def build_cost_formulas(
             f'ROUND((G{v_r}+{domestic_cell}+{international_cell})*{exchange_rate_literal},1))'
         ),
     }
+    if normalize_vendor(vendor) == "v方小姐" and weight_state["source"] == "missing":
+        # Unknown weight stays blank; the confirmed inclusive freight is zero.
+        result["domestic"] = "=0"
+        result["international"] = "=0"
     # A later manual deletion of G must also hide all derived numbers.
     for key, formula in result.items():
         if formula:
@@ -1272,7 +1276,8 @@ def wooden_rack_cost_basis_text(text):
 
 def parse_text(text):
     """單一報價的保守解析；不把多則獨立報價套用同一組數字。"""
-    normalized = zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw")
+    from inline_quote_parser import expand_inline_bag_quote
+    normalized = expand_inline_bag_quote(zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw"))
     rack_context = wooden_rack_context(normalized)
     cost_basis_text = wooden_rack_cost_basis_text(normalized)
     price_basis_text = (
@@ -1518,7 +1523,7 @@ def parse_text(text):
     return common, products
 
 
-def cost_blockers(price, qty, carton_kg, unit_g, dom, intl, ex, issues=(), price_unit="", qty_unit=""):
+def cost_blockers(price, qty, carton_kg, unit_g, dom, intl, ex, issues=(), price_unit="", qty_unit="", vendor=""):
     reasons = list(issues)
     values = (price, qty, carton_kg, unit_g, dom, intl, ex)
     if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
@@ -1530,7 +1535,7 @@ def cost_blockers(price, qty, carton_kg, unit_g, dom, intl, ex, issues=(), price
     if min(carton_kg, unit_g, dom, intl) < 0 or ex <= 0:
         reasons.append("重量、運費或匯率不合法")
     weight = resolve_weight_inputs(carton_kg, unit_g, qty)
-    if weight["source"] == "missing":
+    if weight["source"] == "missing" and normalize_vendor(vendor) != "v方小姐":
         reasons.append("缺少有效重量來源")
     if weight["mismatch_ratio"] >= 0.2:
         reasons.append("單個與整箱重量差異達20%，須先核對")
@@ -2154,7 +2159,7 @@ weight_state = resolve_weight_inputs(
     final_qty,
 )
 if weight_state["source"] == "missing":
-    st.warning("⚠️ 缺少單個重量或整箱毛重：重量、運費、預估到手成本及 10%～20% 報價會留白，避免誤報價。")
+    st.info("未提供重量：下方選擇「v方小姐」可按台灣包郵價入表，重量留空；其他廠商仍須提供重量。")
 elif weight_state["source"] == "unit":
     st.info(
         f"ℹ️ 已辨識單個重量 {final_unit_weight_g:g}g；運費將以 "
@@ -2235,9 +2240,10 @@ if dimension_corrections:
         final_extra += "\n尺寸校正：" + "；".join(f"{label}={value}" for label, value in dimension_corrections.items()) + "；依據：" + dimension_basis.strip()
 block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
                              final_dom, intl_rate, ex_rate, active_issues, effective_price_unit, final_qty_unit)
-if block_reasons:
+pre_vendor_reasons = [reason for reason in block_reasons if reason != "缺少有效重量來源"]
+if pre_vendor_reasons:
     st.error(
-        "待確認：" + "；".join(block_reasons)
+        "待確認：" + "；".join(pre_vendor_reasons)
         + "。重量、運費、成本、報價全部留白；新增商品禁止存檔，"
         "修正既有商品只能清除原列的不安全衍生數字。"
     )
@@ -2332,13 +2338,18 @@ if user_input.strip():
                      approved_code_conflicts=approved_code_conflicts, code_conflict_note=code_conflict_note)
         submission = render_create_form(
             basis=basis, categories=category_options, vendors=canonical_vendor_options()[0],
-            disabled=bool(block_reasons or hard_reasons),
+            disabled=bool(pre_vendor_reasons or hard_reasons),
             key_prefix="quote_create_" + draft_key,
         )
         if submission is None:
             st.stop()
         final_category = submission["category"]
         final_vendor = normalize_vendor(submission["vendor"])
+        block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
+                                     final_dom, intl_rate, ex_rate, active_issues, effective_price_unit,
+                                     final_qty_unit, vendor=final_vendor)
+        if final_vendor == "v方小姐":
+            cost_notes += "\n台灣包郵：成本為進價×當次匯率，無條件進位整數；未提供重量時留空，兩段運費均為0。"
         if approved_code_conflicts and final_vendor != "v多品村":
             hard_reasons.append("同貨號分開建檔目前僅適用已確認中間商規則的多品村")
         cost_inputs["intl_rate"] = international_rate_for_vendor(final_vendor, intl_rate)
@@ -2545,6 +2556,9 @@ if user_input.strip():
         vendor_options.index(existing_vendor)
         if existing_vendor in vendor_options else 0
     )
+    block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
+                                 final_dom, intl_rate, ex_rate, active_issues, effective_price_unit,
+                                 final_qty_unit, vendor=existing_vendor)
     vendor_key = "vendor_" + hashlib.sha256(
         repr((draft_key, operation, final_category, selected_target and selected_target["no"])).encode()
     ).hexdigest()
@@ -2557,6 +2571,9 @@ if user_input.strip():
         disabled=bool(operation == "修正既有商品" and block_reasons),
     )
     final_vendor = normalize_vendor(final_vendor)
+    block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
+                                 final_dom, intl_rate, ex_rate, active_issues, effective_price_unit,
+                                 final_qty_unit, vendor=final_vendor)
     st.caption("廠商名稱統一為小寫 v＋名稱；已確認的舊別名會自動合併。")
     if not final_vendor and not (operation == "修正既有商品" and block_reasons):
         hard_reasons.append("尚未選擇本款廠商")

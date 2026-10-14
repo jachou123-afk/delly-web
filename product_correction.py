@@ -133,7 +133,8 @@ def plan_correction(snapshot, selected, edits, proposal, *, actor, basis, formul
         formulas = formula_builder(source['row'] + 1, numbers['carton_kg'], numbers['unit_g'],
                                    numbers['qty'], numbers['dom_rate'], numbers['intl_rate'], numbers['ex_rate'],
                                    source['vendor'], final_price=numbers['price'])
-        if any(not formulas.get(k) for k in FORMULA_KEYS.values()):
+        if any(not formulas.get(k) for k in FORMULA_KEYS.values()
+               if k != 'weight' or computed['weight'][0] is not None):
             raise DispatchError('無法產生完整安全公式，不更新價格')
         if 'price' in selected:
             after[1][6] = fmt(number(values['price']))
@@ -145,7 +146,7 @@ def plan_correction(snapshot, selected, edits, proposal, *, actor, basis, formul
             after[0][7] = '重量g/' + values['unit']
         if selected & {'carton_kg', 'unit_g'}:
             kg, g = number(values['carton_kg']), number(values['unit_g'])
-            after[3][1] = '／'.join(([f'整箱毛重 {fmt(kg)}KG'] if kg else []) + ([f'單個重量 {fmt(g)}g'] if g else []))
+            after[3][1] = '／'.join(([f'整箱毛重 {fmt(kg)}KG'] if kg else []) + ([f'單個重量 {fmt(g)}g'] if g else [])) or '重量 未提供'
         for col, key in FORMULA_KEYS.items():
             after[1][col] = formulas[key]
             calc_key = 'quote' if key == 'quote_10' else key
@@ -155,7 +156,7 @@ def plan_correction(snapshot, selected, edits, proposal, *, actor, basis, formul
                 equation = f"成本 ÷ {divisor} → 四捨五入 1 位"
             else:
                 value, equation = computed[calc_key]
-            impacts.append({'項目': IMPACT_LABELS[key], '原值': source['block'][1][col], '修正後': fmt(value), '算式': equation, 'column': col})
+            impacts.append({'項目': IMPACT_LABELS[key], '原值': source['block'][1][col], '修正後': fmt(value) if value is not None else '', '算式': equation, 'column': col})
         impacts.append({'項目': '廣告售價', '原值': source.get('price', ''),
                         '修正後': fmt(computed['sale'][0]), '算式': computed['sale'][1], 'column': None})
     changes = [dict(row=r, col=c, before=before[r][c], after=after[r][c])

@@ -26,7 +26,7 @@ def app_source(existing=False, failure=False, same_identity=False, ad_failure=Fa
     if formula_rows:
         for col in (2, 3, 4, 5, 7, 8, 9, 10):
             formula_rows[1][col] = f"=OLD_{col}"
-    fake_sheets = {title: rows if title == "G正版" else [] for title in ("G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾")}
+    fake_sheets = {title: rows if title == "G正版" else [] for title in ("G正版", "W玩具", "S生活用品", "W娃娃", "D吊飾", "F方小姐")}
     replacements = {
         "get_category_codes": "from category_codes import DEFAULT_CATEGORY_CODES\nreturn dict(DEFAULT_CATEGORY_CODES)",
         "persist_quote_evidence": "st.session_state['test_evidence'] = dict(raw=raw_source, inputs=inputs, parsed=parsed, notes=notes)\nreturn True",
@@ -226,12 +226,49 @@ def test_meal_bag_set_keeps_full_source_and_uses_only_explicit_carton_weight():
     assert app.session_state["test_evidence"]["inputs"]["unit_g"] == 0
 
 
-@pytest.mark.parametrize("raw", [VALID.replace("单价：9.3元\n", ""), VALID.replace("重量：68g(单个)", ""), VALID+"\n包裝費另加:15元", VALID+"\n整箱重量:90kg"])
+@pytest.mark.parametrize("raw", [VALID.replace("单价：9.3元\n", ""), VALID+"\n包裝費另加:15元", VALID+"\n整箱重量:90kg"])
 def test_incomplete_or_uncertain_remains_disabled_after_review(raw):
     app = paste(raw)
     app.checkbox[-1].check().run()
     assert save_button(app).disabled
     assert app.error
+
+
+@pytest.mark.parametrize("vendor", ["v方小姐", "v多品村", "v菲凡", ""])
+def test_missing_weight_checked_against_submitted_supplier_before_any_cloud_write(vendor):
+    raw = "測試收納掛飾。独立袋子  装箱120个 一个包邮2.5元"
+    app = paste(raw, select_source=False)
+    next(s for s in app.selectbox if s.label == "📂 分頁").set_value("F方小姐")
+    next(s for s in app.selectbox if s.label == "🏷️ 廠商").set_value(vendor)
+    app.checkbox[-1].check()
+    assert not save_button(app).disabled
+    save_button(app).click().run()
+    assert not app.exception
+    if vendor == "v方小姐":
+        assert app.session_state["test_saved_category"] == "F方小姐"
+        rows = app.session_state["test_saved_rows"]
+        assert rows[0][1] == "測試收納掛飾"
+        assert rows[0][11] == vendor
+        assert rows[1][7] == "" and rows[3][1] == "重量 未提供"
+        assert rows[1][10] == "=ROUNDUP(G2*4.8,0)"
+        assert rows[4][1] == "貨號 "  # No invented upstream SKU.
+        assert "包裝:獨立袋子" in rows[1][1]
+        assert app.session_state["test_evidence"]["raw"] == raw
+        assert app.session_state["test_evidence"]["inputs"]["intl_rate"] == 0
+        assert app.session_state["test_cloud_reads"] == app.session_state["test_save_calls"] == 1
+    else:
+        assert "test_saved_rows" not in app.session_state
+        assert app.session_state.filtered_state.get("test_cloud_reads",0) == 0
+        assert any("缺少有效重量來源" in e.value for e in app.error)
+
+
+def test_fang_does_not_save_missing_price_even_with_confirmation():
+    app = paste("測試商品\n裝箱120個",select_source=False)
+    next(s for s in app.selectbox if s.label == "📂 分頁").set_value("G正版")
+    next(s for s in app.selectbox if s.label == "🏷️ 廠商").set_value("v方小姐")
+    app.checkbox[-1].check().run()
+    assert save_button(app).disabled
+    assert "test_saved_rows" not in app.session_state
 
 
 def test_duplicate_conflict_cannot_save():

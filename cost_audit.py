@@ -57,14 +57,15 @@ def calculate(inputs, vendor):
     if price <= 0 or qty <= 0 or qty != qty.to_integral_value() or values["ex_rate"] <= 0:
         raise ValueError("進價、整數裝箱量、匯率必須大於零")
     candidates = [w for w in (carton * 1000 / qty, unit) if w > 0]
-    if not candidates:
+    included_delivery = supplier_rule(vendor).canonical_name == "v方小姐"
+    if not candidates and not included_delivery:
         raise ValueError("沒有原始重量，不能由計費重量倒推")
     if len(candidates) == 2 and (max(candidates) - min(candidates)) / max(candidates) >= Decimal("0.2"):
         raise ValueError("整箱換算重量與單重差異達 20%，需先確認來源")
-    basis = max(candidates)
-    weight = (basis * Decimal("1.05")).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+    basis = max(candidates) if candidates else Decimal(0)
+    weight = (basis * Decimal("1.05")).quantize(Decimal("0.01"), rounding=ROUND_CEILING) if candidates else None
     domestic = Decimal(0) if free_shipping(vendor) else (weight / 1000 * values["dom_rate"]).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
-    international = (weight / 1000 * values["intl_rate"]).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+    international = Decimal(0) if included_delivery else (weight / 1000 * values["intl_rate"]).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
     cost = ((price + domestic + international) * values["ex_rate"]).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     cost_note = f"（{fmt(price)} + {fmt(domestic)} + {fmt(international)}）× {fmt(values['ex_rate'])} → 四捨五入 1 位"
     if supplier_rule(vendor).canonical_name == "v方小姐":
@@ -76,9 +77,9 @@ def calculate(inputs, vendor):
     if carton > 0 and unit > 0:
         weight_basis = f"取較大值（{weight_basis}，{fmt(unit)} g）"
     return {
-        "weight": (weight, f"{weight_basis} × 1.05 → 向上取 2 位"),
+        "weight": (weight, f"{weight_basis} × 1.05 → 向上取 2 位" if weight is not None else "未提供重量；台灣包郵成本不需重量"),
         "domestic": (domestic, f"{supplier_rule(vendor).canonical_name.removeprefix('v')}：沿用{supplier_rule(vendor).domestic_shipping_note}規則 = 0" if free_shipping(vendor) else f"{fmt(weight)} ÷ 1000 × {fmt(values['dom_rate'])} → 向上取 2 位"),
-        "international": (international, f"{fmt(weight)} ÷ 1000 × {fmt(values['intl_rate'])} → 向上取 2 位"),
+        "international": (international, "台灣包郵已含國際運費 = 0" if included_delivery else f"{fmt(weight)} ÷ 1000 × {fmt(values['intl_rate'])} → 向上取 2 位"),
         "cost": (cost, cost_note),
         "quote": (quote, f"{fmt(cost)} ÷ 0.9 → 四捨五入 1 位（毛利率 10%，非加價 10%）"),
         "sale": (sale, f"{fmt(quote)} → 無條件進位整數"),
@@ -116,6 +117,9 @@ def legacy_inputs(source, formulas):
     if len(rates) == 1:
         result["ex_rate"] = rates[0]
     if supplier_rule(source.get("vendor", "")).canonical_name == "v方小姐":
+        if note == "重量 未提供" and not saved[1][7] and not formulas[1][7]:
+            result.update(carton_kg="0", unit_g="0")
+        result["intl_rate"] = "0"
         row_number = source.get("row", 1) + 1
         direct = re.fullmatch(
             rf"=ROUNDUP\(\$?G\$?{row_number}\*(\d+(?:\.\d+)?),0\)",
@@ -167,12 +171,22 @@ def audit(source, formulas=None, evidence=None):
     result["input_rows"] = [{"項目": title, "最初擷取值": str(parsed.get(aliases.get(key, key), "未保存")) if key not in {"dom_rate", "intl_rate", "ex_rate"} else "操作者當次設定",
                             "驗算使用值": result["inputs"].get(key) or "未保存／無法辨識", "依據": label}
                             for key, title in INPUT_LABELS.items()]
+    try:
+        omitted_weight = (supplier_rule(source["vendor"]).canonical_name == "v方小姐"
+                          and number(result["inputs"].get("carton_kg", "")) == 0
+                          and number(result["inputs"].get("unit_g", "")) == 0)
+    except (ValueError, InvalidOperation):
+        omitted_weight = False
     # Do not accept a formula that happens to show the same result while reading
     # another product, another sheet, or an external source. Never execute it.
     row_number = source.get("row", 1) + 1
     allowed_functions = {"IFERROR", "IF", "OR", "NOT", "ISNUMBER", "ROUND", "ROUNDUP", "MAX"}
     for col in (2, 7, 8, 9, 10):
         formula = formulas[1][col].upper()
+        if col == 7 and omitted_weight:
+            if formula or saved[1][col] or saved[3][1] != "重量 未提供":
+                result["errors"].append("未提供重量的台灣包郵商品，重量欄必須留空並保留未提供註記")
+            continue
         if not formula.startswith("="):
             result["errors"].append(f"原表 {chr(65 + col)} 欄沒有可核對的公式")
             continue
@@ -207,6 +221,11 @@ def audit(source, formulas=None, evidence=None):
             result["quote_math_pass"] = bool(calculated and not result["quote_errors"])
         actual = source.get("price", "") if column is None else saved[1][column]
         amount, formula = calculated.get(key, (None, "缺少原始參數，不由結果倒推"))
+        if key == "weight" and omitted_weight and amount is None:
+            result["rows"].append({"項目": title, "原表／原售價": actual or "未提供",
+                                   "獨立算式": formula, "重算結果": "未提供（不影響包郵成本）",
+                                   "差額（原表−重算）": "—", "結果": "不適用"})
+            continue
         difference = None
         if amount is not None:
             try:
