@@ -23,6 +23,7 @@ from category_ui import render_category_settings
 from batch_image_preview import render_batch_image_preview
 from batch_approval import prepare_batch, preparation_issues, confirm_prepared_batch
 from image_cache import cached, ORIGINAL_PREFIX, scope_cache
+from image_thumbnails import display_bytes
 from dispatch_targets import ADVERTISING_TARGET, canonical_target, same_target
 from dispatch_workflow import progress_detail, pending_items, selected_pending, combined_copy, build_dispatch_package
 from dispatch_workbench_ui import render_workbench, cache_saved_batch, RUN_KEY
@@ -89,7 +90,7 @@ def _show_images(store, images, key, download=False):
             data = asset_bytes(asset)
             if asset.get("_cloud_backup"):
                 st.warning("NAS 網址仍會轉址；這張圖暫由雲表中校驗相符的原圖顯示。")
-            st.image(data, caption=f"圖片 {position} · {asset['name']}", width="stretch")
+            st.image(display_bytes(data), caption=f"圖片 {position} · {asset['name']}", width="stretch")
             if download:
                 st.download_button(f"下載圖片 {position}", data, asset["name"], asset["mime"],
                                    key=f"download_{key}_{asset_id}")
@@ -227,7 +228,7 @@ def _draft_item(store, batch, item, history, source_images=None):
             for candidate in candidates.values():
                 if candidate.get("_cloud_backup"):
                     st.warning("NAS 網址仍會轉址；這張圖暫由雲表中校驗相符的原圖顯示。")
-                st.image(asset_bytes(candidate), caption=candidate.get("reference", candidate["name"]), width="stretch")
+                st.image(display_bytes(asset_bytes(candidate)), caption=candidate.get("reference", candidate["name"]), width="stretch")
         elif item["images"]:
             st.caption("本批先前保存的核對圖片；可開啟原表再次對照。")
             image_ok = _show_images(store, item["images"], prefix)
@@ -248,7 +249,7 @@ def _draft_item(store, batch, item, history, source_images=None):
                 data = upload.getvalue()
                 asset = validate_image(data, upload.name)
                 prepared.append((data, asset))
-                st.image(data, caption="新圖片 · " + upload.name, width="stretch")
+                st.image(display_bytes(data), caption="新圖片 · " + upload.name, width="stretch")
             except Exception as exc:
                 image_ok = False
                 st.error(str(exc))
@@ -257,7 +258,7 @@ def _draft_item(store, batch, item, history, source_images=None):
         for asset_id in keep:
             image_ok = _show_images(store, [asset_id], prefix + "_out") and image_ok
         for data, asset in prepared:
-            st.image(data, caption="將採用 · " + asset["name"], width="stretch")
+            st.image(display_bytes(data), caption="將採用 · " + asset["name"], width="stretch")
         if not keep and not prepared:
             st.caption("圖片待加入；不代表原報價表缺圖。")
         if source.get("unit_mode") == "legacy" and not unit_confirmed(item):

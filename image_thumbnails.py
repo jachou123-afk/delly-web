@@ -4,11 +4,25 @@ from io import BytesIO
 from PIL import Image, ImageOps
 
 from dispatch_manager import DispatchError
-from dispatch_storage import asset_bytes, validate_image
+from dispatch_storage import MAX_IMAGE_PIXELS, asset_bytes, validate_image
 
 THUMB_VERSION = 1
 THUMB_SIDE = 640
 THUMB_BYTES = 128 * 1024
+
+
+def display_bytes(data):
+    """Only large JPEG display is reduced; storage/download bytes stay original."""
+    with Image.open(BytesIO(data)) as opened:
+        if opened.format != "JPEG" or opened.width * opened.height <= MAX_IMAGE_PIXELS:
+            return data
+        validate_image(data, "display.jpg")
+        opened.draft("RGB", (1600, 1600))
+        im = ImageOps.exif_transpose(opened).convert("RGB")
+        im.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+        out = BytesIO()
+        im.save(out, format="JPEG", quality=90)
+        return out.getvalue()
 
 
 def check_thumbnail(asset):
@@ -24,6 +38,8 @@ def check_thumbnail(asset):
 def make_thumbnail(asset):
     clean = validate_image(asset_bytes(asset), asset["name"])
     with Image.open(BytesIO(asset_bytes(clean))) as opened:
+        if opened.format == "JPEG" and opened.width * opened.height > MAX_IMAGE_PIXELS:
+            opened.draft("RGB", (THUMB_SIDE, THUMB_SIDE))
         im = ImageOps.exif_transpose(opened).convert("RGBA")
         im.thumbnail((THUMB_SIDE, THUMB_SIDE), Image.Resampling.LANCZOS)
         canvas = Image.new("RGB", im.size, "white")

@@ -1,5 +1,6 @@
 """Compact, session-local dispatch cards. No LINE transport or implicit receipts."""
 import streamlit as st
+from image_thumbnails import display_bytes
 
 from dispatch_manager import item_status
 from dispatch_workbench import prepare_workbench, current_item, card_images, complete_current, advance_run
@@ -60,7 +61,7 @@ def render_workbench(store, batch):
                 raise ValueError("圖片張數與凍結版本不符")
             with left:
                 for position, (name, data) in enumerate(images, 1):
-                    st.image(data, caption=f"原圖 {position} / {len(images)}", width="stretch")
+                    st.image(display_bytes(data), caption=f"原圖預覽 {position} / {len(images)}", width="stretch")
                     st.download_button(f"取得本款原圖 {position}", data, item["source"]["code"] + "-" + name,
                                        on_click="ignore", key=f"workbench_image_{run['id']}_{item['id']}_{position}")
         except Exception as exc:

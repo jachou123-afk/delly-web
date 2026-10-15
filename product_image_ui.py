@@ -5,6 +5,7 @@ from dispatch_images import extract_sheet_images, match_image_pack
 from dispatch_manager import digest
 from dispatch_storage import MAX_IMAGE_MB, asset_bytes, validate_image
 from product_images import subject_key, unique_proposals
+from image_thumbnails import display_bytes
 
 
 def clear_library_cache():
@@ -31,7 +32,7 @@ def render_quote_images(key, *, title="本款原圖（隨報價保存到圖庫�
     if assets:
         columns = st.columns(min(5, len(assets)))
         for n, asset in enumerate(assets.values()):
-            columns[n % len(columns)].image(asset_bytes(asset), caption=asset["name"], width="stretch")
+            columns[n % len(columns)].image(display_bytes(asset_bytes(asset)), caption=asset["name"], width="stretch")
     return list(assets.values()), errors
 
 
@@ -128,7 +129,7 @@ def render_save_current_images(store, source, assets, actor, key, disabled=False
                 columns = st.columns(min(5, len(selected_assets)))
                 for number, asset in enumerate(selected_assets):
                     columns[number % len(columns)].image(
-                        asset_bytes(asset), caption=f"變更前已綁定原圖 {number + 1} · {asset['name']}", width="stretch")
+                        display_bytes(asset_bytes(asset)), caption=f"變更前已綁定原圖 {number + 1} · {asset['name']}", width="stretch")
                 replace = st.checkbox("我已逐張核對：變更前綁定原圖仍是本款同一商品",
                                       key="image_reuse_stale_" + key)
                 button_label = "沿用舊圖並更新本商品配對"

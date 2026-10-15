@@ -25,6 +25,8 @@ CHUNK_SIZE = 20000  # Also below 50k UTF-16 units for all-emoji content.
 MAX_IMAGE_MB = 20
 MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
 MAX_LEGACY_IMAGE_BYTES = 2 * 1024 * 1024  # Larger originals use NAS, not Sheets payloads.
+MAX_IMAGE_PIXELS = 25_000_000
+MAX_JPEG_PIXELS = 64_000_000  # JPEG previews use decoder downsampling before loading.
 
 
 def serialize(value):
@@ -82,8 +84,11 @@ def validate_image(data, name):
         raise DispatchError(f"每張圖片需為非空檔案且不超過 {MAX_IMAGE_MB} MB；保留原檔，不自動壓縮")
     try:
         with Image.open(BytesIO(data)) as image:
-            if image.format not in ("JPEG", "PNG", "WEBP") or image.width * image.height > 25000000:
+            if image.format not in ("JPEG", "PNG", "WEBP"):
                 raise DispatchError("請使用 JPG、PNG、WebP 靜態商品圖，且不超過 2500 萬像素")
+            pixel_limit = MAX_JPEG_PIXELS if image.format == "JPEG" else MAX_IMAGE_PIXELS
+            if image.width * image.height > pixel_limit:
+                raise DispatchError(f"圖片超過 {pixel_limit // 10000} 萬像素上限；保留原檔，不自動壓縮")
             if getattr(image, "is_animated", False):
                 raise DispatchError("請使用靜態商品圖")
             mime = Image.MIME[image.format]
