@@ -33,7 +33,7 @@ def prepare_workbench(store, batch, item_ids, actor, *, history_checked=False, r
     for item in items:
         # Preserve the original approval rules, including explicitly acknowledged
         # legacy missing-source warnings; never turn such warnings into proof.
-        source_missing = item["source"].get("cost_audit_required") and not (item.get("cost_audit") or {}).get("source_ready")
+        source_missing = (item["source"].get("cost_audit_required") or "pricing" in item) and not (item.get("cost_audit") or {}).get("source_ready")
         if source_missing:
             missing.append(item["id"])
         errors += [f"{item['source']['code']}：{error}" for error in item_errors(
@@ -120,3 +120,4 @@ def advance_run(run, saved, item_id):
     result["completed"].append(item_id)
     current_item(saved, result)
     return result
+

@@ -3,6 +3,7 @@
 Never changes a quote worksheet or assumes a carton unit is a pricing unit.
 """
 from copy import deepcopy
+from dispatch_pricing import price_line, pricing_errors
 import re
 import unicodedata
 
@@ -107,6 +108,14 @@ def comparison_rows(item, text=None):
     codes = re.findall(r"BGD-[A-Z]+-\d+", text)
     source_code = source["code"] or source["no"]
     expected_price = f"售價{source.get('price', '')}元/{source.get('unit', '')}"
+    price_basis = f"10% 報價 {source.get('quote_10', '未讀取')} → 無條件進位 {source.get('price', '待確認')}"
+    if "pricing" in item:
+        try:
+            expected_price = price_line(item)
+            record = item["pricing"]
+            price_basis = f"本批成本 {record['cost']} ÷ (1 − {record['margin_percent']}%) → 直接進位 {record['price']}"
+        except ValueError as exc:
+            expected_price, price_basis = "", str(exc)
     unit_note = ("原表明示，仍需目視核對" if source.get("unit") else "原表單位待修正") if source.get("unit_mode") == "explicit" else (
         "已人工確認" if unit_confirmed(item) else "僅裝箱單位，須確認計價是否相同")
     return [
@@ -115,8 +124,8 @@ def comparison_rows(item, text=None):
         {"核對項目": "品名", "報價表／依據": source["name"],
          "準備發出的內容": next((line for line in lines if line and line != "正版授權"), "尚未產生"),
          "檢查結果": "人工確認款式／規格"},
-        {"核對項目": "售價", "報價表／依據": f"10% 報價 {source.get('quote_10', '未讀取')} → 無條件進位 {source.get('price', '待確認')}",
-         "準備發出的內容": prefixed("售價"), "檢查結果": "一致" if prefixed("售價") == expected_price and source.get("price") else "待處理"},
+        {"核對項目": "售價", "報價表／依據": price_basis,
+         "準備發出的內容": prefixed("售價"), "檢查結果": "一致" if prefixed("售價") == expected_price and source.get("price") and not pricing_errors(item) else "待處理"},
         {"核對項目": "計價單位", "報價表／依據": source.get("unit_evidence") or "未讀取",
          "準備發出的內容": f"每{source.get('unit') or '？'}計價", "檢查結果": unit_note},
         {"核對項目": "裝箱", "報價表／依據": source.get("carton", "未讀取"),
@@ -124,3 +133,4 @@ def comparison_rows(item, text=None):
         {"核對項目": "交期", "報價表／依據": "現行廣告預設，非供應商原文的保證", "準備發出的內容": prefixed("交貨"),
          "檢查結果": "請對照廠商最新交期"},
     ]
+

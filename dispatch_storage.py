@@ -507,7 +507,7 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
         self._evidence_index = None
         self._evidence_row_index = None
         for item in batch["items"]:
-            if not item["excluded"] and item["source"].get("cost_audit_required"):
+            if not item["excluded"] and (item["source"].get("cost_audit_required") or "pricing" in item):
                 groups[item["source"]["category"]].append(item)
         self._load_evidence([i["id"] for items in groups.values() for i in items])
         for category, items in groups.items():
@@ -529,3 +529,4 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
         if hasattr(self.spreadsheet, "client"):
             self.spreadsheet.client.set_timeout((10, 45))
         return extract_sheet_images(self.spreadsheet.export(ExportFormat.EXCEL), products)
+

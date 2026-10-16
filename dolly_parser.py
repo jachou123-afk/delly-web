@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.15")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.16")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -2776,3 +2776,4 @@ if user_input.strip():
                     persist_quote_images(final_category, selected_target["row_index"], planned_update_block, quote_images)
                     if not evidence_saved:
                         st.rerun()
+

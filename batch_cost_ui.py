@@ -6,10 +6,18 @@ import streamlit as st
 from batch_cost_audit import batch_signature, merge_selection, run_batch_audit
 from cost_audit import block
 from dispatch_manager import digest, now
+from dispatch_pricing import price_line
 from dispatch_review import unit_confirmed
 from audit_persistence import prime_saved_result
 from audit_save_recovery import PENDING_KEY, pending_save, attempt_save
 from audit_save_ui import complete_save
+
+
+def _advertised_price(item):
+    try:
+        return price_line(item)
+    except ValueError:
+        return "待確認"
 
 
 def _focus(batch, identity):
@@ -59,7 +67,8 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
             "rows": [n for n, identity in enumerate(visible_ids) if identity in selected], "cells": []}}
         st.dataframe([{"順序": i["order"], "品號": i["source"]["code"] or i["source"]["no"],
                        "商品": i["source"]["name"], "成本": block(i["source"].get("block", []))[1][10] or "缺資料",
-                       "售價": i["source"].get("price", "待確認"), "單位": i["source"].get("unit") or "待確認",
+                       "原表售價": i["source"].get("price", "待確認"),
+                       "本批售價": _advertised_price(i), "單位": i["source"].get("unit") or "待確認",
                        "圖片": f"{len(i['images'])} 張本批已存" if i["images"] else (
                            f"{len(candidates[i['id']])} 張" + ("圖庫已存" if all(a.get("binding_revision") for a in candidates[i['id']]) else "候選")
                            if candidates.get(i["id"]) else "待配對／補圖"),
@@ -70,7 +79,8 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
                      column_config={"順序": st.column_config.NumberColumn(width="small"),
                                     "品號": st.column_config.TextColumn(help="點品號查看單款明細，不改變左側勾選"),
                                     "商品": st.column_config.TextColumn(width="large"),
-                                    "售價": st.column_config.TextColumn(width="small"),
+                                    "原表售價": st.column_config.TextColumn(width="small"),
+                                    "本批售價": st.column_config.TextColumn(width="small"),
                                     "成本": st.column_config.TextColumn(width="small"),
                                     "單位": st.column_config.TextColumn(width="small")})
         st.caption("清單可在表格內往下捲動；上方總數包含未露出的列。")
@@ -179,3 +189,4 @@ def render_batch_cost_tools(store, batch, items, visible, row_state, candidates)
                                 "原文狀態": st.column_config.TextColumn(width="medium"),
                                 "計算／商品問題": st.column_config.TextColumn(width="large")})
     st.caption(f"共 {len(result['rows'])} 列，包含有差異、缺資料與讀取失敗的商品；可捲動或放大表格。點品號看下方詳細算式。")
+

@@ -15,6 +15,8 @@ from dispatch_manager import (
 )
 from dispatch_storage import BATCH_SHEET, asset_bytes, validate_image
 from dispatch_review import comparison_rows, hydrate_draft, unit_confirmed
+from dispatch_pricing import LEGACY, apply_item_pricing
+from dispatch_pricing_ui import select_pricing_policy, render_draft_pricing
 from cost_audit_ui import render_cost_review
 from supplier_names import vendor_filter_label
 from batch_cost_ui import render_batch_cost_tools
@@ -157,13 +159,14 @@ def _create(store, history):
     target = st.selectbox("目標聊天室", CHAT_TARGETS, index=None,
                           placeholder="請選擇目標聊天室", key="dispatch_destination_v876")
     actor = st.text_input("核對人", key="dispatch_actor")
+    pricing_policy = select_pricing_policy("dispatch_create_pricing_policy")
     st.caption("同名聊天室請先在 LINE 確認群組成員。圖片與文案的已發狀態，依這個目標聊天室分開記錄。")
     if st.button("建立雲端草稿", type="primary", disabled=not selected or not name.strip() or not target or not actor.strip() or (len(selected) < len(scope) and not excluded_reason.strip())):
         try:
             fresh = store.catalog()
             if name == automatic_name:
                 name = _next_batch_name(store.list_batches())
-            batch = new_batch(name, target, scope, actor, selected, excluded_reason)
+            batch = new_batch(name, target, scope, actor, selected, excluded_reason, pricing_policy=pricing_policy)
             changes = source_changes(batch, fresh)
             if changes:
                 raise DispatchError("來源已變動，請重新載入：" + "；".join(changes))
@@ -264,7 +267,7 @@ def _draft_item(store, batch, item, history, source_images=None):
         if source.get("unit_mode") == "legacy" and not unit_confirmed(item):
             st.warning("以下為預覽：計價單位尚待確認，不能直接列為可發送。")
         text = st.text_area("LINE 文案", item["copy"], height=300, key=prefix + "_copy")
-        st.caption("售價與裝箱單位需和報價表一致。修改後請重新核對。")
+        st.caption("售價依本批定價規則，裝箱單位依報價表。修改後請重新核對。")
     actor = batch["actor"]
     library_assets = {a["sha256"]: a for _, a in prepared}
     for identity in keep:
@@ -333,6 +336,10 @@ def _draft_item(store, batch, item, history, source_images=None):
                               copy=matches[0]["copy"], review=None)
                 chosen.pop("unit_confirmation", None)
                 chosen.pop("cost_audit", None)
+                if "pricing_policy" in updated:
+                    priced = apply_item_pricing(chosen, updated["pricing_policy"])
+                    chosen.clear()
+                    chosen.update(priced)
                 st.session_state.pop("dispatch_review_catalog", None)
                 st.session_state.pop("dispatch_source_images_" + batch["id"], None)
                 updated["audit"].append({"at": now(), "actor": actor, "action": "更新本款來源", "item": item["id"]})
@@ -364,6 +371,7 @@ def _draft(store, batch, history):
         item["source"]["cost_audit_required"] = True
     from review_issues_ui import render_review_issues
     render_review_issues(store, batch, registry)
+    render_draft_pricing(store, batch, _save)
     with st.expander("修改批次名稱或目標聊天室"):
         with st.form("dispatch_details_" + batch["id"] + batch.get("_revision", "")):
             name = st.text_input("批次名稱", value=batch["name"])
@@ -784,3 +792,4 @@ def render_dispatch_manager(store_factory, correction_tools=None):
         _progress(store, batch, history)
     with st.expander("核對與操作紀錄"):
         st.json({"操作": batch["audit"], "LINE 畫面核對": batch["observations"], "最終對帳": batch["reconciliation"]})
+

@@ -137,7 +137,7 @@ def test_management_landing_is_read_only_and_read_error_does_not_look_empty():
 def test_select_source_create_draft_and_reload_keeps_all_products():
     app = AppTest.from_string(app_source(), default_timeout=15).run()
     widget(app, "button", "載入報價表商品").click().run()
-    widget(app, "selectbox", "目標聊天室").set_value("【利潤10%】 自動排廣告群組").run()
+    widget(app, "selectbox", "目標聊天室").set_value("【直發】自動排廣告群組").run()
     widget(app, "text_input", "核對人").set_value("測試人").run()
     widget(app, "button", "建立雲端草稿").click().run()
     assert not app.exception
@@ -201,7 +201,7 @@ def test_new_batch_refreshes_cloud_sequence_before_save_and_offers_two_chats():
     widget(app, "button", "載入報價表商品").click().run()
     assert widget(app, "text_input", "批次名稱").value == "商品批次 001"
     destination = widget(app, "selectbox", "目標聊天室")
-    assert destination.options == ["周俊安", "【利潤10%】 自動排廣告群組"]
+    assert destination.options == ["周俊安", "【直發】自動排廣告群組"]
     assert destination.value is None
     assert widget(app, "button", "建立雲端草稿").disabled
     # Another computer creates a batch after this form was opened.
@@ -230,18 +230,18 @@ def test_edit_chat_dropdown_preserves_old_target_until_explicit_save():
     store = CloudDispatchStore(app.session_state["test_spreadsheet"])
     before = deepcopy(store.list_batches()[0])
     destination = widget(app, "selectbox", "目標聊天室")
-    assert destination.options[:2] == ["周俊安", "【利潤10%】 自動排廣告群組"]
+    assert destination.options[:2] == ["周俊安", "【直發】自動排廣告群組"]
     assert destination.value == before["target"] == "測試群組"
     assert not any(w.label == "目標聊天室完整名稱" for w in app.text_input)
-    destination.set_value("【利潤10%】 自動排廣告群組").run()
+    destination.set_value("【直發】自動排廣告群組").run()
     assert store.list_batches()[0] == before
     widget(app, "button", "儲存批次設定").click().run()
     assert not app.exception
     saved = store.list_batches()[0]
-    assert saved["target"] == "【利潤10%】 自動排廣告群組"
+    assert saved["target"] == "【直發】自動排廣告群組"
     assert saved["name"] == before["name"] and saved["created_at"] == before["created_at"]
     assert saved["status"] == "draft" and saved["observations"] == []
-    assert widget(app, "selectbox", "目標聊天室").options == ["周俊安", "【利潤10%】 自動排廣告群組"]
+    assert widget(app, "selectbox", "目標聊天室").options == ["周俊安", "【直發】自動排廣告群組"]
 
 
 def test_ready_draft_can_be_approved_but_no_item_becomes_sent():
@@ -290,3 +290,4 @@ def test_main_app_can_switch_to_dispatch_without_loading_cost_settings():
     assert not app.exception
     assert any(h.value == "📣 發送管理" for h in app.header)
     assert any(b.label == "載入報價表商品" for b in app.button)
+

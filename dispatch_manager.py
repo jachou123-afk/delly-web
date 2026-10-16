@@ -1,6 +1,8 @@
 """Supplier-independent advertising batches. No LINE send API lives here."""
 from collections import Counter, defaultdict
 from copy import deepcopy
+from dispatch_pricing import (LEGACY, TIERED, validate_policy, apply_item_pricing,
+                              batch_pricing_errors, expected_copy, pricing_check)
 from datetime import datetime
 import hashlib
 import json
@@ -86,7 +88,7 @@ def sequence_gaps(products):
             for a, b in zip(sorted(nums), sorted(nums)[1:]) if b > a + 1]
 
 
-def new_batch(name, target, products, actor, selected_keys=None, excluded_reason=""):
+def new_batch(name, target, products, actor, selected_keys=None, excluded_reason="", *, pricing_policy=LEGACY):
     if not name.strip() or not target.strip() or not actor.strip() or not products:
         raise DispatchError("請填寫批次名稱、目標聊天室、核對人並選擇商品")
     if len(products) > 150:
@@ -107,11 +109,35 @@ def new_batch(name, target, products, actor, selected_keys=None, excluded_reason
                       "reason": excluded_reason.strip() if p["key"] not in chosen else "",
                       "image_receipts": [], "text_receipts": [], "uncertain": None,
                       "duplicate_note": ""})
-    return {"schema": 1, "id": uuid.uuid4().hex, "name": name.strip(),
+    result = {"schema": 1, "id": uuid.uuid4().hex, "name": name.strip(),
             "target": canonical_target(target), "actor": actor.strip(), "created_at": now(),
             "status": "draft", "approved_at": None, "approved_digest": None,
             "items": items, "observations": [], "reconciliation": None,
             "audit": [{"at": now(), "actor": actor.strip(), "action": "建立草稿"}]}
+    validate_policy(pricing_policy)
+    return apply_batch_pricing(result, pricing_policy, actor) if pricing_policy != LEGACY else result
+
+
+def apply_batch_pricing(batch, policy, actor):
+    """Explicit draft-only repricing; preserve source, images and all receipts."""
+    validate_policy(policy)
+    if (batch["status"] != "draft" or not actor.strip() or batch.get("observations")
+            or any(i.get("image_receipts") or i.get("text_receipts") or i.get("uncertain")
+                   for i in batch["items"])):
+        raise DispatchError("只能替無發送紀錄的草稿套用定價規則；已確認批次不可改價")
+    result = deepcopy(batch)
+    for n, item in enumerate(result["items"]):
+        if not item["excluded"]:
+            result["items"][n] = apply_item_pricing(item, policy)
+    if policy == LEGACY:
+        result.pop("pricing_policy", None)
+    else:
+        result["pricing_policy"] = policy
+    result.pop("batch_confirmation", None)
+    result.update(approved_at=None, approved_digest=None)
+    result["audit"].append({"at": now(), "actor": actor.strip(),
+                            "action": "套用本批廣告定價規則", "pricing_policy": policy})
+    return result
 
 
 def content_digest(item):
@@ -120,13 +146,18 @@ def content_digest(item):
         content["unit_confirmation"] = item["unit_confirmation"]
     if item.get("cost_audit"):
         content["cost_audit"] = item["cost_audit"]
+    if "pricing" in item:
+        content["pricing"] = item["pricing"]
     return digest(content)
 
 
 def batch_digest(batch):
-    return digest({"target": batch["target"], "items": [
+    content = {"target": batch["target"], "items": [
         {"id": i["id"], "order": i["order"], "content": content_digest(i)}
-        for i in batch["items"]]})
+        for i in batch["items"]]}
+    if "pricing_policy" in batch:
+        content["pricing_policy"] = batch["pricing_policy"]
+    return digest(content)
 
 
 _INTERNAL_COPY_PATTERN = re.compile(
@@ -155,7 +186,7 @@ def item_errors(item, *, require_review=True, require_source=True):
     errors = list(item["source"]["errors"])
     from review_issues import issue_reason
     errors.extend(issue_reason(issue) for issue in item.get("known_issues", []) if issue.get("status") == "open")
-    if item["source"].get("cost_audit_required"):
+    if item["source"].get("cost_audit_required") or "pricing" in item:
         from cost_audit import blockers
         errors.extend(blockers(item["source"], item.get("cost_audit"), require_source=require_source))
     if item["source"].get("unit_mode") == "legacy" and item["source"].get("copy") and not unit_confirmed(item):
@@ -165,7 +196,13 @@ def item_errors(item, *, require_review=True, require_source=True):
     if len(item["images"]) > 5:
         errors.append("每款最多 5 張圖片")
     text = item["copy"].strip()
-    expected = item["source"]["copy"]
+    try:
+        expected = expected_copy(item)
+    except ValueError as exc:
+        errors.append(str(exc))
+        expected = item["source"].get("copy", "")
+    if "pricing" in item:
+        errors.extend(pricing_check(item, item.get("cost_audit"))["errors"])
     if expected:
         codes = re.findall(r"BGD-[A-Z]+-\d+", text)
         if codes != [item["source"]["code"]]:
@@ -174,7 +211,8 @@ def item_errors(item, *, require_review=True, require_source=True):
             required = [line for line in expected.splitlines() if line.startswith(prefix)]
             actual = [line for line in text.splitlines() if line.startswith(prefix)]
             if not required or actual != required:
-                errors.append(f"{prefix}需與雲表一致；要調價或改單位請先修正報價表")
+                errors.append(f"{prefix}需與本批定價規則一致" if prefix == "售價" and "pricing" in item
+                              else f"{prefix}需與雲表一致；要調價或改單位請先修正報價表")
     else:
         errors.append("先處理來源資料，文案尚未能產生；不判定為品號錯誤")
     if _contains_internal_copy_details(text):
@@ -222,7 +260,7 @@ def source_changes(batch, fresh_products):
     by_identity = defaultdict(list)
     for p in fresh_products:
         by_identity[p["identity"]].append(p)
-    changes = []
+    changes = batch_pricing_errors(batch)
     for item in batch["items"]:
         if item["excluded"]:
             continue
@@ -262,7 +300,7 @@ def approve_batch(batch, fresh_products, history, actor, *, batch_review=False,
         if not item["excluded"] and prior_activity(result, item, history) and not item["duplicate_note"].strip():
             errors.append(f"{item['source']['code']}：同聊天室已有安排／發送紀錄，請填寫再次安排原因")
     missing_source = [i["id"] for i in result["items"] if not i["excluded"]
-                      and i["source"].get("cost_audit_required")
+                      and (i["source"].get("cost_audit_required") or "pricing" in i)
                       and not (i.get("cost_audit") or {}).get("source_ready")]
     if batch_review and missing_source and not acknowledge_missing_source:
         errors.append("本批有缺廠商原文的商品，請先確認已知悉此限制；表內重算不代表原文正確")
@@ -378,3 +416,4 @@ def finish_batch(batch, actor, evidence):
     result["status"] = "completed"
     result["reconciliation"] = {"at": now(), "actor": actor.strip(), "evidence": evidence.strip(), "report": report}
     return result
+
