@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.14")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.15")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -1044,6 +1044,11 @@ def parse_text_legacy(text):
         if m:
             code = normalize_code(m.group(1))
             name = clean_product_name(m.group(2))
+            # A weight followed by a unit price is metadata, not a second SKU.
+            # Do not infer whether that unlabelled weight is per item or carton.
+            if (re.fullmatch(r"\d+(?:\.\d+)?(?:kg|g)", code, re.I)
+                    and re.match(r"^(?:一|每|單)(?:個|隻|只|盒|套|雙|件)\s*(?:包郵|價格|價)", m.group(2))):
+                continue
             if (re.search(r'[A-Za-z]', code) or '-' in code) and len(code) >= 4 and name and len(name) >= 2:
                 if not re.search(r'(?:這|这|都是|價格|价格|裝箱|装箱|箱數|箱数|毛重|尺寸|彩盒|外箱|亞克力|亚克力|包裝|包装|條碼|条码)', name[:6]):
                     products.append({"code": code, "name": name})
@@ -1278,6 +1283,18 @@ def parse_text(text):
     """單一報價的保守解析；不把多則獨立報價套用同一組數字。"""
     from inline_quote_parser import expand_inline_quote
     normalized = expand_inline_quote(zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw"))
+    # Strict aliases only: a quantity-labelled specification must contain a
+    # whole count and unit; dimension labels must retain explicit cm/mm units.
+    # The untouched source remains in raw_text below.
+    normalized = re.sub(
+        r"(?m)^\s*裝箱規格\s*[:：]\s*(\d+\s*(?:個|隻|只|盒|套|雙|件|pcs))\s*$",
+        r"裝箱量:\1", normalized, flags=re.I,
+    )
+    normalized = re.sub(
+        r"(?mi)^\s*(單彩盒尺寸|裝箱尺寸)\s*[:：]?\s*(\d+(?:\.\d+)?(?:\s*[*x×]\s*\d+(?:\.\d+)?){2}\s*(?:cm|mm|公分|毫米))\s*$",
+        lambda m: ("彩盒尺寸:" if m[1] == "單彩盒尺寸" else "外箱尺寸:") + m[2],
+        normalized,
+    )
     rack_context = wooden_rack_context(normalized)
     cost_basis_text = wooden_rack_cost_basis_text(normalized)
     price_basis_text = (
@@ -1486,6 +1503,8 @@ def parse_text(text):
         line = line.strip()
         if line in product_names:
             continue
+        if re.match(r"^\d+(?:\.\d+)?\s*(?:kg|g)\s+(?:一|每|單)(?:個|隻|只|盒|套|雙|件)\s*(?:包郵|價格|價)", line, re.I):
+            notes.append(line)
         if has_affirmative_license_marker(line):
             notes.append("正版授權")
             continue
