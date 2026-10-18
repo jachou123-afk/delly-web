@@ -346,6 +346,8 @@ def test_loose_weight_like_fields_block_without_overriding_valid_weight(weight_l
     [
         ("整箱重量:6kg", 6, 0),
         ("整箱毛重:6kg", 6, 0),
+        ("裝箱毛重:23KGS", 23, 0),
+        ("装箱毛重:23KGS", 23, 0),
         ("箱重:6kg", 6, 0),
         ("毛重:6kg", 6, 0),
         ("單個重量:60g", 0, 60),

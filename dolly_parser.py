@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.16")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.17")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -699,14 +699,14 @@ def weight_field_info(value):
     strict = re.fullmatch(
         r"(?:約\s*)?"
         r"(?P<value>\d+(?:\.\d+)?(?:\s*[/／]\s*\d+(?:\.\d+)?)?)"
-        r"\s*(?P<unit>kg|公斤|千克|g|公克|克)?\s*"
+        r"\s*(?P<unit>kgs?|公斤|千克|g|公克|克)?\s*"
         r"(?:\(\s*(?P<scope>單個|每個|單件|每件)\s*\))?\s*",
         match["rest"],
         re.I,
     )
     supported = {
         "單個重量", "每個重量", "單件重量", "每件重量", "單重",
-        "整箱毛重", "整箱重量", "箱重", "毛重",
+        "整箱毛重", "裝箱毛重", "整箱重量", "箱重", "毛重",
         "整箱毛淨重", "箱毛淨重", "毛淨重",
     }
     scope = strict["scope"] if strict else ""
