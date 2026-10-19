@@ -318,6 +318,19 @@ def test_mc_z0001_wooden_rack_is_optional_and_uses_no_rack_inputs():
     assert "15" not in formulas["cost"]
 
 
+@pytest.mark.parametrize("rack", ["木架大约:5-8kg(费用15元)", "木架大約:4-7kg（費用：15元）"])
+def test_standalone_rack_fee_label_preserves_optional_cost_scope(rack):
+    raw = "測試杯\n型號:RACK-FEE\n每箱數量:36pcs\n單個價格:17.9元\n整箱重量:18.5kg\n" + rack
+    common, _ = ns["parse_text"](raw)
+    assert (common["price"], common["qty"], common["weight"]) == (17.9, 36, 18.5)
+    assert common["issues"] == []
+    assert "可加木架；成本按無木架的進價及重量計算" in common["extra_tags"]
+    assert "15元" in common["extra_tags"]
+    for suffix in ("\n已含木架", "\n木架標配"):
+        blocked, _ = ns["parse_text"](raw + suffix)
+        assert blocked["issues"]
+
+
 def test_labeled_wooden_rack_price_and_weight_never_override_base_inputs():
     raw = """測試商品
 型號:RACK-SAFE-1

@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.17")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.18")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -1184,7 +1184,7 @@ def wooden_rack_context(text):
     standalone_addon = bool(re.search(
         rf"(?m)^\s*{rack_term}\s*(?:大約|約)?\s*[:：]?\s*"
         r"\d+(?:\.\d+)?(?:\s*[-~～]\s*\d+(?:\.\d+)?)?\s*(?:kg|公斤|千克|g|公克|克)\s*"
-        r"[\(（]\s*\d+(?:\.\d+)?\s*元\s*[\)）]\s*$",
+        r"[\(（]\s*(?:費用\s*[:：]?\s*)?\d+(?:\.\d+)?\s*元\s*[\)）]\s*$",
         normalized,
         re.I,
     ))
