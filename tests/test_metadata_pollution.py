@@ -622,3 +622,21 @@ def test_line_copy_hides_unitless_outer_and_weight_fields():
         "打開:105*68.5cm",
         "白盒:17.2*4.7*4.7cm",
     ]
+
+
+@pytest.mark.parametrize("note", ["視頻在朋友圈", "视频在朋友圈", "影片在朋友圈"])
+def test_weight_allows_exact_media_location_note(note):
+    info = NS["weight_field_info"](f"毛重：11KG({note})")
+    assert info["known"] and info["strict"] and info["unit"].lower() == "kg"
+    assert not NS["metadata_format_issues"](f"毛重：11KG({note})")
+
+
+@pytest.mark.parametrize("tail", ["(不含包裝)", "(視頻在朋友圈另加2kg)", "(視頻在朋友圈)另加2kg", "(影片在朋友圈)(重量待確認)"])
+def test_weight_media_note_does_not_clear_other_conditions(tail):
+    issues = NS["metadata_format_issues"]("毛重：11KG" + tail)
+    assert issues
+
+
+def test_media_note_does_not_confirm_unknown_weight_basis():
+    assert NS["metadata_format_issues"]("重量：11KG(視頻在朋友圈)")
+    assert NS["metadata_format_issues"]("毛重：11(視頻在朋友圈)")

@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.18")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.19")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -701,7 +701,9 @@ def weight_field_info(value):
         r"(?P<value>\d+(?:\.\d+)?(?:\s*[/／]\s*\d+(?:\.\d+)?)?)"
         r"\s*(?P<unit>kgs?|公斤|千克|g|公克|克)?\s*"
         r"(?:\(\s*(?P<scope>單個|每個|單件|每件)\s*\))?\s*",
-        match["rest"],
+        # Only this exact media-location note is non-weight metadata.
+        # Keep the original source untouched; other trailing qualifiers block.
+        re.sub(r"\s*\((?:視頻|视频|影片)在朋友圈\)\s*$", "", match["rest"]),
         re.I,
     )
     supported = {
