@@ -59,3 +59,36 @@ def test_changed_formula_does_not_open_fast_cards():
     assert any("第二次檢查未通過" in e.value for e in app.error)
     assert RUN_KEY not in app.session_state
     assert not any(b.label == "完成並下一則" for b in app.button)
+
+
+def test_selecting_local_originals_requires_upload_before_second_check():
+    app = AppTest.from_string(app_source(approved=True), default_timeout=20).run()
+    widget(app, "checkbox", "本輪改用已下載的原圖包").check().run()
+    widget(app, "checkbox", "已核對 LINE「測試群組」與未發範圍，且本輪只有我執行").check()
+    widget(app, "button", "第二次檢查並開啟工作台").click().run()
+    assert not app.exception
+    assert any("請先上傳本輪原圖 ZIP" in e.value for e in app.error)
+    assert RUN_KEY not in app.session_state
+    assert not CloudDispatchStore(app.session_state["test_spreadsheet"]).list_batches()[0]["observations"]
+
+
+def test_uploaded_originals_open_real_cards_and_keep_frozen_text(monkeypatch):
+    from io import BytesIO
+    import streamlit
+    from dispatch_workbench import card_images
+    from dispatch_fakes import image_data
+    from test_dispatch_original_zip import packed
+    app = AppTest.from_string(app_source(approved=True), default_timeout=20).run()
+    original_uploader = streamlit.file_uploader
+    monkeypatch.setattr(streamlit, "file_uploader", lambda label, *args, **kwargs:
+                        BytesIO(packed()) if label == "本輪原圖 ZIP" else original_uploader(label, *args, **kwargs))
+    widget(app, "checkbox", "本輪改用已下載的原圖包").check().run()
+    widget(app, "checkbox", "已核對 LINE「測試群組」與未發範圍，且本輪只有我執行").check()
+    widget(app, "button", "第二次檢查並開啟工作台").click().run()
+    assert not app.exception and not app.error
+    run = app.session_state[RUN_KEY]
+    batch = CloudDispatchStore(app.session_state["test_spreadsheet"]).list_batches()[0]
+    assert run["original_zip_sha256"]
+    assert app.code[0].value == batch["items"][0]["copy"]
+    assert card_images(run, batch["items"][0])[0][1] == image_data()
+    assert not batch["observations"]

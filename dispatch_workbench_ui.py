@@ -2,7 +2,7 @@
 import streamlit as st
 from image_thumbnails import display_bytes
 
-from dispatch_manager import item_status
+from dispatch_manager import DispatchError, item_status
 from dispatch_workbench import prepare_workbench, current_item, card_images, complete_current, advance_run
 
 RUN_KEY = "dispatch_workbench_run"
@@ -46,6 +46,8 @@ def render_workbench(store, batch):
             return False
         st.info(f"目標：{run['target']}｜第 {len(run['completed']) + 1} / {len(run['items'])} 款｜執行人：{run['actor']}")
         st.caption(f"第二次檢查：{run['checked_at']}。使用此凍結版本；本頁不會自動操作 LINE。")
+        if run.get("original_zip_sha256"):
+            st.caption("本輪使用已下載原圖；每張均已比對核准原圖 SHA-256，保留原檔與解析度。")
         if run["missing_source_ids"]:
             st.warning(f"沿用已確認的舊資料限制：{len(run['missing_source_ids'])} 款缺廠商原文；表內驗算一致不代表已核實原文。")
         with st.expander("一次下載全輪原圖與文案／操作規則"):
@@ -106,10 +108,20 @@ def render_workbench(store, batch):
                                    format_func=lambda k: by_id[k]["source"]["code"] + "｜" + by_id[k]["source"]["name"])
         actor = st.text_input("本輪執行／查驗人", value=batch["actor"], key=prefix + "_actor")
         checked = st.checkbox(f"已核對 LINE「{batch['target']}」與未發範圍，且本輪只有我執行", key=prefix + "_checked")
+        with st.expander("圖庫無法連線：使用已下載原圖"):
+            use_upload = st.checkbox("本輪改用已下載的原圖包", key=prefix + "_use_original_zip")
+            uploaded = None
+            if use_upload:
+                st.caption("只放本輪所選商品的完整原圖，ZIP 不超過 50 MB。逐張比對已核准圖片，保留原檔；來源、計價及防重發檢查照常執行。原圖只保留在本輪工作台，不修改圖庫。")
+                uploaded = st.file_uploader("本輪原圖 ZIP", type=["zip"], key=prefix + "_original_zip")
         if st.button("第二次檢查並開啟工作台", type="primary", disabled=not selection, key=prefix + "_start"):
             try:
+                if use_upload and uploaded is None:
+                    raise DispatchError("請先上傳本輪原圖 ZIP；沒有原圖時不會開啟工作台")
                 with st.spinner("整批驗算、核對版本及準備原圖；此步驟不發送、不登記完成…"):
-                    st.session_state[RUN_KEY] = prepare_workbench(store, batch, selection, actor, history_checked=checked)
+                    st.session_state[RUN_KEY] = prepare_workbench(
+                        store, batch, selection, actor, history_checked=checked,
+                        original_zip=uploaded.getvalue() if use_upload else None)
             except Exception as exc:
                 st.error(f"第二次檢查未通過：{exc}")
             else:

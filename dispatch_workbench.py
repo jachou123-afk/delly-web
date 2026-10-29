@@ -3,6 +3,7 @@
 This module never sends LINE messages. A ticket is session-local, not a send lock.
 """
 from copy import deepcopy
+import hashlib
 from io import BytesIO
 import uuid
 from zipfile import ZipFile
@@ -12,9 +13,11 @@ from dispatch_manager import (
     prior_activity, record_observation_batch, source_changes,
 )
 from dispatch_workflow import build_dispatch_package, selected_pending
+from dispatch_original_zip import original_zip_reader
 
 
-def prepare_workbench(store, batch, item_ids, actor, *, history_checked=False, read_asset=None):
+def prepare_workbench(store, batch, item_ids, actor, *, history_checked=False, read_asset=None,
+                      original_zip=None):
     """Revalidate prices/formulas, original evidence, source and original images once."""
     if not actor.strip() or not history_checked:
         raise DispatchError("請先填執行人，並確認聊天室、未發範圍及單一執行者")
@@ -45,6 +48,10 @@ def prepare_workbench(store, batch, item_ids, actor, *, history_checked=False, r
     if errors:
         raise DispatchError("\n".join(errors))
     store.verify_cost_checks(selected, require_source=not bool(missing))
+    if original_zip is not None:
+        if read_asset is not None:
+            raise DispatchError("原圖來源不能同時指定兩種")
+        read_asset = original_zip_reader(original_zip, [identity for i in items for identity in i["images"]])
     reader = read_asset or getattr(store, "get_display_asset", store.get_asset)
     package = build_dispatch_package(batch, [i["id"] for i in items], reader)
     return {
@@ -52,6 +59,7 @@ def prepare_workbench(store, batch, item_ids, actor, *, history_checked=False, r
         "revision": batch["_revision"], "approved_digest": batch["approved_digest"],
         "actor": actor.strip(), "checked_at": now(), "items": [i["id"] for i in items],
         "completed": [], "missing_source_ids": missing, "package": package, "blocked": False,
+        "original_zip_sha256": hashlib.sha256(original_zip).hexdigest() if original_zip is not None else "",
     }
 
 
@@ -98,12 +106,15 @@ def complete_current(batch, run, item_id, *, observed=False, note=""):
                 "本紀錄時間是登記時間，非 LINE 訊息時間。")
     if note.strip():
         evidence += " 補充查驗依據：" + note.strip()
+    if run.get("original_zip_sha256"):
+        evidence += " 原圖由本輪上傳包逐張匹配已核准 SHA-256；原圖包 SHA-256：" + run["original_zip_sha256"]
     updated = record_observation_batch(batch, item_ids=[item_id], actor=run["actor"],
                                        target=run["target"], evidence=evidence,
                                        action_id=run["id"] + ":" + item_id)
     updated["audit"].append({"at": now(), "action": "工作台第二次檢查後完成本款",
                              "actor": run["actor"], "run_id": run["id"], "item": item_id,
                              "checked_at": run["checked_at"], "digest": run["approved_digest"],
+                             "original_zip_sha256": run.get("original_zip_sha256", ""),
                              "missing_source_ids": run["missing_source_ids"]})
     return updated
 
