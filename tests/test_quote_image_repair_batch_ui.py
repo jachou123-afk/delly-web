@@ -23,7 +23,12 @@ def get_store():
     return st.session_state["test_store"]
 def uploader(*args, **kwargs):
     return BytesIO(st.session_state["test_zip"]) if st.session_state["test_zip"] is not None else None
-with patch.object(st, "file_uploader", uploader):
+def paced(store, **kwargs):
+    st.session_state["test_pacing_calls"] = st.session_state.get("test_pacing_calls", 0) + 1
+    if st.session_state.get("test_pacing_wait"):
+        kwargs["on_wait"](1.0)
+    return store
+with patch.object(st, "file_uploader", uploader), patch.object(ui, "paced_nas_store", paced):
     ui.render_batch_image_repair(get_store)
 '''
 

@@ -6,6 +6,7 @@ import json
 import streamlit as st
 
 from product_image_ui import clear_library_cache
+from batch_read_pacing import paced_nas_store
 from quote_image_repair_batch import (prepare_batch_repair, process_next_repair,
                                       repair_table, retry_failed_repair, safe_repair_error,
                                       repair_receipt_payload)
@@ -47,7 +48,9 @@ def render_batch_image_repair(get_store):
             return
         counts = Counter(item["status"] for item in run["items"])
         if run.get("halt"):
-            st.warning("服務回報 429，本次已停止；後續商品仍待處理，不會自動重試。")
+            local_wait = run["halt"].get("diagnostic", {}).get("kind") == "read_budget_wait"
+            st.warning("本地讀取等待達上限，本次已停止；後續商品仍待處理，沒有重送API請求。"
+                       if local_wait else "服務回報 429，本次已停止；後續商品仍待處理，不會自動重試。")
         st.caption(f"共 {len(run['items'])} 款／{len(package['assets'])} 張原圖；已完成 {counts['completed']}、待處理 {counts['ready']}、失敗 {counts['failed']}、查核未通過 {counts['blocked']}。")
         st.dataframe(repair_table(run), hide_index=True, width="stretch")
         confirmed = st.checkbox("我已逐款核對查核表的實際 NO、主圖與原圖組", key=PREFIX + "confirmed_" + run["scope_digest"])
@@ -55,6 +58,11 @@ def render_batch_image_repair(get_store):
         limit = st.number_input("本次最多處理款數", min_value=1, max_value=10, value=5, step=1, key=PREFIX + "limit")
         if st.button("處理下一批", key=PREFIX + "next", disabled=not confirmed or not actor.strip() or not counts["ready"]):
             progress = st.empty()
+            waited = [0.0]
+
+            def waiting(seconds):
+                waited[0] += seconds
+                progress.caption(f"Google Sheets 讀取節奏等待中，本批累積等待約 {waited[0]:.0f} 秒；不會重新送出保存請求。")
 
             def update(current):
                 st.session_state[PREFIX + "run"] = current
@@ -63,12 +71,17 @@ def render_batch_image_repair(get_store):
 
             try:
                 with st.spinner("依序保存原圖並以新 NAS 連線讀回核對…"):
-                    updated = process_next_repair(get_store(), package, run, actor=actor, limit=int(limit), on_update=update)
+                    store = paced_nas_store(get_store(), on_wait=waiting)
+                    updated = process_next_repair(store, package, run, actor=actor, limit=int(limit), on_update=update)
                 st.session_state[PREFIX + "run"] = updated
                 if any(item["status"] == "completed" for item in updated["items"]):
                     clear_library_cache()
-                st.session_state[PREFIX + "notice"] = ("服務回報 429，本次已停止；後續商品保持待處理，成功收據保留。"
-                    if updated.get("halt") else "本次已結束。成功款已保留收據，不重做；失敗款保留原保存方式，不自動切換或重試。")
+                halted = updated.get("halt")
+                st.session_state[PREFIX + "notice"] = (
+                    "本地讀取等待達上限，本次已停止；後續商品保持待處理，成功收據保留。"
+                    if halted and halted.get("diagnostic", {}).get("kind") == "read_budget_wait" else
+                    "服務回報 429，本次已停止；後續商品保持待處理，成功收據保留。" if halted else
+                    "本次已結束。成功款已保留收據，不重做；失敗款保留原保存方式，不自動切換或重試。")
                 st.rerun()
             except Exception as exc:
                 st.error("本次尚未全部確認：" + safe_repair_error(exc))

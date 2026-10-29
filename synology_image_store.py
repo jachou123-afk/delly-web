@@ -436,7 +436,15 @@ class SynologyImageStore:
                 return receipt
             raise
         files = result.get("files")
+        # getinfo may return one per-file error inside an otherwise successful
+        # response. Only the exact observed no-such-file shape is missing.
+        if (type(files) is list and len(files) == 1 and type(files[0]) is dict
+                and set(files[0]) == {"path", "code"}
+                and type(files[0]["path"]) is str and files[0]["path"] == path
+                and type(files[0]["code"]) is int and files[0]["code"] == 408):
+            return receipt
         if (not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict)
+                or "code" in files[0]
                 or files[0].get("path") != path or files[0].get("isdir") is not False
                 or not isinstance(files[0].get("additional"), dict)
                 or type(files[0]["additional"].get("size")) is not int

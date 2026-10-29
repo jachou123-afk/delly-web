@@ -5,7 +5,7 @@ import re
 
 from dispatch_manager import DispatchError, digest, now
 from dispatch_storage import asset_bytes
-from nas_dispatch_storage import NasDispatchStore
+from nas_dispatch_storage import NasDispatchStore, _same_location
 from product_images import source_problem, subject_key
 from product_image_storage import checked_image_diagnostic, image_error_diagnostic, image_error_summary
 from quote_image_repair import (prepare_image_repair, save_image_repair,
@@ -109,6 +109,10 @@ def safe_repair_error(exc):
         "本款 NAS 原圖讀回不一致；未確認完成",
         "本款原圖順序或商品配對不符；未確認完成",
         "本款商品或圖片版本在 NAS 讀回期間已變更；未確認完成",
+        "既有 NAS 原圖位置不符合本次原檔；未確認完成",
+        "既有 NAS 原圖與本次原檔不一致；未確認完成",
+        "既有 NAS 原圖位置在讀回期間已變更；未確認完成",
+        "既有商品或圖片版本在讀回期間已變更；未確認完成",
     }
     return message if message in allowed else "本款保存或讀回未通過；請單款核對，未自動重試"
 
@@ -195,6 +199,38 @@ def _fresh_nas_readback(store, plan, assets):
     return binding
 
 
+def _verify_complete_existing_nas(store, plan, assets):
+    """Read-only fast path; incomplete bindings/indices keep the adoption path.
+
+    The caller has just prepared and scope-checked ``plan``. This path never
+    publishes locations/bindings or substitutes legacy/display-only images.
+    """
+    binding = plan.get("binding")
+    expected = [asset["sha256"] for asset in assets]
+    if (not binding or binding["subject"] != subject_key(plan["source"])
+            or binding["assets"] != expected):
+        return None
+    before = deepcopy(store.image_locations(expected))
+    if set(before) != set(expected):
+        return None
+    nas = store._nas()
+    if any(not _same_location(before[asset["sha256"]], nas._metadata(asset)) for asset in assets):
+        raise DispatchError("既有 NAS 原圖位置不符合本次原檔；未確認完成")
+    with nas:
+        nas.check_root()
+        for asset in assets:
+            loaded = nas.get_asset(before[asset["sha256"]])
+            if asset_bytes(loaded) != asset_bytes(asset):
+                raise DispatchError("既有 NAS 原圖與本次原檔不一致；未確認完成")
+    after = store.image_locations(expected)
+    if after != before:
+        raise DispatchError("既有 NAS 原圖位置在讀回期間已變更；未確認完成")
+    final = prepare_image_repair(store, plan["source"]["identity"])
+    if final["snapshot_digest"] != plan["snapshot_digest"] or final["binding"] != binding:
+        raise DispatchError("既有商品或圖片版本在讀回期間已變更；未確認完成")
+    return binding
+
+
 def process_next_repair(store, package, run, *, actor, limit=MAX_CHUNK_PRODUCTS, on_update=None):
     """Process ready items once in order; failures never trigger automatic retries."""
     _require_nas(store)
@@ -213,18 +249,24 @@ def process_next_repair(store, package, run, *, actor, limit=MAX_CHUNK_PRODUCTS,
             if problem:
                 raise DispatchError(problem)
             assets = [package["assets"][sha] for sha in item["sha256"]]
-            saver = save_image_repair if updated["mode"] == "upload" else save_existing_nas_image_repair
-            phase = "save"
-            report = saver(store, plan, assets, actor=actor.strip())
-            if (not isinstance(report, list) or len(report) != 1
-                    or not isinstance(report[0], dict) or report[0].get("結果") not in SUCCESS):
-                if (isinstance(report, list) and report and isinstance(report[0], dict)
-                        and checked_image_diagnostic(report[0].get("diagnostic")) is not None):
-                    raise ImageStorageFailure(report[0]["diagnostic"])
-                reason = report[0].get("原因", "") if isinstance(report, list) and report and isinstance(report[0], dict) else ""
-                raise DispatchError(reason)
             phase = "readback"
-            binding = _fresh_nas_readback(store, plan, assets)
+            binding = (_verify_complete_existing_nas(store, plan, assets)
+                       if updated["mode"] == "existing_only" else None)
+            if binding is not None:
+                report = [{"結果": "已存在"}]
+            else:
+                saver = save_image_repair if updated["mode"] == "upload" else save_existing_nas_image_repair
+                phase = "save"
+                report = saver(store, plan, assets, actor=actor.strip())
+                if (not isinstance(report, list) or len(report) != 1
+                        or not isinstance(report[0], dict) or report[0].get("結果") not in SUCCESS):
+                    if (isinstance(report, list) and report and isinstance(report[0], dict)
+                            and checked_image_diagnostic(report[0].get("diagnostic")) is not None):
+                        raise ImageStorageFailure(report[0]["diagnostic"])
+                    reason = report[0].get("原因", "") if isinstance(report, list) and report and isinstance(report[0], dict) else ""
+                    raise DispatchError(reason)
+                phase = "readback"
+                binding = _fresh_nas_readback(store, plan, assets)
             receipt = {"identity": item["identity"], "sha256": list(item["sha256"]),
                        "result": report[0]["結果"], "mode": updated["mode"],
                        "source_hash": plan["source"]["source_hash"],
@@ -238,8 +280,11 @@ def process_next_repair(store, package, run, *, actor, limit=MAX_CHUNK_PRODUCTS,
             diagnostic = safe_service_diagnostic(exc)
             item.update(status="failed", reason=safe_repair_error(exc), receipt=None,
                         failure_phase=phase, failure_at=now(), diagnostic=diagnostic)
-            if diagnostic and (diagnostic.get("http_status") == 429 or diagnostic.get("api_code") == 429):
-                updated["halt"] = {"reason": "服務回報 429；本批已立即停止，未自動重試",
+            if diagnostic and (diagnostic.get("http_status") == 429 or diagnostic.get("api_code") == 429
+                               or diagnostic["kind"] == "read_budget_wait"):
+                reason = ("批次讀取等待已達上限；尚未送出請求，請稍後明確接續"
+                          if diagnostic["kind"] == "read_budget_wait" else "服務回報 429；本批已立即停止，未自動重試")
+                updated["halt"] = {"reason": reason,
                                    "identity": item["identity"], "phase": phase,
                                    "checked_at": now(), "diagnostic": diagnostic}
         if on_update is not None:
@@ -283,8 +328,11 @@ def repair_receipt_payload(package, run):
     halt = run.get("halt")
     if isinstance(halt, dict):
         diagnostic = checked_image_diagnostic(halt.get("diagnostic"))
-        if diagnostic and (diagnostic.get("http_status") == 429 or diagnostic.get("api_code") == 429):
-            payload["halt"] = {"reason": "服務回報 429；本批已立即停止，未自動重試",
+        if diagnostic and (diagnostic.get("http_status") == 429 or diagnostic.get("api_code") == 429
+                           or diagnostic["kind"] == "read_budget_wait"):
+            reason = ("批次讀取等待已達上限；尚未送出請求，請稍後明確接續"
+                      if diagnostic["kind"] == "read_budget_wait" else "服務回報 429；本批已立即停止，未自動重試")
+            payload["halt"] = {"reason": reason,
                                "identity": halt.get("identity") if halt.get("identity") in {i["identity"] for i in run["items"]} else None,
                                "phase": halt.get("phase") if halt.get("phase") in PHASES else None,
                                "diagnostic": diagnostic}

@@ -10,10 +10,11 @@ def checked_image_diagnostic(value):
     """Only fixed categories and bounded integers may leave storage failures."""
     if (not isinstance(value, dict) or not {"kind", "origin"} <= set(value)
             or set(value) - {"kind", "origin", "http_status", "api_code"}
-            or value.get("kind") not in {"google_sheets_api", "http", "network_timeout", "network_connection", "nas"}
-            or value.get("origin") != "typed"):
+            or value.get("kind") not in {"google_sheets_api", "http", "network_timeout", "network_connection", "nas", "read_budget_wait"}
+            or value.get("origin") != ("local" if value.get("kind") == "read_budget_wait" else "typed")
+            or (value.get("kind") == "read_budget_wait" and set(value) != {"kind", "origin"})):
         return None
-    result = {"kind": value["kind"], "origin": "typed"}
+    result = {"kind": value["kind"], "origin": value["origin"]}
     for key, low, high in (("http_status", 100, 599), ("api_code", 0, 999999)):
         if key in value:
             if type(value[key]) is not int or not low <= value[key] <= high:
@@ -27,9 +28,12 @@ def image_error_diagnostic(exc):
     from gspread.exceptions import APIError
     import requests
     from synology_image_store import NasDiagnosticError
+    from batch_read_pacing import ReadBudgetWaitExceeded
     seen, fallback = set(), None
     while exc is not None and id(exc) not in seen and len(seen) < 16:
         seen.add(id(exc))
+        if isinstance(exc, ReadBudgetWaitExceeded):
+            return {"kind": "read_budget_wait", "origin": "local"}
         kind = ("google_sheets_api" if isinstance(exc, APIError) else
                 "nas" if isinstance(exc, NasDiagnosticError) else
                 "http" if isinstance(exc, requests.exceptions.HTTPError) else None)
@@ -55,6 +59,8 @@ def image_error_summary(diagnostic):
     value = checked_image_diagnostic(diagnostic)
     if value is None:
         return "未分類保存錯誤；詳細內容已隱藏"
+    if value["kind"] == "read_budget_wait":
+        return "批次讀取等待已達上限；尚未送出請求，請稍後明確接續"
     parts = [{"google_sheets_api": "Google Sheets API 回應失敗", "http": "服務 HTTP 回應失敗",
               "network_timeout": "服務連線或讀取逾時", "network_connection": "服務連線中斷",
               "nas": "NAS 回應失敗"}[value["kind"]]]
