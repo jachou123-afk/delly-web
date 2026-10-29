@@ -6,6 +6,7 @@ import re
 from dispatch_manager import DispatchError, digest, now
 from dispatch_storage import asset_bytes
 from nas_dispatch_storage import NasDispatchStore, _same_location
+from nas_original_adoption import adopt_existing_nas_originals
 from product_images import source_problem, subject_key
 from product_image_storage import checked_image_diagnostic, image_error_diagnostic, image_error_summary
 from quote_image_repair import (prepare_image_repair, save_image_repair,
@@ -113,6 +114,8 @@ def safe_repair_error(exc):
         "既有 NAS 原圖與本次原檔不一致；未確認完成",
         "既有 NAS 原圖位置在讀回期間已變更；未確認完成",
         "既有商品或圖片版本在讀回期間已變更；未確認完成",
+        "圖片綁定儲存結果待確認；重新載入核對，未自動重試",
+        "圖片綁定寫後核對不符；未確認完成",
     }
     return message if message in allowed else "本款保存或讀回未通過；請單款核對，未自動重試"
 
@@ -254,6 +257,12 @@ def process_next_repair(store, package, run, *, actor, limit=MAX_CHUNK_PRODUCTS,
                        if updated["mode"] == "existing_only" else None)
             if binding is not None:
                 report = [{"結果": "已存在"}]
+            elif updated["mode"] == "existing_only":
+                def set_phase(value):
+                    nonlocal phase
+                    phase = value
+                report, binding = adopt_existing_nas_originals(
+                    store, plan, assets, actor=actor.strip(), on_phase=set_phase)
             else:
                 saver = save_image_repair if updated["mode"] == "upload" else save_existing_nas_image_repair
                 phase = "save"

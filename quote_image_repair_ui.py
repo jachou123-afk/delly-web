@@ -11,6 +11,7 @@ from quote_image_repair import (prepare_image_repair, save_image_repair,
                                 save_existing_nas_image_repair)
 from quote_image_repair_batch_ui import render_batch_image_repair
 from quote_image_inspection_ui import render_image_inspection
+from quote_image_append_ui import render_append_original
 
 
 PREFIX = "quote_image_repair_"
@@ -94,6 +95,7 @@ def render_image_repair(get_store):
     for error in errors:
         st.error(error)
     render_image_inspection(get_store, plan, assets, selection_errors=bool(errors))
+    render_append_original(get_store, plan, assets, selection_errors=bool(errors))
     st.caption("只保存本款原圖與商品配對；不修改品名、價格、原文或發送狀態。失敗時保留本次圖片，可再次按保存重試。")
     save_clicked = st.button("只保存本款圖片", key=PREFIX + "save", disabled=not assets or bool(errors))
     st.caption("已透過 NAS 檔案管理放入原圖時，可改用下方核對：只讀取原圖並核對後綁定，不重新上傳；缺檔或不一致會停止。")

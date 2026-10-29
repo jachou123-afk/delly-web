@@ -86,6 +86,7 @@ def forbid_writes(monkeypatch, sheet, store, *, forbid_adoption=True):
     monkeypatch.setattr(repair, "_fresh_nas_readback", forbidden)
     if forbid_adoption:
         monkeypatch.setattr(repair, "save_existing_nas_image_repair", forbidden)
+        monkeypatch.setattr(repair, "adopt_existing_nas_originals", forbidden)
 
 
 def assert_read_only(network, before):
@@ -130,7 +131,7 @@ def test_complete_existing_group_is_verified_once_without_adoption_or_any_write(
 
 
 @pytest.mark.parametrize("missing", ["binding", "all_locations", "one_location"])
-def test_incomplete_eligibility_uses_only_original_adoption_entry_and_keeps_mode(monkeypatch, missing):
+def test_incomplete_eligibility_uses_only_physical_adoption_entry_and_keeps_mode(monkeypatch, missing):
     sheet, store, network, package, assets, _ = fixture(2)
     if missing == "binding":
         sheet.sheets[PRODUCT_IMAGE_SHEET].rows = sheet.sheets[PRODUCT_IMAGE_SHEET].rows[:1]
@@ -147,8 +148,8 @@ def test_incomplete_eligibility_uses_only_original_adoption_entry_and_keeps_mode
     forbid_writes(monkeypatch, sheet, store, forbid_adoption=False)
     def adoption(*args, **kwargs):
         adopted.append((args[1]["source"]["identity"], [asset["sha256"] for asset in args[2]]))
-        return [{"結果": "待處理", "原因": "synthetic adoption not executed"}]
-    monkeypatch.setattr(repair, "save_existing_nas_image_repair", adoption)
+        raise DispatchError("synthetic adoption not executed")
+    monkeypatch.setattr(repair, "adopt_existing_nas_originals", adoption)
     result = repair.process_next_repair(store, package, run, actor="synthetic")
     assert adopted == [(package["products"][0]["identity"], [asset["sha256"] for asset in assets])]
     assert result["mode"] == "existing_only" and result["items"][0]["status"] == "failed"
