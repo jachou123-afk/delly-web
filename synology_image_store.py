@@ -59,6 +59,97 @@ def safe_https_origin(value):
         return ""
 
 
+_SHAPE_MISSING = object()
+_SHAPE_TYPES = frozenset({"missing", "null", "bool", "int", "float", "string",
+                          "array", "object", "other", "unavailable"})
+
+
+def _json_shape_type(value):
+    """Return fixed JSON type labels only; never a class name or remote value."""
+    if value is _SHAPE_MISSING:
+        return "missing"
+    return {type(None): "null", bool: "bool", int: "int", float: "float",
+            str: "string", list: "array", dict: "object"}.get(type(value), "other")
+
+
+@dataclass(frozen=True)
+class NasStatResponseShape:
+    """Value-free, fixed-field diagnostics for one exact-path getinfo failure."""
+    data_type: str = "unavailable"
+    files_type: str = "unavailable"
+    files_cardinality: str = "not_array"
+    file_type: str = "unavailable"
+    path_type: str = "unavailable"
+    path_exact_match: bool = None
+    isdir_type: str = "unavailable"
+    isdir_value: bool = None
+    additional_type: str = "unavailable"
+    size_type: str = "unavailable"
+    file_code: int = None
+    file_error_type: str = "unavailable"
+    file_error_code: int = None
+
+    def __post_init__(self):
+        # Construction is also fail-closed: callers cannot inject text into a
+        # diagnostic by instantiating this typed container directly.
+        for name in ("data_type", "files_type", "file_type", "path_type",
+                     "isdir_type", "additional_type", "size_type", "file_error_type"):
+            value = getattr(self, name)
+            if type(value) is not str or value not in _SHAPE_TYPES:
+                object.__setattr__(self, name, "unavailable")
+        if (type(self.files_cardinality) is not str or self.files_cardinality not in
+                {"not_array", "empty", "one", "many"}):
+            object.__setattr__(self, "files_cardinality", "not_array")
+        for name in ("path_exact_match", "isdir_value"):
+            if type(getattr(self, name)) is not bool:
+                object.__setattr__(self, name, None)
+        for name in ("file_code", "file_error_code"):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 <= value <= 999999:
+                object.__setattr__(self, name, None)
+
+    def safe_summary(self):
+        fields = [f"data={self.data_type}",
+                  f"files={self.files_type}/{self.files_cardinality}",
+                  f"file={self.file_type}", f"path={self.path_type}"]
+        if self.path_exact_match is not None:
+            fields.append("path_exact=" + ("true" if self.path_exact_match else "false"))
+        fields.append(f"isdir={self.isdir_type}")
+        if self.isdir_value is not None:
+            fields.append("isdir_value=" + ("true" if self.isdir_value else "false"))
+        fields.extend((f"additional={self.additional_type}", f"size={self.size_type}",
+                       f"file.error={self.file_error_type}"))
+        if self.file_code is not None:
+            fields.append(f"file.code={self.file_code}")
+        if self.file_error_code is not None:
+            fields.append(f"file.error.code={self.file_error_code}")
+        return "stat shape：" + ", ".join(fields)
+
+
+def _stat_response_shape(data, expected_path):
+    """Observe only fixed fields; no iteration over remote keys or file values."""
+    files = data.get("files", _SHAPE_MISSING) if type(data) is dict else _SHAPE_MISSING
+    card = ("empty" if not files else "one" if len(files) == 1 else "many") if type(files) is list else "not_array"
+    fields = {"data_type": _json_shape_type(data), "files_type": _json_shape_type(files),
+              "files_cardinality": card}
+    if type(files) is not list or len(files) != 1:
+        return NasStatResponseShape(**fields)
+    file = files[0]
+    fields["file_type"] = _json_shape_type(file)
+    if type(file) is not dict:
+        return NasStatResponseShape(**fields)
+    path, isdir, additional, error = (file.get(name, _SHAPE_MISSING)
+                                     for name in ("path", "isdir", "additional", "error"))
+    fields.update(path_type=_json_shape_type(path),
+                  path_exact_match=(path == expected_path) if type(path) is str else None,
+                  isdir_type=_json_shape_type(isdir), isdir_value=isdir,
+                  additional_type=_json_shape_type(additional),
+                  size_type=_json_shape_type(additional.get("size", _SHAPE_MISSING)) if type(additional) is dict else "unavailable",
+                  file_code=file.get("code"), file_error_type=_json_shape_type(error),
+                  file_error_code=error.get("code") if type(error) is dict else None)
+    return NasStatResponseShape(**fields)
+
+
 class NasDiagnosticError(DispatchError):
     """Only allowlisted categories and bounded numeric codes may reach upload UI."""
     LABELS = {
@@ -72,13 +163,14 @@ class NasDiagnosticError(DispatchError):
     }
 
     def __init__(self, message, *, kind, http_status=None, api_code=None,
-                 source_origin="", redirect_origin=""):
+                 source_origin="", redirect_origin="", stat_shape=None):
         super().__init__(message)
         self.kind = kind if kind in self.LABELS else "unknown"
         self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
         self.api_code = api_code if type(api_code) is int and 0 <= api_code <= 999999 else None
         self.source_origin = safe_https_origin(source_origin)
         self.redirect_origin = safe_https_origin(redirect_origin) if self.kind == "redirect" else ""
+        self.stat_shape = stat_shape if self.kind == "response_shape" and type(stat_shape) is NasStatResponseShape else None
 
     def safe_summary(self):
         fields = [self.LABELS.get(self.kind, "未分類錯誤")]
@@ -86,6 +178,8 @@ class NasDiagnosticError(DispatchError):
             fields.append(f"HTTP {self.http_status}")
         if self.api_code is not None:
             fields.append(f"API 代碼 {self.api_code}")
+        if self.stat_shape is not None:
+            fields.append(self.stat_shape.safe_summary())
         return "；".join(fields)
 
 
@@ -348,7 +442,7 @@ class SynologyImageStore:
                 or type(files[0]["additional"].get("size")) is not int
                 or files[0]["additional"]["size"] <= 0):
             raise NasDiagnosticError("NAS 原圖檔案資訊不完整；未當成缺圖或驗證完成",
-                                     kind="response_shape")
+                                     kind="response_shape", stat_shape=_stat_response_shape(result, path))
         size = files[0]["additional"]["size"]
         return {**receipt, "exists": True, "size": size,
                 "size_matches": size == receipt["expected_size"]}
