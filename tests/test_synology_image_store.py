@@ -50,7 +50,7 @@ class Session:
         assert kwargs["verify"] is True
         assert kwargs["allow_redirects"] is False
         assert kwargs["stream"] is True
-        assert kwargs["timeout"] == (8, 30)
+        assert kwargs["timeout"] == ((60, 60) if kwargs.get("files") is not None else (8, 30))
         params = kwargs["data"]
         response = self.override(params) if self.override else None
         if response is None:
@@ -335,7 +335,9 @@ def test_original_redirect_text_stays_compatible_and_never_follows_location():
         with SynologyImageStore(config(), lambda: session):
             pass
     assert str(error.value) == NAS_REDIRECT_ERROR
-    assert error.value.safe_summary() == "入口轉向；HTTP 307"
+    assert error.value.safe_summary().startswith("入口轉向；HTTP 307；")
+    assert error.value.transport_phase == "request_or_headers"
+    assert type(error.value.elapsed_ms) is int and 0 <= error.value.elapsed_ms <= 3600000
     assert_sanitized(error.value)
     assert len(session.calls) == 1
     assert session.calls[0][1]["allow_redirects"] is False
@@ -382,7 +384,9 @@ def test_redirect_error_carries_sanitized_origins_without_following_or_sending_c
     assert error.value.source_origin == "https://nas.example.test"
     assert error.value.redirect_origin == "https://target.example.test:5001"
     assert str(error.value) == NAS_REDIRECT_ERROR
-    assert error.value.safe_summary() == "入口轉向；HTTP 307"
+    assert error.value.safe_summary().startswith("入口轉向；HTTP 307；")
+    assert error.value.transport_phase == "request_or_headers"
+    assert type(error.value.elapsed_ms) is int and 0 <= error.value.elapsed_ms <= 3600000
     assert len(session.calls) == 1 and session.calls[0][1]["data"]["api"] == "SYNO.API.Info"
     assert not any("account" in kwargs["data"] or "passwd" in kwargs["data"] for _, kwargs in session.calls)
     assert response.closed and session.closed and session.trust_env is False

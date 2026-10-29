@@ -28,6 +28,8 @@ def _reason(exc):
     # Return only known labels/numeric codes, never remote text or config values.
     if not isinstance(exc, DispatchError):
         return "非預期錯誤；詳細內容已隱藏，未自動重試"
+    if isinstance(exc, NasDiagnosticError):
+        return exc.safe_summary()
     message = str(exc)
     code = re.fullmatch(r"NAS API 未完成（錯誤碼 ([0-9]{1,5}|未知)）；未重試登入或寫入", message)
     if code:
@@ -35,8 +37,6 @@ def _reason(exc):
     http = re.fullmatch(r"NAS 讀寫失敗（HTTP ([0-9]{3})）；未視為缺圖", message)
     if http:
         return "NAS HTTP " + http[1]
-    if isinstance(exc, NasDiagnosticError):
-        return exc.safe_summary()
     known = {
         "NAS 網路／憑證連線失敗；請確認連線，勿關閉憑證驗證": "網路或 TLS 憑證連線失敗",
         "NAS 入口已轉向；請重新確認網址，未跟隨或向轉向網址傳送帳密": "NAS 入口重新導向；已停止跟隨",
@@ -141,3 +141,6 @@ def render_nas_connection_check():
             st.caption("轉向目的地（僅 HTTPS origin；未跟隨）：" + result["redirect_origin"])
         if result["passed"]:
             st.caption("已通過：" + " → ".join(STEPS[step] for step in result["passed"]))
+        # Separate explicit opt-in; rendering this control performs no NAS I/O.
+        from nas_large_upload_probe import render_large_upload_probe
+        render_large_upload_probe(read_section)

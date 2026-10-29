@@ -10,7 +10,8 @@ def checked_image_diagnostic(value):
     """Only fixed categories and bounded integers may leave storage failures."""
     from synology_image_store import NasDiagnosticError
     if (not isinstance(value, dict) or not {"kind", "origin"} <= set(value)
-            or set(value) - {"kind", "origin", "http_status", "api_code", "nas_kind"}
+            or set(value) - {"kind", "origin", "http_status", "api_code", "nas_kind",
+                             "transport_phase", "elapsed_ms", "transport_cause"}
             or value.get("kind") not in {"google_sheets_api", "http", "network_timeout", "network_connection", "nas", "read_budget_wait"}
             or value.get("origin") != ("local" if value.get("kind") == "read_budget_wait" else "typed")
             or (value.get("kind") == "read_budget_wait" and set(value) != {"kind", "origin"})):
@@ -21,6 +22,17 @@ def checked_image_diagnostic(value):
                 or value["nas_kind"] not in {*NasDiagnosticError.LABELS, "unknown"}):
             return None
         result["nas_kind"] = value["nas_kind"]
+    for key, allowed in (("transport_phase", NasDiagnosticError.TRANSPORT_PHASE_LABELS),
+                         ("transport_cause", NasDiagnosticError.TRANSPORT_CAUSE_LABELS)):
+        if key in value:
+            if value["kind"] != "nas" or type(value[key]) is not str or value[key] not in allowed:
+                return None
+            result[key] = value[key]
+    if "elapsed_ms" in value:
+        if (value["kind"] != "nas" or type(value["elapsed_ms"]) is not int
+                or not 0 <= value["elapsed_ms"] <= NasDiagnosticError.MAX_ELAPSED_MS):
+            return None
+        result["elapsed_ms"] = value["elapsed_ms"]
     for key, low, high in (("http_status", 100, 599), ("api_code", 0, 999999)):
         if key in value:
             if type(value[key]) is not int or not low <= value[key] <= high:
@@ -47,6 +59,13 @@ def image_error_diagnostic(exc):
             result = {"kind": kind, "origin": "typed"}
             if isinstance(exc, NasDiagnosticError):
                 result["nas_kind"] = (exc.kind if type(exc.kind) is str and exc.kind in NasDiagnosticError.LABELS else "unknown")
+                fields = BaseException.__dict__["__dict__"].__get__(exc)
+                for key in ("transport_phase", "elapsed_ms", "transport_cause"):
+                    value = fields.get(key)
+                    if value is not None:
+                        candidate = checked_image_diagnostic({"kind": "nas", "origin": "typed", key: value})
+                        if candidate is not None:
+                            result[key] = candidate[key]
             status = (exc.http_status if isinstance(exc, NasDiagnosticError) else
                       getattr(getattr(exc, "response", None), "status_code", None))
             code = exc.api_code if isinstance(exc, NasDiagnosticError) else getattr(exc, "code", None)
@@ -79,6 +98,12 @@ def image_error_summary(diagnostic):
         parts.append(f"HTTP {value['http_status']}")
     if "api_code" in value:
         parts.append(f"API 代碼 {value['api_code']}")
+    if "transport_phase" in value:
+        parts.append("階段：" + NasDiagnosticError.TRANSPORT_PHASE_LABELS[value["transport_phase"]])
+    if "elapsed_ms" in value:
+        parts.append(f"耗時 {value['elapsed_ms']} ms")
+    if "transport_cause" in value:
+        parts.append(NasDiagnosticError.TRANSPORT_CAUSE_LABELS[value["transport_cause"]])
     return "；".join(parts)
 
 

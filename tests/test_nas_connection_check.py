@@ -92,7 +92,7 @@ def test_failed_login_once_never_writes_or_reconnects():
     for _ in range(4):
         assert checker.get(section, factory) == first
     assert first["failed_step"] == "connect"
-    assert first["reason"] == "NAS API 錯誤碼 400"
+    assert first["reason"] == "NAS API 回報失敗；API 代碼 400"
     calls = [kw["data"] for _, kw in session.calls]
     assert sum(p["method"] == "login" for p in calls) == 1
     assert not session.objects
@@ -113,6 +113,18 @@ def test_typed_diagnostic_receipt_preserves_only_safe_category_and_bounded_codes
     result = probe.run_probe(lambda: (_ for _ in ()).throw(error), lambda c: pytest.fail("network"))
     assert result["reason"] == expected and result["failed_step"] == "settings"
     assert "secret" not in json.dumps(result) and "private" not in json.dumps(result)
+
+
+def test_typed_transport_probe_diagnostic_does_not_stringify_exception():
+    class NoStringNasError(NasDiagnosticError):
+        def __str__(self):
+            raise AssertionError("typed NAS diagnostic must not stringify remote values")
+    error = NoStringNasError("synthetic-private", kind="connection",
+                             transport_phase="response_body", elapsed_ms=60000,
+                             transport_cause="read_timeout")
+    result = probe._reason(error)
+    assert "60000" in result and "讀取回應內容" in result and "底層讀取逾時" in result
+    assert "synthetic-private" not in result
 
 
 @pytest.mark.parametrize("location,expected", [
@@ -205,7 +217,7 @@ def test_concurrent_viewers_cannot_repeat_probe_or_mutate_receipt(monkeypatch):
 
 
 @pytest.mark.parametrize("status", ["passed", "failed", "unconfigured"])
-def test_actual_ui_has_receipt_no_public_input_retry_or_migration(monkeypatch, status):
+def test_tiny_probe_keeps_once_receipt_and_large_probe_is_separate_disabled_opt_in(monkeypatch, status):
     receipt = {"status": status, "passed": ["settings"] if status != "unconfigured" else [],
                "checked_at": "2026-01-01T00:00:00+00:00", "bytes": 77,
                "failed_step": "connect", "reason": "NAS API 錯誤碼 400"}
@@ -214,7 +226,9 @@ def test_actual_ui_has_receipt_no_public_input_retry_or_migration(monkeypatch, s
     monkeypatch.setattr(probe, "_deployment_check", probe.OncePerProcess())
     app = AppTest.from_string("from nas_connection_check import render_nas_connection_check\n"
                              "render_nas_connection_check()", default_timeout=15).run()
-    assert not app.exception and not app.button and not app.text_input
+    assert not app.exception and not app.text_input
+    assert len(app.button) == 1 and app.button[0].label == "執行一次大型上傳診斷"
+    assert app.button[0].disabled and not app.checkbox[0].value
     assert len(app.expander) == 1
     assert {"passed": len(app.success), "failed": len(app.warning),
             "unconfigured": len(app.info)}[status] == 1

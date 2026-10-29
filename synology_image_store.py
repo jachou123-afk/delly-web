@@ -4,19 +4,26 @@ This adapter is not enabled by merely importing it. Credentials belong in a
 server-side secret store, never in product rows, browser URLs or this module.
 """
 from dataclasses import dataclass, field
+from http.client import RemoteDisconnected
 import hashlib
 import ipaddress
 import json
+import math
 import re
+import socket
+import ssl
+from time import monotonic
 from urllib.parse import urlsplit
 
 import requests
+from urllib3 import exceptions as urllib3_errors
 
 from dispatch_manager import DispatchError
 
 
 MAX_JSON_BYTES = 64 * 1024
 TIMEOUT = (8, 30)
+UPLOAD_TIMEOUT = (60, 60)
 API_VERSIONS = {
     "SYNO.API.Auth": 3,
     "SYNO.FileStation.List": 2,
@@ -150,6 +157,66 @@ def _stat_response_shape(data, expected_path):
     return NasStatResponseShape(**fields)
 
 
+def safe_transport_cause(exc):
+    """Fixed native categories only; never stringify errors or follow payloads."""
+    categories = (
+        (RemoteDisconnected, "remote_disconnected"),
+        (TimeoutError, "socket_timeout"),
+        (ConnectionResetError, "connection_reset"),
+        (ConnectionAbortedError, "connection_aborted"),
+        (BrokenPipeError, "broken_pipe"),
+        (ConnectionRefusedError, "connection_error"),
+        (socket.gaierror, "dns_error"),
+        (ssl.SSLError, "tls_error"),
+        (urllib3_errors.ReadTimeoutError, "read_timeout"),
+        (getattr(urllib3_errors, "NameResolutionError", None), "dns_error"),
+        (urllib3_errors.NewConnectionError, "connection_error"),
+        (urllib3_errors.ConnectTimeoutError, "connect_timeout"),
+        (urllib3_errors.SSLError, "tls_error"),
+        (urllib3_errors.ProtocolError, "protocol_error"),
+        (requests.exceptions.ConnectTimeout, "connect_timeout"),
+        (requests.exceptions.ReadTimeout, "read_timeout"),
+        (requests.exceptions.SSLError, "tls_error"),
+        (requests.exceptions.Timeout, "timeout"),
+        (requests.exceptions.ConnectionError, "connection_error"),
+        (requests.exceptions.RequestException, "request_error"),
+    )
+    pending, seen, best = [exc], set(), (len(categories), "unknown")
+    def exception_mro(value):
+        mro = type.__dict__["__mro__"].__get__(type(value))
+        return mro if any(base is BaseException for base in mro) else ()
+    while pending and len(seen) < 16:
+        current = pending.pop(0)
+        mro = exception_mro(current)
+        if not mro or id(current) in seen:
+            continue
+        seen.add(id(current))
+        # Class identity/MRO is inspected without __class__, user attributes or
+        # exception __str__/__repr__. Wrapped ProtocolError args may carry the
+        # native socket error; unrelated strings/containers are never visited.
+        for rank, (known, label) in enumerate(categories):
+            if any(base is known for base in mro) and rank < best[0]:
+                best = (rank, label)
+                break
+        for field in ("__cause__", "__context__"):
+            child = BaseException.__dict__[field].__get__(current)
+            if exception_mro(child):
+                pending.append(child)
+        args = BaseException.__dict__["args"].__get__(current)
+        if type(args) is tuple:
+            pending.extend(child for child in args[:16] if exception_mro(child))
+    return best[1]
+
+
+def _transport_elapsed_ms(started):
+    elapsed = monotonic() - started
+    if (type(elapsed) not in (int, float)
+            or type(elapsed) is float and not math.isfinite(elapsed)):
+        return None
+    elapsed = max(0, min(NasDiagnosticError.MAX_ELAPSED_MS / 1000, elapsed))
+    return int(elapsed * 1000)
+
+
 class NasDiagnosticError(DispatchError):
     """Only allowlisted categories and bounded numeric codes may reach upload UI."""
     LABELS = {
@@ -161,9 +228,22 @@ class NasDiagnosticError(DispatchError):
         "invalid_json": "回應不是有效 JSON", "api": "NAS API 回報失敗",
         "response_shape": "API 回應結構不完整",
     }
+    MAX_ELAPSED_MS = 3_600_000
+    TRANSPORT_PHASE_LABELS = {"request_or_headers": "送出請求／等待標頭",
+                              "response_body": "讀取回應內容"}
+    TRANSPORT_CAUSE_LABELS = {
+        "socket_timeout": "底層 socket 逾時", "connection_reset": "連線被重設",
+        "connection_aborted": "連線被中止", "broken_pipe": "傳送管線中斷",
+        "remote_disconnected": "遠端關閉連線", "dns_error": "DNS 解析失敗",
+        "tls_error": "底層 TLS 失敗", "protocol_error": "底層傳輸協定錯誤",
+        "connect_timeout": "底層連線逾時", "read_timeout": "底層讀取逾時",
+        "connection_error": "連線錯誤", "timeout": "未細分逾時",
+        "request_error": "請求錯誤", "unknown": "底層原因未分類",
+    }
 
     def __init__(self, message, *, kind, http_status=None, api_code=None,
-                 source_origin="", redirect_origin="", stat_shape=None):
+                 source_origin="", redirect_origin="", stat_shape=None,
+                 transport_phase=None, elapsed_ms=None, transport_cause=None):
         super().__init__(message)
         self.kind = kind if kind in self.LABELS else "unknown"
         self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
@@ -171,6 +251,12 @@ class NasDiagnosticError(DispatchError):
         self.source_origin = safe_https_origin(source_origin)
         self.redirect_origin = safe_https_origin(redirect_origin) if self.kind == "redirect" else ""
         self.stat_shape = stat_shape if self.kind == "response_shape" and type(stat_shape) is NasStatResponseShape else None
+        self.transport_phase = (transport_phase if type(transport_phase) is str
+                                and transport_phase in self.TRANSPORT_PHASE_LABELS else None)
+        self.elapsed_ms = (elapsed_ms if type(elapsed_ms) is int
+                           and 0 <= elapsed_ms <= self.MAX_ELAPSED_MS else None)
+        self.transport_cause = (transport_cause if type(transport_cause) is str
+                                and transport_cause in self.TRANSPORT_CAUSE_LABELS else None)
 
     def safe_summary(self):
         fields = [self.LABELS.get(self.kind, "未分類錯誤")]
@@ -180,6 +266,12 @@ class NasDiagnosticError(DispatchError):
             fields.append(f"API 代碼 {self.api_code}")
         if self.stat_shape is not None:
             fields.append(self.stat_shape.safe_summary())
+        if self.transport_phase is not None:
+            fields.append("階段：" + self.TRANSPORT_PHASE_LABELS[self.transport_phase])
+        if self.elapsed_ms is not None:
+            fields.append(f"耗時 {self.elapsed_ms} ms")
+        if self.transport_cause is not None:
+            fields.append(self.TRANSPORT_CAUSE_LABELS[self.transport_cause])
         return "；".join(fields)
 
 
@@ -275,32 +367,38 @@ class SynologyImageStore:
         if not re.fullmatch(r"(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.cgi", path):
             raise DispatchError("NAS 回傳不安全的 API 路徑，已停止連線")
         response = None
+        phase, started = "request_or_headers", monotonic()
+        def failure(message, **details):
+            return NasDiagnosticError(message, transport_phase=phase,
+                                      elapsed_ms=_transport_elapsed_ms(started), **details)
         try:
             response = self._session.post(
                 self.config.base_url.rstrip("/") + "/webapi/" + path,
-                data=data, files=files, timeout=TIMEOUT, allow_redirects=False,
+                data=data, files=files, timeout=UPLOAD_TIMEOUT if files is not None else TIMEOUT,
+                allow_redirects=False,
                 verify=True, stream=True,
             )
             if 300 <= response.status_code < 400:
-                raise NasDiagnosticError(NAS_REDIRECT_ERROR, kind="redirect", http_status=response.status_code,
+                raise failure(NAS_REDIRECT_ERROR, kind="redirect", http_status=response.status_code,
                                          source_origin=self.config.base_url,
                                          redirect_origin=response.headers.get("Location"))
             if response.status_code != 200:
-                raise NasDiagnosticError(f"NAS 讀寫失敗（HTTP {response.status_code}）；未視為缺圖",
+                raise failure(f"NAS 讀寫失敗（HTTP {response.status_code}）；未視為缺圖",
                                          kind="http", http_status=response.status_code)
             length = response.headers.get("Content-Length")
             if length is not None:
                 try:
                     length = int(length)
                 except ValueError:
-                    raise NasDiagnosticError("NAS 回應長度不合法", kind="response_length") from None
+                    raise failure("NAS 回應長度不合法", kind="response_length") from None
                 if length < 0 or length > limit:
-                    raise NasDiagnosticError("NAS 回應超過允許大小，已停止讀取", kind="response_size")
+                    raise failure("NAS 回應超過允許大小，已停止讀取", kind="response_size")
             chunks, size = [], 0
+            phase = "response_body"
             for chunk in response.iter_content(chunk_size=64 * 1024):
                 size += len(chunk)
                 if size > limit:
-                    raise NasDiagnosticError("NAS 回應超過允許大小，已停止讀取", kind="response_size")
+                    raise failure("NAS 回應超過允許大小，已停止讀取", kind="response_size")
                 chunks.append(chunk)
             return b"".join(chunks), response.headers.get("Content-Type", "").lower()
         except requests.RequestException as exc:
@@ -318,7 +416,8 @@ class SynologyImageStore:
             else:
                 kind = "request"
             label = NasDiagnosticError.LABELS[kind]
-            raise NasDiagnosticError(f"NAS {label}；請確認連線，勿關閉憑證驗證", kind=kind) from None
+            raise failure(f"NAS {label}；請確認連線，勿關閉憑證驗證", kind=kind,
+                          transport_cause=safe_transport_cause(exc)) from None
         finally:
             if response is not None:
                 response.close()
