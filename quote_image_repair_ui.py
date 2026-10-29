@@ -9,6 +9,7 @@ from image_limits import MAX_PRODUCT_ORIGINALS
 from product_image_ui import clear_library_cache, render_quote_images
 from quote_image_repair import (prepare_image_repair, save_image_repair,
                                 save_existing_nas_image_repair)
+from quote_image_repair_batch_ui import render_batch_image_repair
 
 
 PREFIX = "quote_image_repair_"
@@ -17,6 +18,7 @@ PREFIX = "quote_image_repair_"
 def render_image_repair(get_store):
     st.subheader("商品補圖")
     st.caption("商品已存入雲表，但圖片保存失敗時，在這裡單獨補圖。保存後會讀回核對，不需要重新新增商品。")
+    render_batch_image_repair(get_store)
     with st.form(PREFIX + "search"):
         query = st.text_input("搜尋已保存商品（NO、貨號或品名）", key=PREFIX + "query")
         search = st.form_submit_button("搜尋商品")

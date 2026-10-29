@@ -324,6 +324,35 @@ class SynologyImageStore:
     def get_asset(self, metadata):
         return self._read_asset(metadata, self._path(metadata))
 
+    def stat_asset(self, metadata):
+        """Read one exact original's metadata; never downloads, uploads or retries.
+
+        Only File Station API 408 is a missing file. HTTP 408, permission,
+        redirects and malformed responses remain errors, never upload advice.
+        Size agreement does not establish byte/SHA verification or completion.
+        """
+        path = self._path(metadata)
+        receipt = {"sha256": metadata["sha256"], "exists": False, "size": None,
+                   "expected_size": metadata["size"], "size_matches": False}
+        try:
+            result = self._json_call("SYNO.FileStation.List", "getinfo",
+                                     {"path": [path], "additional": ["size"]})
+        except NasDiagnosticError as exc:
+            if exc.kind == "api" and exc.api_code == 408:
+                return receipt
+            raise
+        files = result.get("files")
+        if (not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict)
+                or files[0].get("path") != path or files[0].get("isdir") is not False
+                or not isinstance(files[0].get("additional"), dict)
+                or type(files[0]["additional"].get("size")) is not int
+                or files[0]["additional"]["size"] <= 0):
+            raise NasDiagnosticError("NAS 原圖檔案資訊不完整；未當成缺圖或驗證完成",
+                                     kind="response_shape")
+        size = files[0]["additional"]["size"]
+        return {**receipt, "exists": True, "size": size,
+                "size_matches": size == receipt["expected_size"]}
+
     def get_thumbnail(self, metadata):
         from image_thumbnails import check_thumbnail
         return check_thumbnail(self._read_asset(metadata, self._path(metadata, thumbnail=True)))
