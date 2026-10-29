@@ -4,6 +4,7 @@ import streamlit as st
 from dispatch_images import extract_sheet_images, match_image_pack
 from dispatch_manager import digest
 from dispatch_storage import MAX_IMAGE_MB, asset_bytes, validate_image
+from image_limits import MAX_LINE_IMAGES, MAX_PRODUCT_ORIGINALS
 from product_images import subject_key, unique_proposals
 from image_thumbnails import display_bytes
 
@@ -15,7 +16,7 @@ def clear_library_cache():
 
 
 def render_quote_images(key, *, title="本款原圖（隨報價保存到圖庫）",
-                        caption=f"選填；每款最多 5 張，單張 {MAX_IMAGE_MB} MB（超過 2 MB 需使用 NAS 商品圖庫）。原圖只需提供一次，之後發送管理自動帶入；不改雲表原有圖片。"):
+                        caption=f"選填；圖庫每款最多 {MAX_PRODUCT_ORIGINALS} 張原圖，單張 {MAX_IMAGE_MB} MB（超過 2 MB 需使用 NAS 商品圖庫）。原圖只需提供一次；發送管理每款仍最多採用 {MAX_LINE_IMAGES} 張，不改雲表原有圖片。"):
     st.markdown("#### " + title)
     st.caption(caption)
     uploads = st.file_uploader("本款商品原圖", type=["jpg", "jpeg", "png", "webp"],
@@ -27,8 +28,8 @@ def render_quote_images(key, *, title="本款原圖（隨報價保存到圖庫�
             assets[asset["sha256"]] = asset
         except ValueError as exc:
             errors.append(f"{upload.name}：{exc}")
-    if len(assets) > 5:
-        errors.append("每款最多 5 張不同原圖")
+    if len(assets) > MAX_PRODUCT_ORIGINALS:
+        errors.append(f"每款最多 {MAX_PRODUCT_ORIGINALS} 張不同原圖")
     if assets:
         columns = st.columns(min(5, len(assets)))
         for n, asset in enumerate(assets.values()):
@@ -139,7 +140,7 @@ def render_save_current_images(store, source, assets, actor, key, disabled=False
                                        key="image_replace_" + key) if different else False)
                 button_label = "保存本款圖片到圖庫"
             if st.button(button_label, key="image_bind_one_" + key,
-                         disabled=disabled or not selected_assets or len(selected_assets) > 5
+                         disabled=disabled or not selected_assets or len(selected_assets) > MAX_PRODUCT_ORIGINALS
                          or not actor.strip() or ((reuse_stale or different) and not replace)):
                 result = store.save_product_images([{"source": source, "assets": selected_assets,
                     "expected_revision": saved.get("_revision", "") if saved else ""}],

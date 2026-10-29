@@ -7,7 +7,7 @@ from threading import Lock
 from PIL import Image
 
 from dispatch_manager import DispatchError
-from synology_image_store import NasConfig, SynologyImageStore
+from synology_image_store import NasConfig, NasDiagnosticError, SynologyImageStore, safe_https_origin
 
 
 FIELDS = ("base_url", "root", "library_id", "account", "password")
@@ -35,6 +35,8 @@ def _reason(exc):
     http = re.fullmatch(r"NAS 讀寫失敗（HTTP ([0-9]{3})）；未視為缺圖", message)
     if http:
         return "NAS HTTP " + http[1]
+    if isinstance(exc, NasDiagnosticError):
+        return exc.safe_summary()
     known = {
         "NAS 網路／憑證連線失敗；請確認連線，勿關閉憑證驗證": "網路或 TLS 憑證連線失敗",
         "NAS 入口已轉向；請重新確認網址，未跟隨或向轉向網址傳送帳密": "NAS 入口重新導向；已停止跟隨",
@@ -57,6 +59,9 @@ def run_probe(read_section, store_factory=SynologyImageStore):
             return {**receipt, "status": "unconfigured", "passed": []}
         # Never copy/iterate all Secrets or persist/hash the config in a UI cache.
         config = NasConfig(**{name: section[name] for name in FIELDS})
+        origin = safe_https_origin(config.base_url)
+        if origin:
+            receipt["configured_origin"] = origin
         if "請在Streamlit" in config.password or "這裡換成" in config.password:
             raise DispatchError("NAS 密碼仍為範本占位文字")
         passed.append(step)
@@ -82,6 +87,10 @@ def run_probe(read_section, store_factory=SynologyImageStore):
         return {**receipt, "status": "passed", "passed": passed,
                 "bytes": len(asset_bytes(asset)), "sha256": asset["sha256"]}
     except Exception as exc:
+        if isinstance(exc, NasDiagnosticError):
+            redirect_origin = safe_https_origin(exc.redirect_origin)
+            if redirect_origin:
+                receipt["redirect_origin"] = redirect_origin
         return {**receipt, "status": "failed", "passed": passed,
                 "failed_step": step, "reason": _reason(exc)}
 
@@ -126,5 +135,9 @@ def render_nas_connection_check():
             st.warning("NAS 測試未通過：" + STEPS[result["failed_step"]] + "。" + result["reason"])
             st.caption("已停止；不反覆登入、不改權限、不關閉 TLS 驗證。請先確認原因，勿連續重啟。")
         st.caption("檢查時間（UTC）：" + result["checked_at"])
+        if result.get("configured_origin"):
+            st.caption("目前設定入口（僅 HTTPS origin）：" + result["configured_origin"])
+        if result.get("redirect_origin"):
+            st.caption("轉向目的地（僅 HTTPS origin；未跟隨）：" + result["redirect_origin"])
         if result["passed"]:
             st.caption("已通過：" + " → ".join(STEPS[step] for step in result["passed"]))

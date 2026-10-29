@@ -5,6 +5,7 @@ server-side secret store, never in product rows, browser URLs or this module.
 """
 from dataclasses import dataclass, field
 import hashlib
+import ipaddress
 import json
 import re
 from urllib.parse import urlsplit
@@ -26,6 +27,38 @@ EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 NAS_REDIRECT_ERROR = "NAS 入口已轉向；請重新確認網址，未跟隨或向轉向網址傳送帳密"
 
 
+def safe_https_origin(value):
+    """Allowlisted diagnostic origin only; never echo URL paths or credentials."""
+    if (not isinstance(value, str) or not 0 < len(value) <= 2048
+            or any(not 33 <= ord(c) <= 126 for c in value)
+            or "\\" in value):
+        return ""
+    try:
+        url = urlsplit(value)
+        host, port = url.hostname, url.port
+        if (url.scheme != "https" or not host or url.username is not None
+                or url.password is not None or port == 0 or "%" in host):
+            return ""
+        if ":" in host:
+            authority = "[" + str(ipaddress.IPv6Address(host)) + "]"
+            raw_authority = "[" + host + "]"
+        else:
+            if (len(host) > 253 or not all(re.fullmatch(
+                    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                    for label in host.split("."))):
+                return ""
+            if re.fullmatch(r"[0-9.]+", host):
+                ipaddress.IPv4Address(host)
+            authority = host
+            raw_authority = host
+        port_suffix = f":{port}" if port is not None else ""
+        if url.netloc.lower() != raw_authority + port_suffix:
+            return ""
+        return "https://" + authority + port_suffix
+    except (ValueError, UnicodeError):
+        return ""
+
+
 class NasDiagnosticError(DispatchError):
     """Only allowlisted categories and bounded numeric codes may reach upload UI."""
     LABELS = {
@@ -38,11 +71,14 @@ class NasDiagnosticError(DispatchError):
         "response_shape": "API 回應結構不完整",
     }
 
-    def __init__(self, message, *, kind, http_status=None, api_code=None):
+    def __init__(self, message, *, kind, http_status=None, api_code=None,
+                 source_origin="", redirect_origin=""):
         super().__init__(message)
         self.kind = kind if kind in self.LABELS else "unknown"
         self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
         self.api_code = api_code if type(api_code) is int and 0 <= api_code <= 999999 else None
+        self.source_origin = safe_https_origin(source_origin)
+        self.redirect_origin = safe_https_origin(redirect_origin) if self.kind == "redirect" else ""
 
     def safe_summary(self):
         fields = [self.LABELS.get(self.kind, "未分類錯誤")]
@@ -152,7 +188,9 @@ class SynologyImageStore:
                 verify=True, stream=True,
             )
             if 300 <= response.status_code < 400:
-                raise NasDiagnosticError(NAS_REDIRECT_ERROR, kind="redirect", http_status=response.status_code)
+                raise NasDiagnosticError(NAS_REDIRECT_ERROR, kind="redirect", http_status=response.status_code,
+                                         source_origin=self.config.base_url,
+                                         redirect_origin=response.headers.get("Location"))
             if response.status_code != 200:
                 raise NasDiagnosticError(f"NAS 讀寫失敗（HTTP {response.status_code}）；未視為缺圖",
                                          kind="http", http_status=response.status_code)

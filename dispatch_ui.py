@@ -26,6 +26,7 @@ from batch_image_preview import render_batch_image_preview
 from batch_approval import prepare_batch, preparation_issues, confirm_prepared_batch
 from image_cache import cached, ORIGINAL_PREFIX, scope_cache
 from image_thumbnails import display_bytes
+from image_limits import MAX_LINE_IMAGES
 from dispatch_targets import ADVERTISING_TARGET, canonical_target, same_target
 from dispatch_workflow import progress_detail, pending_items, selected_pending, combined_copy, build_dispatch_package
 from dispatch_workbench_ui import render_workbench, cache_saved_batch, RUN_KEY
@@ -245,7 +246,7 @@ def _draft_item(store, batch, item, history, source_images=None):
                                         format_func=lambda h: candidates[h]["name"], key=prefix + "_candidates_" + digest(list(candidates))[:12]) if candidates else []
         uploads = st.file_uploader("加入商品圖片", type=["jpg", "jpeg", "png", "webp"],
                                    accept_multiple_files=True, max_upload_size=2, key=prefix + "_uploads",
-                                   help="每張最多 2 MB、每款最多 5 張。加入後仍須核對圖片中的款式、品名與本款相符。")
+                                   help=f"每張最多 2 MB、每款最多 {MAX_LINE_IMAGES} 張。加入後仍須核對圖片中的款式、品名與本款相符。")
         prepared = [(asset_bytes(candidates[h]), candidates[h]) for h in use_candidates]
         for upload in uploads or []:
             try:
@@ -306,12 +307,12 @@ def _draft_item(store, batch, item, history, source_images=None):
         pending["unit_confirmation"] = {"unit": unit_value, "source_hash": source["source_hash"], "actor": actor, "evidence": unit_note.strip()}
     substantive_errors = item_errors(pending, require_review=False, require_source=False)
     substantive_errors.extend(fresh_problems)
-    if len(image_ids) > 5:
-        substantive_errors.append("每款最多 5 張圖片")
+    if len(image_ids) > MAX_LINE_IMAGES:
+        substantive_errors.append(f"每款最多 {MAX_LINE_IMAGES} 張圖片")
     if substantive_errors and not excluded:
         st.caption("本款尚需：" + "；".join(substantive_errors))
     save = st.button("儲存本款修改", type="primary", key=prefix + "_save",
-                           disabled=not actor.strip() or (not excluded and (not image_ok or len(image_ids) > 5)))
+                           disabled=not actor.strip() or (not excluded and (not image_ok or len(image_ids) > MAX_LINE_IMAGES)))
     if save:
         try:
             updated = edit_item(batch, item["id"], text=text, images=image_ids,

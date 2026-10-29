@@ -3,6 +3,7 @@ from collections import Counter
 import unicodedata
 
 from dispatch_manager import DispatchError, digest
+from image_limits import MAX_PRODUCT_ORIGINALS
 from supplier_names import normalize_vendor
 
 PRODUCT_IMAGE_SHEET = "_商品圖片對應"
@@ -21,8 +22,8 @@ def checked_assets(assets):
     for asset in assets:
         clean = validate_image(asset_bytes(asset), asset["name"])
         checked[clean["sha256"]] = clean
-    if not 1 <= len(checked) <= 5:
-        raise DispatchError("每款需有 1～5 張不同的有效原圖")
+    if not 1 <= len(checked) <= MAX_PRODUCT_ORIGINALS:
+        raise DispatchError(f"每款需有 1～{MAX_PRODUCT_ORIGINALS} 張不同的有效原圖")
     return list(checked.values())
 
 

@@ -175,12 +175,13 @@ def test_filename_must_be_unique_in_whole_catalog_not_just_current_batch():
     assert exact["images"][products[0]["identity"]]
 
 
-def test_multiple_valid_photos_are_supported_when_explicitly_bound():
+@pytest.mark.parametrize("count", [5, 6, 10])
+def test_multiple_valid_photos_are_supported_when_explicitly_bound(count):
     _, store, products = fixture()
-    result = store.save_product_images([assignment(products[0], [picture(n) for n in range(5)])], actor="測試", origin="manual")
+    result = store.save_product_images([assignment(products[0], [picture(n) for n in range(count)])], actor="測試", origin="manual")
     assert result[0]["結果"] == "已綁定"
-    assert len(store.product_image_refs(products)["images"][products[0]["identity"]]) == 5
-    invalid = store.save_product_images([assignment(products[1], [picture(n) for n in range(6)])], actor="測試", origin="test")
+    assert len(store.product_image_refs(products)["images"][products[0]["identity"]]) == count
+    invalid = store.save_product_images([assignment(products[1], [picture(n) for n in range(11)])], actor="測試", origin="test")
     assert invalid[0]["結果"] == "待處理"
 
 

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from dispatch_review import inspect_source, unit_confirmed
 from dispatch_targets import canonical_target, same_target
+from image_limits import MAX_LINE_IMAGES
 from quote_dispatch.pipeline.reconcile import reconcile_batch
 
 
@@ -193,8 +194,8 @@ def item_errors(item, *, require_review=True, require_source=True):
         errors.append("待確認計價單位：裝箱單位不等於已確認的售價單位")
     if not item["images"]:
         errors.append("尚未加入商品圖片")
-    if len(item["images"]) > 5:
-        errors.append("每款最多 5 張圖片")
+    if len(item["images"]) > MAX_LINE_IMAGES:
+        errors.append(f"每款最多 {MAX_LINE_IMAGES} 張圖片")
     text = item["copy"].strip()
     try:
         expected = expected_copy(item)

@@ -80,6 +80,18 @@ def test_change_after_review_invalidates_confirmation(field):
         approve_batch(batch, catalog(product_rows((1,))), [], "測試")
 
 
+@pytest.mark.parametrize("count", [5, 6, 10])
+def test_line_selection_keeps_five_image_limit_when_original_library_allows_ten(count):
+    batch = ready_batch(numbers=(1,))
+    item = batch["items"][0]
+    item["images"] = [f"synthetic-{number}" for number in range(count)]
+    errors = item_errors(item, require_review=False, require_source=False)
+    assert ("每款最多 5 張圖片" in errors) is (count > 5)
+    if count > 5:
+        with pytest.raises(DispatchError, match="最多 5 張"):
+            approve_batch(batch, catalog(product_rows((1,))), [], "測試")
+
+
 @pytest.mark.parametrize("change", ["price", "row", "delete", "duplicate"])
 def test_approval_refuses_changed_or_ambiguous_source(change):
     batch = ready_batch(numbers=(1,))

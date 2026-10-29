@@ -1,5 +1,6 @@
 from copy import deepcopy
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from dispatch_storage import CloudDispatchStore
@@ -7,7 +8,7 @@ from product_images import PRODUCT_IMAGE_SHEET, subject_key
 from test_dispatch_ui import widget
 
 
-def app_source(bound=False, multi=False, imported=False, source_changed=False):
+def app_source(bound=False, multi=False, imported=False, source_changed=False, image_count=0):
     return f'''
 import streamlit as st
 from dispatch_ui import render_dispatch_manager
@@ -22,7 +23,7 @@ if "test_spreadsheet" not in st.session_state:
     store = CloudDispatchStore(spreadsheet)
     products = store.catalog()
     if {bound!r}:
-        store.save_product_images([assignment(products[0], [picture(n) for n in range({2 if multi else 1})])], actor="合成測試", origin="test")
+        store.save_product_images([assignment(products[0], [picture(n) for n in range({image_count or (2 if multi else 1)})])], actor="合成測試", origin="test")
     if {source_changed!r}:
         spreadsheet.sheets["G正版"].rows[4][1] = "貨號 TEST-CHANGED"
         products = store.catalog()
@@ -87,8 +88,9 @@ def test_multiple_unbound_candidates_need_explicit_choice_before_binding():
     assert not any(w.label.startswith("我已核對原文、圖片") for w in app.checkbox)
 
 
-def test_changed_supplier_code_can_reuse_old_images_only_after_explicit_review():
-    app = start(bound=True, source_changed=True)
+@pytest.mark.parametrize("count", [1, 6, 10])
+def test_changed_supplier_code_can_reuse_old_images_only_after_explicit_review(count):
+    app = start(bound=True, source_changed=True, image_count=count)
     spreadsheet = app.session_state["test_spreadsheet"]
     store = CloudDispatchStore(spreadsheet)
     before = store.product_image_bindings()["G正版:no1"]
@@ -104,6 +106,7 @@ def test_changed_supplier_code_can_reuse_old_images_only_after_explicit_review()
     assert not app.exception
     after = store.product_image_bindings()["G正版:no1"]
     assert after["assets"] == before["assets"]
+    assert len(after["assets"]) == count
     assert after["subject"] == subject_key(store.catalog()[0])
     assert after["origin"] == "same_item_source_correction"
     assert any("1／69 款已有配對圖片" in c.value for c in app.caption)

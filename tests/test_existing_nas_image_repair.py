@@ -70,8 +70,9 @@ def forbid_upload_and_legacy(monkeypatch):
     monkeypatch.setattr(CloudDispatchStore, "put_assets", forbidden)
 
 
-def test_adopts_physical_originals_only_after_verification_and_preserves_other_data():
-    sheet, store, network, assets, metadata, identity, plan = fixture(2)
+@pytest.mark.parametrize("count", [2, 6, 10])
+def test_adopts_physical_originals_only_after_verification_and_preserves_other_data(count):
+    sheet, store, network, assets, metadata, identity, plan = fixture(count)
     for name in ("_報價依據", "_發送批次", "_人工核對", "_LINE紀錄"):
         sheet.add_worksheet(name, rows=5, cols=8).rows = [["preserve existing content"]]
     before, physical = rows(sheet), dict(network.objects)
@@ -90,6 +91,14 @@ def test_adopts_physical_originals_only_after_verification_and_preserves_other_d
     assert rows(sheet) == before
     assert store.product_image_bindings()[identity]["assets"] == binding["assets"]
     assert_no_upload(network)
+
+
+def test_over_limit_original_group_is_rejected_before_nas_or_sheet_writes():
+    sheet, store, network, assets, _, _, plan = fixture(11)
+    before = rows(sheet)
+    with pytest.raises(DispatchError, match="1～10"):
+        save(store, plan, assets)
+    assert rows(sheet) == before and not network.sessions
 
 
 @pytest.mark.parametrize("failure", ["missing", "403", "500", "api", "redirect", "tls",

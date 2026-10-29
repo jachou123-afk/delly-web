@@ -6,7 +6,7 @@ from streamlit.testing.v1 import AppTest
 
 import nas_connection_check as probe
 from dispatch_manager import DispatchError
-from synology_image_store import SynologyImageStore
+from synology_image_store import NasDiagnosticError, SynologyImageStore
 from test_synology_image_store import Session, Response, config
 
 
@@ -39,7 +39,7 @@ def test_real_adapter_probe_uses_two_sessions_and_one_fixed_verified_object():
     assert probe.run_probe(section, store_factory)["status"] == "passed"
     assert len(objects) == 1
     assert "synthetic-secret" not in json.dumps(result)
-    assert "nas.example.test" not in json.dumps(result)
+    assert result["configured_origin"] == "https://nas.example.test"
     assert "測試商品圖庫" not in json.dumps(result, ensure_ascii=False)
 
 
@@ -97,6 +97,57 @@ def test_failed_login_once_never_writes_or_reconnects():
     assert sum(p["method"] == "login" for p in calls) == 1
     assert not session.objects
     assert session.closed
+
+
+@pytest.mark.parametrize("details,expected", [
+    ({"kind": "read_timeout"}, "等待回應／讀取逾時"),
+    ({"kind": "connect_timeout"}, "連線逾時"),
+    ({"kind": "redirect", "http_status": 307}, "入口轉向；HTTP 307"),
+    ({"kind": "http", "http_status": 502}, "HTTP 回應失敗；HTTP 502"),
+    ({"kind": "api", "api_code": 123456}, "NAS API 回報失敗；API 代碼 123456"),
+    ({"kind": "untrusted secret", "http_status": 900, "api_code": "secret"}, "未分類錯誤"),
+])
+def test_typed_diagnostic_receipt_preserves_only_safe_category_and_bounded_codes(details, expected):
+    error = NasDiagnosticError("synthetic-secret https://private.test/path?sid=private", **details)
+    assert probe._reason(error) == expected
+    result = probe.run_probe(lambda: (_ for _ in ()).throw(error), lambda c: pytest.fail("network"))
+    assert result["reason"] == expected and result["failed_step"] == "settings"
+    assert "secret" not in json.dumps(result) and "private" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("location,expected", [
+    ("https://target.example.test:5001/private?sid=secret#fragment", "https://target.example.test:5001"),
+    ("https://user:secret@target.example.test/private", ""),
+    ("http://target.example.test/private", ""),
+    ("/private?sid=secret", ""),
+    ("https://target.example.test/private\nsecret", ""),
+    ("https://target.example.test/" + "x" * 2048, ""),
+])
+def test_probe_receipt_exposes_only_configured_and_safe_redirect_origins(location, expected):
+    session = Session()
+    response = Response({}, status=307)
+    response.headers["Location"] = location
+    session.override = lambda p: response
+    result = probe.run_probe(section, lambda c: SynologyImageStore(c, lambda: session))
+    assert result["configured_origin"] == "https://nas.example.test"
+    assert result.get("redirect_origin", "") == expected
+    assert result["status"] == "failed" and result["failed_step"] == "connect"
+    assert len(session.calls) == 1 and not session.objects
+    assert "secret" not in json.dumps(result) and "private" not in json.dumps(result)
+
+
+def test_probe_ui_shows_origins_without_surfacing_url_remainders(monkeypatch):
+    receipt = {"status": "failed", "passed": ["settings"], "checked_at": "2026-01-01T00:00:00+00:00",
+               "failed_step": "connect", "reason": "入口轉向；HTTP 307",
+               "configured_origin": "https://nas.example.test",
+               "redirect_origin": "https://target.example.test:5001"}
+    monkeypatch.setattr(probe, "run_probe", lambda *a: receipt)
+    monkeypatch.setattr(probe, "_deployment_check", probe.OncePerProcess())
+    app = AppTest.from_string("from nas_connection_check import render_nas_connection_check\n"
+                             "render_nas_connection_check()").run()
+    assert not app.exception
+    assert any("目前設定入口" in c.value and receipt["configured_origin"] in c.value for c in app.caption)
+    assert any("未跟隨" in c.value and receipt["redirect_origin"] in c.value for c in app.caption)
 
 
 @pytest.mark.parametrize("failed_step", ["root", "upload", "reconnect", "readback"])

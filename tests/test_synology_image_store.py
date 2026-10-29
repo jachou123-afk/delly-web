@@ -9,7 +9,8 @@ import requests
 from dispatch_manager import DispatchError
 from dispatch_storage import asset_bytes, validate_image
 from dispatch_fakes import image_data
-from synology_image_store import API_VERSIONS, NAS_REDIRECT_ERROR, NasConfig, SynologyImageStore
+from synology_image_store import (API_VERSIONS, NAS_REDIRECT_ERROR, NasConfig,
+                                  NasDiagnosticError, SynologyImageStore, safe_https_origin)
 
 
 def config(**changes):
@@ -338,6 +339,53 @@ def test_original_redirect_text_stays_compatible_and_never_follows_location():
     assert_sanitized(error.value)
     assert len(session.calls) == 1
     assert session.calls[0][1]["allow_redirects"] is False
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://NAS.example.test:5001/webapi/entry.cgi?sid=secret#private", "https://nas.example.test:5001"),
+    ("https://192.168.1.132:5001/path?secret=private", "https://192.168.1.132:5001"),
+    ("https://[2001:0db8::1]:5001/path", "https://[2001:db8::1]:5001"),
+    ("https://nas.example.test", "https://nas.example.test"),
+])
+def test_diagnostic_origin_keeps_only_valid_https_scheme_host_and_port(url, expected):
+    assert safe_https_origin(url) == expected
+
+
+@pytest.mark.parametrize("url", [
+    None, 123, "", "/relative?secret=private", "//nas.example.test/private",
+    "http://nas.example.test/private", "javascript:private",
+    "https://user:secret@nas.example.test/private", "https://user@nas.example.test",
+    "https://nas.example.test:0", "https://nas.example.test:bad",
+    "https://nas.example.test/private\r\nLocation:https://private.test",
+    "https://nas.example.test/private\x00", "https://nas.example.test/private\x7f",
+    "https://nas.example.test/private\u202e", "https://nas.example.test\\private",
+    "https://nas.example.test/" + "x" * 2048,
+    "https://" + "x" * 64 + ".example.test/path",
+    "https://nas.example.test<script>/private", "https://nas%2eexample.test/private",
+    "https://[::1]private.test/path", "https://[fe80::1%eth0]/private",
+    "https://999.999.999.999/private",
+])
+def test_untrusted_diagnostic_location_is_not_echoed(url):
+    assert safe_https_origin(url) == ""
+    error = NasDiagnosticError("private text", kind="redirect", redirect_origin=url)
+    assert error.redirect_origin == ""
+
+
+def test_redirect_error_carries_sanitized_origins_without_following_or_sending_credentials():
+    session = Session()
+    response = Response(SENSITIVE.encode(), status=307)
+    response.headers["Location"] = "https://target.example.test:5001/private/path?sid=secret#fragment"
+    session.override = lambda p: response
+    with pytest.raises(NasDiagnosticError) as error:
+        with SynologyImageStore(config(), lambda: session):
+            pass
+    assert error.value.source_origin == "https://nas.example.test"
+    assert error.value.redirect_origin == "https://target.example.test:5001"
+    assert str(error.value) == NAS_REDIRECT_ERROR
+    assert error.value.safe_summary() == "入口轉向；HTTP 307"
+    assert len(session.calls) == 1 and session.calls[0][1]["data"]["api"] == "SYNO.API.Info"
+    assert not any("account" in kwargs["data"] or "passwd" in kwargs["data"] for _, kwargs in session.calls)
+    assert response.closed and session.closed and session.trust_env is False
 
 
 def test_upload_timeout_can_be_followed_by_original_read_only_verification_without_another_upload():

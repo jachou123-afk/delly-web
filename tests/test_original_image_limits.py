@@ -19,6 +19,7 @@ from product_images import checked_assets
 from test_nas_dispatch_storage import Network
 from test_product_image_library import assignment, picture
 from test_synology_image_store import config
+from quote_image_repair import prepare_image_repair, save_image_repair
 
 
 def png_of_size(size):
@@ -95,7 +96,7 @@ def test_legacy_sheet_payload_limit_remains_2mb_with_clear_nas_requirement(bulk)
     assert set(sheet.sheets) == before and IMAGE_SHEET not in sheet.sheets
 
 
-def test_format_animation_pixels_and_five_originals_are_still_guarded():
+def test_format_animation_pixels_and_original_count_are_still_guarded():
     output = BytesIO()
     Image.new("RGB", (20, 20)).save(output, "GIF")
     with pytest.raises(DispatchError, match="JPG"):
@@ -109,9 +110,10 @@ def test_format_animation_pixels_and_five_originals_are_still_guarded():
     Image.new("RGB", (5001, 5000)).save(output, "PNG")
     with pytest.raises(DispatchError, match="2500 萬像素"):
         validate_image(output.getvalue(), "synthetic.png")
-    assert len(checked_assets([picture(n) for n in range(5)])) == 5
-    with pytest.raises(DispatchError, match="1～5"):
-        checked_assets([picture(n) for n in range(6)])
+    for count in (5, 6, 10):
+        assert len(checked_assets([picture(n) for n in range(count)])) == count
+    with pytest.raises(DispatchError, match="1～10"):
+        checked_assets([picture(n) for n in range(11)])
 
 
 def test_quote_original_upload_is_20mb_but_advertisement_upload_stays_2mb():
@@ -128,3 +130,58 @@ def test_quote_original_upload_is_20mb_but_advertisement_upload_stays_2mb():
     advertisement = next(item.proto for item in adverts.get("file_uploader")
                          if item.proto.label == "加入商品圖片")
     assert advertisement.max_upload_size_mb == 2
+
+
+@pytest.mark.parametrize("count", [6, 10])
+def test_complete_original_group_nas_repair_roundtrip_preserves_bytes_and_order(count):
+    sheet = FakeSpreadsheet(product_rows([1]))
+    before = deepcopy(sheet.sheets["G正版"].rows)
+    network = Network()
+    store = NasDispatchStore(sheet, config(), nas_factory=network.factory)
+    source = store.catalog()[0]
+    assets = [picture(n) for n in range(count)]
+    plan = prepare_image_repair(store, source["identity"])
+    assert save_image_repair(store, plan, assets, actor="synthetic")[0]["結果"] == "已綁定"
+    reopened = NasDispatchStore(sheet, config(), nas_factory=network.factory)
+    binding = reopened.product_image_bindings()[source["identity"]]
+    assert binding["assets"] == [a["sha256"] for a in assets]
+    for asset in assets:
+        assert asset_bytes(reopened.get_asset(asset["sha256"])) == asset_bytes(asset)
+    assert len(network.objects) == count and IMAGE_SHEET not in sheet.sheets
+    assert sheet.sheets["G正版"].rows == before
+    sheets_before = {name: deepcopy(ws.rows) for name, ws in sheet.sheets.items()}
+    assert save_image_repair(reopened, plan, list(reversed(assets)), actor="synthetic")[0]["結果"] == "已存在"
+    assert {name: ws.rows for name, ws in sheet.sheets.items()} == sheets_before
+    assert reopened.product_image_bindings()[source["identity"]]["assets"] == binding["assets"]
+
+
+def test_over_limit_group_rejected_before_upload_or_binding():
+    sheet = FakeSpreadsheet(product_rows([1]))
+    network = Network()
+    store = NasDispatchStore(sheet, config(), nas_factory=network.factory)
+    plan = prepare_image_repair(store, store.catalog()[0]["identity"])
+    before = deepcopy(sheet.sheets["G正版"].rows)
+    with pytest.raises(DispatchError, match="1～10"):
+        save_image_repair(store, plan, [picture(n) for n in range(11)], actor="synthetic")
+    assert set(sheet.sheets) == {"G正版"} and sheet.sheets["G正版"].rows == before
+    assert not network.objects and not network.sessions
+
+
+@pytest.mark.parametrize("count", [6, 10, 11])
+def test_quote_uploader_has_same_original_group_limit(count):
+    app = AppTest.from_string(f'''
+from types import SimpleNamespace
+from unittest.mock import patch
+import streamlit as st
+from dispatch_storage import asset_bytes
+from product_image_ui import render_quote_images
+from test_product_image_library import picture
+uploads = [SimpleNamespace(name=asset["name"], getvalue=lambda asset=asset: asset_bytes(asset))
+           for asset in [picture(n) for n in range({count})]]
+with patch.object(st, "file_uploader", return_value=uploads):
+    assets, errors = render_quote_images("synthetic")
+    st.session_state["test_count"] = len(assets)
+    st.session_state["test_errors"] = errors
+''').run()
+    assert not app.exception and app.session_state["test_count"] == count
+    assert app.session_state["test_errors"] == (["每款最多 10 張不同原圖"] if count > 10 else [])

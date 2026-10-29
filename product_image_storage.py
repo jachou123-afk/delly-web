@@ -2,6 +2,7 @@
 from collections import Counter
 
 from dispatch_manager import DispatchError, now
+from image_limits import MAX_PRODUCT_ORIGINALS
 from product_images import PRODUCT_IMAGE_SHEET, checked_assets, source_problem, subject_key
 
 
@@ -17,7 +18,7 @@ class ProductImageStoreMixin:
                 raise DispatchError("商品圖片對應有同時修改衝突，請先核對圖庫紀錄")
             if (value.get("schema") != 1 or value.get("identity") != identity
                     or not value.get("subject") or not isinstance(value.get("assets"), list)
-                    or not 1 <= len(value["assets"]) <= 5
+                    or not 1 <= len(value["assets"]) <= MAX_PRODUCT_ORIGINALS
                     or len(set(value["assets"])) != len(value["assets"])
                     or any(not isinstance(a, str) or len(a) != 64 for a in value["assets"])):
                 raise DispatchError("商品圖片對應內容不完整，停止自動帶入")
