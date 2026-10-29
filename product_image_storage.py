@@ -8,13 +8,19 @@ from product_images import PRODUCT_IMAGE_SHEET, checked_assets, source_problem, 
 
 def checked_image_diagnostic(value):
     """Only fixed categories and bounded integers may leave storage failures."""
+    from synology_image_store import NasDiagnosticError
     if (not isinstance(value, dict) or not {"kind", "origin"} <= set(value)
-            or set(value) - {"kind", "origin", "http_status", "api_code"}
+            or set(value) - {"kind", "origin", "http_status", "api_code", "nas_kind"}
             or value.get("kind") not in {"google_sheets_api", "http", "network_timeout", "network_connection", "nas", "read_budget_wait"}
             or value.get("origin") != ("local" if value.get("kind") == "read_budget_wait" else "typed")
             or (value.get("kind") == "read_budget_wait" and set(value) != {"kind", "origin"})):
         return None
     result = {"kind": value["kind"], "origin": value["origin"]}
+    if "nas_kind" in value:
+        if (value["kind"] != "nas" or type(value["nas_kind"]) is not str
+                or value["nas_kind"] not in {*NasDiagnosticError.LABELS, "unknown"}):
+            return None
+        result["nas_kind"] = value["nas_kind"]
     for key, low, high in (("http_status", 100, 599), ("api_code", 0, 999999)):
         if key in value:
             if type(value[key]) is not int or not low <= value[key] <= high:
@@ -39,6 +45,8 @@ def image_error_diagnostic(exc):
                 "http" if isinstance(exc, requests.exceptions.HTTPError) else None)
         if kind:
             result = {"kind": kind, "origin": "typed"}
+            if isinstance(exc, NasDiagnosticError):
+                result["nas_kind"] = (exc.kind if type(exc.kind) is str and exc.kind in NasDiagnosticError.LABELS else "unknown")
             status = (exc.http_status if isinstance(exc, NasDiagnosticError) else
                       getattr(getattr(exc, "response", None), "status_code", None))
             code = exc.api_code if isinstance(exc, NasDiagnosticError) else getattr(exc, "code", None)
@@ -56,14 +64,17 @@ def image_error_diagnostic(exc):
 
 
 def image_error_summary(diagnostic):
+    from synology_image_store import NasDiagnosticError
     value = checked_image_diagnostic(diagnostic)
     if value is None:
         return "未分類保存錯誤；詳細內容已隱藏"
     if value["kind"] == "read_budget_wait":
         return "批次讀取等待已達上限；尚未送出請求，請稍後明確接續"
+    nas_label = ("NAS " + NasDiagnosticError.LABELS.get(value["nas_kind"], "未分類錯誤")
+                 if "nas_kind" in value else "NAS 回應失敗")
     parts = [{"google_sheets_api": "Google Sheets API 回應失敗", "http": "服務 HTTP 回應失敗",
               "network_timeout": "服務連線或讀取逾時", "network_connection": "服務連線中斷",
-              "nas": "NAS 回應失敗"}[value["kind"]]]
+              "nas": nas_label}[value["kind"]]]
     if "http_status" in value:
         parts.append(f"HTTP {value['http_status']}")
     if "api_code" in value:
