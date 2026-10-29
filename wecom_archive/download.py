@@ -11,9 +11,11 @@ from datetime import datetime, timedelta, timezone
 import getpass
 import hashlib
 import io
+import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 import tempfile
@@ -185,6 +187,31 @@ def _cstr(value: str) -> bytes:
     return value.encode("utf-8")
 
 
+def _chat_data_error_message(response: dict) -> str:
+    """Describe a platform failure without echoing untrusted diagnostic text."""
+    code = response.get("errcode")
+    message = f"拉取對話失敗（平台錯誤碼 {code}）"
+    if code != 301042:
+        return message
+    message += "；請求 IP 未通過會話存檔的可信 IP 白名單檢查"
+    detail = response.get("errmsg")
+    if not isinstance(detail, str):
+        return message
+    match = re.search(r"(?:^|[\s,;])from\s+ip\s*:\s*([^\s,;]+)", detail, re.IGNORECASE)
+    if not match:
+        return message
+    candidate = match.group(1)
+    if candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
+    if "%" in candidate:
+        return message
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return message
+    return f"{message}；平台回報的請求 IP：{address}"
+
+
 class FinanceSdk:
     """Small ownership-safe wrapper around the official SDK C ABI."""
 
@@ -264,7 +291,7 @@ class FinanceSdk:
         finally:
             self.lib.FreeSlice(output)
         if response.get("errcode") != 0:
-            raise ArchiveError(f"拉取對話失敗（平台錯誤碼 {response.get('errcode')}）")
+            raise ArchiveError(_chat_data_error_message(response))
         return response.get("chatdata", [])
 
     def decrypt_data(self, random_key: bytes, encrypted_message: str) -> dict:
