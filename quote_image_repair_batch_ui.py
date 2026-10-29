@@ -7,7 +7,8 @@ import streamlit as st
 
 from product_image_ui import clear_library_cache
 from quote_image_repair_batch import (prepare_batch_repair, process_next_repair,
-                                      repair_table, retry_failed_repair, safe_repair_error)
+                                      repair_table, retry_failed_repair, safe_repair_error,
+                                      repair_receipt_payload)
 from quote_image_repair_zip import MAX_ZIP_BYTES, read_repair_zip
 
 PREFIX = "quote_image_repair_batch_"
@@ -45,6 +46,8 @@ def render_batch_image_repair(get_store):
             st.caption("原圖包只放 manifest.json 與 images/<SHA>.<副檔名>，不含聊天、價格或其他附件。每款第一張為主圖，最多 10 張；ZIP 最多 50 MB，解壓後最多 64 MB。")
             return
         counts = Counter(item["status"] for item in run["items"])
+        if run.get("halt"):
+            st.warning("服務回報 429，本次已停止；後續商品仍待處理，不會自動重試。")
         st.caption(f"共 {len(run['items'])} 款／{len(package['assets'])} 張原圖；已完成 {counts['completed']}、待處理 {counts['ready']}、失敗 {counts['failed']}、查核未通過 {counts['blocked']}。")
         st.dataframe(repair_table(run), hide_index=True, width="stretch")
         confirmed = st.checkbox("我已逐款核對查核表的實際 NO、主圖與原圖組", key=PREFIX + "confirmed_" + run["scope_digest"])
@@ -64,7 +67,8 @@ def render_batch_image_repair(get_store):
                 st.session_state[PREFIX + "run"] = updated
                 if any(item["status"] == "completed" for item in updated["items"]):
                     clear_library_cache()
-                st.session_state[PREFIX + "notice"] = "本次已結束。成功款已保留收據，不重做；失敗款保留原保存方式，不自動切換或重試。"
+                st.session_state[PREFIX + "notice"] = ("服務回報 429，本次已停止；後續商品保持待處理，成功收據保留。"
+                    if updated.get("halt") else "本次已結束。成功款已保留收據，不重做；失敗款保留原保存方式，不自動切換或重試。")
                 st.rerun()
             except Exception as exc:
                 st.error("本次尚未全部確認：" + safe_repair_error(exc))
@@ -81,7 +85,8 @@ def render_batch_image_repair(get_store):
             st.success("本包所有商品 NAS 原圖與商品配對均已完成新連線讀回核對。")
         elif counts["failed"] or counts["blocked"]:
             st.warning("本包仍有未完成商品，請查看查核表；其他待處理款可繼續。")
-        receipts = [item["receipt"] for item in run["items"] if item["status"] == "completed"]
-        st.download_button("下載本包核對收據", data=json.dumps({"schema": 1, "package_sha256": package["package_sha256"],
-                           "mode": run["mode"], "receipts": receipts}, ensure_ascii=False, indent=2),
+        receipt_json = json.dumps(repair_receipt_payload(package, run), ensure_ascii=False, indent=2)
+        with st.expander("查看本包核對收據 JSON"):
+            st.code(receipt_json, language="json")
+        st.download_button("下載本包核對收據", data=receipt_json,
                            file_name="nas-original-repair-receipts.json", mime="application/json", key=PREFIX + "receipt")

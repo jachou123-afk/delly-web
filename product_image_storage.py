@@ -6,6 +6,65 @@ from image_limits import MAX_PRODUCT_ORIGINALS
 from product_images import PRODUCT_IMAGE_SHEET, checked_assets, source_problem, subject_key
 
 
+def checked_image_diagnostic(value):
+    """Only fixed categories and bounded integers may leave storage failures."""
+    if (not isinstance(value, dict) or not {"kind", "origin"} <= set(value)
+            or set(value) - {"kind", "origin", "http_status", "api_code"}
+            or value.get("kind") not in {"google_sheets_api", "http", "network_timeout", "network_connection", "nas"}
+            or value.get("origin") != "typed"):
+        return None
+    result = {"kind": value["kind"], "origin": "typed"}
+    for key, low, high in (("http_status", 100, 599), ("api_code", 0, 999999)):
+        if key in value:
+            if type(value[key]) is not int or not low <= value[key] <= high:
+                return None
+            result[key] = value[key]
+    return result
+
+
+def image_error_diagnostic(exc):
+    """Inspect native exception metadata/cause chains, never remote text or JSON."""
+    from gspread.exceptions import APIError
+    import requests
+    from synology_image_store import NasDiagnosticError
+    seen, fallback = set(), None
+    while exc is not None and id(exc) not in seen and len(seen) < 16:
+        seen.add(id(exc))
+        kind = ("google_sheets_api" if isinstance(exc, APIError) else
+                "nas" if isinstance(exc, NasDiagnosticError) else
+                "http" if isinstance(exc, requests.exceptions.HTTPError) else None)
+        if kind:
+            result = {"kind": kind, "origin": "typed"}
+            status = (exc.http_status if isinstance(exc, NasDiagnosticError) else
+                      getattr(getattr(exc, "response", None), "status_code", None))
+            code = exc.api_code if isinstance(exc, NasDiagnosticError) else getattr(exc, "code", None)
+            if type(status) is int and 100 <= status <= 599:
+                result["http_status"] = status
+            if type(code) is int and 0 <= code <= 999999:
+                result["api_code"] = code
+            return result
+        if isinstance(exc, requests.exceptions.Timeout):
+            fallback = {"kind": "network_timeout", "origin": "typed"}
+        elif isinstance(exc, requests.exceptions.ConnectionError):
+            fallback = {"kind": "network_connection", "origin": "typed"}
+        exc = exc.__cause__ or exc.__context__
+    return fallback
+
+
+def image_error_summary(diagnostic):
+    value = checked_image_diagnostic(diagnostic)
+    if value is None:
+        return "未分類保存錯誤；詳細內容已隱藏"
+    parts = [{"google_sheets_api": "Google Sheets API 回應失敗", "http": "服務 HTTP 回應失敗",
+              "network_timeout": "服務連線或讀取逾時", "network_connection": "服務連線中斷",
+              "nas": "NAS 回應失敗"}[value["kind"]]]
+    if "http_status" in value:
+        parts.append(f"HTTP {value['http_status']}")
+    if "api_code" in value:
+        parts.append(f"API 代碼 {value['api_code']}")
+    return "；".join(parts)
+
+
 class ProductImageStoreMixin:
     def product_image_bindings(self):
         from dispatch_storage import decode_records
@@ -124,8 +183,11 @@ class ProductImageStoreMixin:
             # An upload can take time: re-read identity and binding revisions.
             fresh, bindings = self.catalog(), self.product_image_bindings()
         except Exception as exc:
+            diagnostic = image_error_diagnostic(exc)
+            detail = image_error_summary(diagnostic) if diagnostic is not None else str(exc)
             for _, _, row in prepared:
-                row["原因"] = f"圖庫未完成：{exc}"
+                row["原因"] = "圖庫未完成：" + detail
+                row["diagnostic"] = diagnostic
             return output
         pending = []
         for assignment, assets, row in prepared:
@@ -159,6 +221,9 @@ class ProductImageStoreMixin:
                     else:
                         row.update(結果="已綁定", 原因="下次開啟本商品會自動帶入；未標記已核對")
             except Exception as exc:
+                diagnostic = image_error_diagnostic(exc)
+                detail = image_error_summary(diagnostic) if diagnostic is not None else str(exc)
                 for _, _, _, row in pending:
-                    row["原因"] = f"對應未完成或結果待確認：{exc}；重新載入後核對，不要重複新增商品"
+                    row["原因"] = "對應未完成或結果待確認：" + detail + "；重新載入後核對，不要重複新增商品"
+                    row["diagnostic"] = diagnostic
         return output

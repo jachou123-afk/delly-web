@@ -7,6 +7,7 @@ from dispatch_manager import DispatchError, digest, now
 from dispatch_storage import asset_bytes
 from nas_dispatch_storage import NasDispatchStore
 from product_images import source_problem, subject_key
+from product_image_storage import checked_image_diagnostic, image_error_diagnostic, image_error_summary
 from quote_image_repair import (prepare_image_repair, save_image_repair,
                                 save_existing_nas_image_repair)
 from quote_image_repair_zip import package_digest
@@ -15,6 +16,7 @@ from synology_image_store import NasDiagnosticError
 MAX_CHUNK_PRODUCTS = 10
 MODES = {"upload", "existing_only"}
 SUCCESS = {"已綁定", "已存在"}
+PHASES = {"prepare", "save", "readback"}
 
 
 def _require_nas(store):
@@ -37,10 +39,30 @@ def _scope_digest(run):
                              for item in run["items"]]})
 
 
+class ImageStorageFailure(DispatchError):
+    def __init__(self, diagnostic):
+        super().__init__("圖片保存未完成；僅保留安全診斷分類")
+        self.diagnostic = checked_image_diagnostic(diagnostic)
+
+
+def safe_service_diagnostic(exc):
+    """Use structured storage metadata or native exception/cause metadata only."""
+    if isinstance(exc, ImageStorageFailure):
+        return checked_image_diagnostic(exc.diagnostic)
+    return image_error_diagnostic(exc)
+
+
+def _service_summary(diagnostic):
+    return image_error_summary(diagnostic)
+
+
 def safe_repair_error(exc):
     """Never echo arbitrary remote errors, paths, file names, credentials or bodies."""
     if isinstance(exc, NasDiagnosticError):
         return exc.safe_summary()
+    diagnostic = safe_service_diagnostic(exc)
+    if diagnostic is not None:
+        return _service_summary(diagnostic)
     message = str(exc) if isinstance(exc, DispatchError) else ""
     if "NAS" in message:
         http = re.search(r"HTTP ([1-5][0-9]{2})(?![0-9])", message)
@@ -118,7 +140,8 @@ def prepare_batch_repair(store, package, *, mode):
                 reason = "商品已有不同圖片或圖片身分不符；補圖不會替換既有綁定"
         items.append({"identity": identity, "sha256": list(spec["sha256"]),
                       "source": deepcopy(source), "status": "blocked" if reason else "ready",
-                      "reason": reason, "attempts": 0, "receipt": None})
+                      "reason": reason, "attempts": 0, "receipt": None,
+                      "failure_phase": "", "failure_at": "", "diagnostic": None})
     run = {"schema": 1, "package_digest": stamp,
            "package_sha256": package["package_sha256"], "mode": mode, "items": items}
     run["scope_digest"] = _scope_digest(run)
@@ -179,9 +202,11 @@ def process_next_repair(store, package, run, *, actor, limit=MAX_CHUNK_PRODUCTS,
     if not isinstance(actor, str) or not actor.strip() or type(limit) is not int or not 1 <= limit <= MAX_CHUNK_PRODUCTS:
         raise DispatchError("請填保存人，且每次僅處理 1～10 款")
     updated = deepcopy(run)
+    updated.pop("halt", None)
     ready = [item for item in updated["items"] if item["status"] == "ready"][:limit]
     for item in ready:
         item["attempts"] += 1
+        phase = "prepare"
         try:
             plan = prepare_image_repair(store, item["identity"])
             problem = source_problem(item["source"], [plan["source"]])
@@ -189,11 +214,16 @@ def process_next_repair(store, package, run, *, actor, limit=MAX_CHUNK_PRODUCTS,
                 raise DispatchError(problem)
             assets = [package["assets"][sha] for sha in item["sha256"]]
             saver = save_image_repair if updated["mode"] == "upload" else save_existing_nas_image_repair
+            phase = "save"
             report = saver(store, plan, assets, actor=actor.strip())
             if (not isinstance(report, list) or len(report) != 1
                     or not isinstance(report[0], dict) or report[0].get("結果") not in SUCCESS):
+                if (isinstance(report, list) and report and isinstance(report[0], dict)
+                        and checked_image_diagnostic(report[0].get("diagnostic")) is not None):
+                    raise ImageStorageFailure(report[0]["diagnostic"])
                 reason = report[0].get("原因", "") if isinstance(report, list) and report and isinstance(report[0], dict) else ""
                 raise DispatchError(reason)
+            phase = "readback"
             binding = _fresh_nas_readback(store, plan, assets)
             receipt = {"identity": item["identity"], "sha256": list(item["sha256"]),
                        "result": report[0]["結果"], "mode": updated["mode"],
@@ -202,11 +232,20 @@ def process_next_repair(store, package, run, *, actor, limit=MAX_CHUNK_PRODUCTS,
                        "binding_revision": binding["_revision"],
                        "scope_digest": updated["scope_digest"], "checked_at": now()}
             receipt["digest"] = digest(receipt)
-            item.update(status="completed", reason="NAS 原圖與商品配對已重新讀回核對", receipt=receipt)
+            item.update(status="completed", reason="NAS 原圖與商品配對已重新讀回核對", receipt=receipt,
+                        failure_phase="", failure_at="", diagnostic=None)
         except Exception as exc:
-            item.update(status="failed", reason=safe_repair_error(exc), receipt=None)
+            diagnostic = safe_service_diagnostic(exc)
+            item.update(status="failed", reason=safe_repair_error(exc), receipt=None,
+                        failure_phase=phase, failure_at=now(), diagnostic=diagnostic)
+            if diagnostic and (diagnostic.get("http_status") == 429 or diagnostic.get("api_code") == 429):
+                updated["halt"] = {"reason": "服務回報 429；本批已立即停止，未自動重試",
+                                   "identity": item["identity"], "phase": phase,
+                                   "checked_at": now(), "diagnostic": diagnostic}
         if on_update is not None:
             on_update(deepcopy(updated))
+        if updated.get("halt"):
+            break
     return updated
 
 
@@ -225,4 +264,28 @@ def repair_table(run):
     return [{"商品": item["identity"], "品名": (item["source"] or {}).get("name", ""),
              "廠商": (item["source"] or {}).get("vendor", ""), "原圖數": len(item["sha256"]),
              "主圖 SHA-256": item["sha256"][0], "狀態": labels[item["status"]],
-             "嘗試次數": item["attempts"], "原因": item["reason"]} for item in run["items"]]
+             "嘗試次數": item["attempts"], "失敗階段": item.get("failure_phase") or ("未記錄（舊版）" if item["status"] == "failed" else ""),
+             "原因": item["reason"]} for item in run["items"]]
+
+
+def repair_receipt_payload(package, run):
+    """Export explicit receipts and allowlisted failure metadata, never source blocks."""
+    _check_run(package, run)
+    items = []
+    for item in run["items"]:
+        diagnostic = checked_image_diagnostic(item.get("diagnostic"))
+        items.append({"identity": item["identity"], "sha256": list(item["sha256"]),
+                      "status": item["status"], "attempts": item["attempts"],
+                      "failure_phase": item.get("failure_phase") if item.get("failure_phase") in PHASES else None,
+                      "failure_at": item.get("failure_at") or None, "diagnostic": diagnostic})
+    payload = {"schema": 1, "package_sha256": package["package_sha256"], "mode": run["mode"],
+               "items": items, "receipts": [item["receipt"] for item in run["items"] if item["status"] == "completed"]}
+    halt = run.get("halt")
+    if isinstance(halt, dict):
+        diagnostic = checked_image_diagnostic(halt.get("diagnostic"))
+        if diagnostic and (diagnostic.get("http_status") == 429 or diagnostic.get("api_code") == 429):
+            payload["halt"] = {"reason": "服務回報 429；本批已立即停止，未自動重試",
+                               "identity": halt.get("identity") if halt.get("identity") in {i["identity"] for i in run["items"]} else None,
+                               "phase": halt.get("phase") if halt.get("phase") in PHASES else None,
+                               "diagnostic": diagnostic}
+    return payload
