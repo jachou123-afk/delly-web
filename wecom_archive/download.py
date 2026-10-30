@@ -7,6 +7,7 @@ import base64
 import binascii
 import csv
 import ctypes
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import getpass
 import hashlib
@@ -35,7 +36,7 @@ MEDIA_DIR = BASE / "media"
 CREDENTIALS = BASE / "credentials.json"
 DEFAULT_EXPORT = Path(__file__).resolve().parents[1] / "wecom_archive_data" / "wecom-conversations.zip"
 TAIPEI = timezone(timedelta(hours=8))
-EXPORT_FORMAT = 2
+EXPORT_FORMAT = 3
 
 
 class ArchiveError(Exception):
@@ -378,10 +379,62 @@ def _database() -> sqlite3.Connection:
     return connection
 
 
+CHATRECORD_MEDIA_TYPES = frozenset({"ChatRecordImage", "ChatRecordVideo"})
+MAX_CHATRECORD_ITEMS = 1000
+MAX_CHATRECORD_MEDIA_CONTENT_BYTES = 1024 * 1024
+
+
+def _chatrecord_media_ids(record):
+    if not isinstance(record, dict) or not isinstance(record.get("item"), list):
+        raise ArchiveError("轉發紀錄結構不完整；未判定附件完整")
+    if len(record["item"]) > MAX_CHATRECORD_ITEMS:
+        raise ArchiveError("轉發紀錄項目超過安全上限；未判定附件完整")
+    for item in record["item"]:
+        if not isinstance(item, dict):
+            raise ArchiveError("轉發紀錄項目不完整；未判定附件完整")
+        kind = item.get("type")
+        if kind == "ChatRecordText":
+            continue
+        if not isinstance(kind, str) or kind not in CHATRECORD_MEDIA_TYPES:
+            raise ArchiveError("轉發紀錄含尚未支援的項目類型；未判定附件完整")
+        content = item.get("content")
+        if isinstance(content, str):
+            def pairs(values):
+                result = {}
+                for key, value in values:
+                    if key in result:
+                        raise ValueError("duplicate JSON key")
+                    result[key] = value
+                return result
+            def nonfinite(_):
+                raise ValueError("nonfinite JSON")
+            try:
+                if len(content.encode("utf8")) > MAX_CHATRECORD_MEDIA_CONTENT_BYTES:
+                    raise ValueError("content too large")
+                content = json.loads(content, object_pairs_hook=pairs, parse_constant=nonfinite)
+            except (ValueError, TypeError, UnicodeError, RecursionError):
+                raise ArchiveError("轉發媒體內容無法安全解讀；未判定附件完整") from None
+        if not isinstance(content, dict):
+            raise ArchiveError("轉發媒體內容不是物件；未判定附件完整")
+        identity = content.get("sdkfileid")
+        if not isinstance(identity, str) or not identity.strip() or "\x00" in identity:
+            raise ArchiveError("轉發媒體缺少有效識別碼；未判定附件完整")
+        try:
+            identity.encode("utf8")
+        except UnicodeError:
+            raise ArchiveError("轉發媒體識別碼編碼不完整；未判定附件完整") from None
+        yield identity
+
+
 def _media_ids(value):
     if isinstance(value, dict):
+        is_forward = value.get("msgtype") == "chatrecord"
+        if is_forward:
+            yield from _chatrecord_media_ids(value.get("chatrecord"))
         for key, child in value.items():
-            if key.lower().replace("_", "") == "sdkfileid" and isinstance(child, str) and child:
+            if is_forward and key == "chatrecord":
+                continue
+            if isinstance(key, str) and key.lower().replace("_", "") == "sdkfileid" and isinstance(child, str) and child:
                 yield child
             else:
                 yield from _media_ids(child)
@@ -390,17 +443,167 @@ def _media_ids(value):
             yield from _media_ids(child)
 
 
+def _register_media_refs(connection, identities):
+    before = connection.total_changes
+    for identity in sorted(set(identities)):
+        filename = hashlib.sha256(_cstr(identity)).hexdigest() + ".bin"
+        connection.execute("INSERT OR IGNORE INTO media(sdkfileid,filename) VALUES(?,?)", (identity, filename))
+    return connection.total_changes - before
+
+
+@contextmanager
+def _single_writer():
+    BASE.mkdir(parents=True, exist_ok=True)
+    lock = BASE / "download-writer.lock"
+    token = (str(os.getpid()) + "-" + os.urandom(16).hex()).encode("ascii")
+    try:
+        with lock.open("xb") as stream:
+            stream.write(token)
+    except FileExistsError:
+        raise ArchiveError("已有存檔下載寫入鎖；請先核對既有執行者，不啟動第二個下載") from None
+    try:
+        yield
+    finally:
+        if lock.is_file() and lock.read_bytes() == token:
+            lock.unlink()
+        else:
+            raise ArchiveError("存檔下載寫入鎖已變更；請先核對既有執行者")
+
+
+def _require_referenced_media(connection, records):
+    referenced = set()
+    for _seq, _version, body in records:
+        referenced.update(_media_ids(json.loads(body)))
+    registered = {identity: (filename, ready) for identity, filename, ready in
+                  connection.execute("SELECT sdkfileid,filename,ready FROM media")}
+    missing = referenced - set(registered)
+    if missing:
+        raise ArchiveError(f"有 {len(missing)} 個已存來源附件尚未登記；請先執行媒體專用補抓，保留前次 ZIP")
+    pending = sum(registered[identity][1] != 1 for identity in referenced)
+    if pending:
+        raise ArchiveError(f"還有 {pending} 個來源附件未下載，保留前次 ZIP")
+    if any(not (MEDIA_DIR / registered[identity][0]).is_file() for identity in referenced):
+        raise ArchiveError("來源附件檔案遺失；保留前次 ZIP，不標示為最新")
+
+
+def _archive_source_guard(connection):
+    message_hash = hashlib.sha256()
+    count = 0
+    for row in connection.execute("SELECT seq,msgid,publickey_ver,body FROM messages ORDER BY seq"):
+        message_hash.update(json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode("utf8"))
+        message_hash.update(b"\n")
+        count += 1
+    metadata = list(connection.execute("SELECT name,value FROM metadata ORDER BY name"))
+    return {"messages": count, "messages_sha256": message_hash.hexdigest(),
+            "metadata_sha256": hashlib.sha256(json.dumps(metadata, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
+            "cursor": dict(metadata).get("last_seq", "0")}
+
+
+def _open_existing_database(*, readonly):
+    if not DATABASE.is_file():
+        raise ArchiveError("找不到既有存檔資料庫；未建立新資料庫")
+    try:
+        return sqlite3.connect(DATABASE.resolve().as_uri() + ("?mode=ro" if readonly else "?mode=rw"), uri=True)
+    except sqlite3.Error:
+        raise ArchiveError("既有存檔資料庫無法開啟；未建立新資料庫") from None
+
+
+def _media_only_plan(connection, sequences):
+    if (not isinstance(sequences, list) or not sequences or len(sequences) > 1000
+            or any(type(seq) is not int or seq < 1 for seq in sequences)
+            or len(set(sequences)) != len(sequences)):
+        raise ArchiveError("媒體專用補抓須指定不重複的既有正整數序號")
+    guard = _archive_source_guard(connection)
+    referenced, sources = set(), []
+    for seq in sorted(sequences):
+        row = connection.execute("SELECT body FROM messages WHERE seq=?", (seq,)).fetchone()
+        if row is None:
+            raise ArchiveError("指定序號不在既有存檔內；未登記或補抓媒體")
+        body = row[0]
+        try:
+            message = json.loads(body)
+        except (ValueError, TypeError, RecursionError):
+            raise ArchiveError("指定已存訊息的 JSON 不完整；未登記媒體") from None
+        if not isinstance(message, dict):
+            raise ArchiveError("指定已存訊息 JSON 不是物件；未登記媒體")
+        referenced.update(_media_ids(message))
+        sources.append({"seq": seq, "body_sha256": hashlib.sha256(body.encode("utf8")).hexdigest()})
+    registered = {identity: (filename, ready) for identity, filename, ready in
+                  connection.execute("SELECT sdkfileid,filename,ready FROM media") if identity in referenced}
+    for filename, ready in registered.values():
+        if (not isinstance(filename, str) or not filename or Path(filename).name != filename
+                or type(ready) is not int or ready not in (0, 1)):
+            raise ArchiveError("既有媒體索引不完整；未改名、重置或補抓")
+    selected_state = [(identity, *registered[identity]) if identity in registered else (identity, None, None)
+                      for identity in sorted(referenced)]
+    ready_missing = sum(ready == 1 and not (MEDIA_DIR / filename).is_file() for filename, ready in registered.values())
+    scope = {"source_guard": guard, "sources": sources, "selected_media_state": selected_state}
+    result = {"schema": 1, "mode": "stored_media_only", "sequences": sorted(sequences), "source_guard": guard,
+              "source_message_guards": sources, "referenced_media": len(referenced),
+              "unregistered": len(referenced - set(registered)),
+              "registered_pending": sum(ready == 0 for filename, ready in registered.values()),
+              "registered_ready": sum(ready == 1 for filename, ready in registered.values()),
+              "ready_files_missing": ready_missing,
+              "scope_sha256": hashlib.sha256(json.dumps(scope, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+    return result, referenced
+
+
+def media_only(sequences, *, apply=False, expected_scope_sha256=None):
+    """Rescan only saved messages; never GetChatData, private keys, or cursor writes."""
+    if apply is not True:
+        connection = _open_existing_database(readonly=True)
+        try:
+            result, _ = _media_only_plan(connection, sequences)
+            return {**result, "dry_run": True, "applied": False, "no_chat_download": True}
+        finally:
+            connection.close()
+    if not isinstance(expected_scope_sha256, str) or not re.fullmatch("[0-9a-f]{64}", expected_scope_sha256):
+        raise ArchiveError("補抓前須提供已核對 dry-run 的 scope SHA256")
+    if not DATABASE.is_file():
+        raise ArchiveError("找不到既有存檔資料庫；未建立新資料庫")
+    with _single_writer():
+        connection = _open_existing_database(readonly=False)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            before, referenced = _media_only_plan(connection, sequences)
+            if before["scope_sha256"] != expected_scope_sha256:
+                raise ArchiveError("已存來源或媒體狀態自 dry-run 後變更；未登記或補抓")
+            if before["ready_files_missing"]:
+                raise ArchiveError("已完成媒體檔案遺失；保留原索引，不自動重置 ready")
+            registered = _register_media_refs(connection, referenced)
+            connection.commit()
+            if _archive_source_guard(connection) != before["source_guard"]:
+                raise ArchiveError("補登記時訊息或水位變更；未啟動媒體補抓")
+            pending = any(identity in referenced for (identity,) in connection.execute("SELECT sdkfileid FROM media WHERE ready=0"))
+            succeeded = failed = 0
+            if pending:
+                corp_id, secret = _credentials(True)
+                with FinanceSdk(corp_id, secret) as sdk:
+                    succeeded, failed = _sync_media(sdk, connection, only_sdkfileids=referenced)
+            if _archive_source_guard(connection) != before["source_guard"]:
+                raise ArchiveError("補媒體期間訊息或水位變更；未標示媒體完成")
+            after, _ = _media_only_plan(connection, sequences)
+            complete = not (after["unregistered"] or after["registered_pending"] or after["ready_files_missing"])
+            return {**after, "dry_run": False, "applied": True, "requested_scope_sha256": expected_scope_sha256,
+                    "new_media_registered": registered, "downloaded": succeeded, "download_failed": failed,
+                    "complete": complete, "source_and_cursor_unchanged": True, "no_chat_download": True}
+        finally:
+            connection.close()
+
+
 def _decrypt_random_key(record: dict, private_key) -> bytes:
     encrypted_key = base64.b64decode(record["encrypt_random_key"], validate=True)
     random_key = private_key.decrypt(encrypted_key, padding.PKCS1v15())
     return random_key
 
 
-def _sync_media(sdk: FinanceSdk, connection: sqlite3.Connection) -> tuple[int, int]:
+def _sync_media(sdk: FinanceSdk, connection: sqlite3.Connection, *, only_sdkfileids=None) -> tuple[int, int]:
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     pending = connection.execute(
         "SELECT sdkfileid, filename FROM media WHERE ready=0 ORDER BY rowid"
     ).fetchall()
+    if only_sdkfileids is not None:
+        pending = [(identity, filename) for identity, filename in pending if identity in only_sdkfileids]
     succeeded = 0
     failed = 0
     for sdkfileid, filename in pending:
@@ -422,7 +625,7 @@ def _sync_media(sdk: FinanceSdk, connection: sqlite3.Connection) -> tuple[int, i
     return succeeded, failed
 
 
-def sync(limit: int, max_pages: int | None, *, saved_credentials: bool = False,
+def _sync_unlocked(limit: int, max_pages: int | None, *, saved_credentials: bool = False,
          fresh_key_version: int | None = None) -> None:
     if not PRIVATE_KEY.is_file():
         raise ArchiveError(f"找不到私鑰：{PRIVATE_KEY}")
@@ -495,12 +698,7 @@ def sync(limit: int, max_pages: int | None, *, saved_credentials: bool = False,
                             ),
                         )
                         added += connection.total_changes - before
-                        for sdkfileid in set(_media_ids(message)):
-                            filename = hashlib.sha256(_cstr(sdkfileid)).hexdigest() + ".bin"
-                            connection.execute(
-                                "INSERT OR IGNORE INTO media(sdkfileid,filename) VALUES(?,?)",
-                                (sdkfileid, filename),
-                            )
+                        _register_media_refs(connection, _media_ids(message))
                     _set_metadata(connection, "last_seq", max_seq)
                     if version is not None:
                         if not verified:
@@ -525,6 +723,15 @@ def sync(limit: int, max_pages: int | None, *, saved_credentials: bool = False,
         print(f"同步結束：新增 {added} 則訊息，附件成功 {media_ok}，待重試 {media_failed}")
     finally:
         connection.close()
+
+
+def sync(limit: int, max_pages: int | None, *, saved_credentials: bool = False,
+         fresh_key_version: int | None = None) -> None:
+    if not PRIVATE_KEY.is_file():
+        raise ArchiveError(f"找不到私鑰：{PRIVATE_KEY}")
+    with _single_writer():
+        _sync_unlocked(limit, max_pages, saved_credentials=saved_credentials,
+                       fresh_key_version=fresh_key_version)
 
 
 def _safe_spreadsheet_text(value: str) -> str:
@@ -566,6 +773,7 @@ def export(output: Path) -> None:
         records = connection.execute(
             "SELECT seq,publickey_ver,body FROM messages ORDER BY seq"
         ).fetchall()
+        _require_referenced_media(connection, records)
         media = connection.execute(
             "SELECT sdkfileid,filename FROM media WHERE ready=1 ORDER BY filename"
         ).fetchall()
@@ -648,6 +856,8 @@ def _archive_current(output: Path) -> bool:
         media = connection.execute("SELECT COUNT(*) FROM media WHERE ready=1").fetchone()[0]
         pending = connection.execute("SELECT COUNT(*) FROM media WHERE ready=0").fetchone()[0]
         scope = _scope_manifest(connection)
+        records = connection.execute("SELECT seq,publickey_ver,body FROM messages ORDER BY seq").fetchall()
+        _require_referenced_media(connection, records)
     finally:
         connection.close()
     if pending:
@@ -709,6 +919,12 @@ def main() -> int:
     run_parser.add_argument("--output", type=Path, default=DEFAULT_EXPORT)
     run_parser.add_argument("--fresh-key-version", type=int,
                             help="首次全新存檔的管理端實際公鑰版本")
+    media_parser = commands.add_parser("media-only", help="只補指定已存訊息的媒體，不下載聊天或更改水位")
+    media_parser.add_argument("--seq", action="append", type=int, required=True, help="既有訊息序號，可重複指定不同序號")
+    media_modes = media_parser.add_mutually_exclusive_group()
+    media_modes.add_argument("--dry-run", action="store_true", help="唯讀預覽（預設）")
+    media_modes.add_argument("--apply", action="store_true", help="按已核對 scope 補登記與補抓媒體")
+    media_parser.add_argument("--expected-scope-sha256", help="apply 必須提供本次 dry-run 的 scope SHA256")
     args = parser.parse_args()
     try:
         if args.command == "sync":
@@ -716,6 +932,10 @@ def main() -> int:
                 raise ArchiveError("limit 必須為 1–1000，max-pages 必須大於 0")
             sync(args.limit, args.max_pages, saved_credentials=args.saved_credentials,
                  fresh_key_version=args.fresh_key_version)
+        elif args.command == "media-only":
+            result = media_only(args.seq, apply=args.apply, expected_scope_sha256=args.expected_scope_sha256)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if not args.apply or result["complete"] else 1
         elif args.command == "prepare-fresh":
             prepare_fresh()
         elif args.command == "configure":
