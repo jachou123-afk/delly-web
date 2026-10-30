@@ -7,6 +7,8 @@ from dispatch_manager import DispatchError, digest, now
 from dispatch_storage import asset_bytes
 from nas_dispatch_storage import NasDispatchStore, _same_location
 from nas_original_adoption import adopt_existing_nas_originals
+from nas_repair_snapshot import (prepare_batched_existing_image_repair,
+                                 supports_batched_existing_snapshot)
 from product_images import source_problem, subject_key
 from product_image_storage import checked_image_diagnostic, image_error_diagnostic, image_error_summary
 from quote_image_repair import (prepare_image_repair, save_image_repair,
@@ -228,7 +230,9 @@ def _verify_complete_existing_nas(store, plan, assets):
     after = store.image_locations(expected)
     if after != before:
         raise DispatchError("既有 NAS 原圖位置在讀回期間已變更；未確認完成")
-    final = prepare_image_repair(store, plan["source"]["identity"])
+    prepare = (prepare_batched_existing_image_repair if supports_batched_existing_snapshot(store)
+               and "_repair_record_sheet_ids" in plan["source"] else prepare_image_repair)
+    final = prepare(store, plan["source"]["identity"], **({"source_hint": plan["source"]} if prepare is prepare_batched_existing_image_repair else {}))
     if final["snapshot_digest"] != plan["snapshot_digest"] or final["binding"] != binding:
         raise DispatchError("既有商品或圖片版本在讀回期間已變更；未確認完成")
     return binding
@@ -247,7 +251,9 @@ def process_next_repair(store, package, run, *, actor, limit=MAX_CHUNK_PRODUCTS,
         item["attempts"] += 1
         phase = "prepare"
         try:
-            plan = prepare_image_repair(store, item["identity"])
+            prepare = (prepare_batched_existing_image_repair if updated["mode"] == "existing_only"
+                       and supports_batched_existing_snapshot(store) else prepare_image_repair)
+            plan = prepare(store, item["identity"], **({"source_hint": item["source"]} if prepare is prepare_batched_existing_image_repair else {}))
             problem = source_problem(item["source"], [plan["source"]])
             if problem:
                 raise DispatchError(problem)

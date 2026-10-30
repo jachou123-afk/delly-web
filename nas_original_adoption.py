@@ -12,6 +12,8 @@ from dispatch_storage import asset_bytes, encode_record
 from nas_dispatch_storage import NasDispatchStore, _same_location
 from product_images import PRODUCT_IMAGE_SHEET, checked_assets, subject_key
 from quote_image_repair import _snapshot_digest, prepare_image_repair
+from nas_repair_snapshot import (prepare_batched_existing_image_repair,
+                                 supports_batched_existing_snapshot)
 
 
 def _guard_plan(plan):
@@ -30,7 +32,9 @@ def _guard_binding(binding, source, expected):
 
 
 def _fresh_guard(store, plan, binding, locations):
-    fresh = prepare_image_repair(store, plan["source"]["identity"])
+    prepare = (prepare_batched_existing_image_repair if supports_batched_existing_snapshot(store)
+               and "_repair_record_sheet_ids" in plan["source"] else prepare_image_repair)
+    fresh = prepare(store, plan["source"]["identity"], **({"source_hint": plan["source"]} if prepare is prepare_batched_existing_image_repair else {}))
     if (fresh["snapshot_digest"] != plan["snapshot_digest"]
             or fresh["binding"] != binding):
         raise DispatchError("既有商品或圖片版本在讀回期間已變更；未確認完成")
