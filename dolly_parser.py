@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.34")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.35")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -1686,12 +1686,13 @@ def confirmed_fuku_weight_notes(issues, raw_source, notes, carton_kg, unit_g, *,
         return result, False
     from fuku_quote_display import normalize_weight_line
     weight_lines = [normalize_weight_line(line) for line in raw.splitlines()
-                    if weight_field_info(normalize_weight_line(line))]
+                    if weight_field_info(normalize_weight_line(line))
+                    or re.match(r"^單盒\s*[:：]", normalize_weight_line(line))]
     if not weight_lines:
         return result, False
     allowed = {"原文並列兩個重量，未標明各自基準；保留原值，不選大值或小值"}
     for line in weight_lines:
-        match = re.fullmatch(r"(重量|鐵盒重量)\s*[:：]\s*(\d+(?:\.\d+)?)\s*(g|kg)\s*/\s*"
+        match = re.fullmatch(r"(重量|鐵盒重量|單盒)\s*[:：]\s*(\d+(?:\.\d+)?)\s*(g|kg)\s*/\s*"
                              r"(\d+(?:\.\d+)?)\s*(g|kg)", line, re.I)
         if (not match or min(float(match[2]), float(match[4])) <= 0
                 or line not in {normalize_weight_line(n) for n in saved_notes.splitlines()}):

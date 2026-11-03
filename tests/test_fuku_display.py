@@ -1,5 +1,6 @@
 """Synthetic display/evidence regression cases; no private supplier source."""
 from copy import deepcopy
+import pytest
 from fuku_quote_display import compact_specs, unassigned_weight_note, layout_requests
 from test_v74_safety import ns
 
@@ -49,29 +50,31 @@ def test_layout_scope_has_no_values_or_formula_writes():
     assert requests[-1]['repeatCell']['fields']=='userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment'
 
 
-def test_compact_unit_and_confirmed_weight_survive_formal_evidence_roundtrip():
+@pytest.mark.parametrize('label', ['鐵盒重量', '單盒'])
+def test_compact_unit_and_confirmed_weight_survive_formal_evidence_roundtrip(label):
     from dispatch_fakes import FakeSpreadsheet
     from dispatch_storage import CloudDispatchStore
     from quote_evidence import queue_evidence, save_evidence
     from cost_audit import audit, legacy_inputs, make_evidence
-    rows = ns['build_product_block']('no1','2026/11/3',2,'測試商品','TEST-FK',13.5,48,'盒',0,0,0,0,5,'v富酷',extra=NOTES)
+    notes = NOTES.replace('鐵盒重量', label)
+    rows = ns['build_product_block']('no1','2026/11/3',2,'測試商品','TEST-FK',13.5,48,'盒',0,0,0,0,5,'v富酷',extra=notes)
     formulas = deepcopy(rows)
     rows[1][2:11] = ['75','77.6','79.4','84.4','13.5','','0','0','67.5']
     store = CloudDispatchStore(FakeSpreadsheet({'富酷': rows}))
     store.spreadsheet.sheets['富酷'].formula_override = formulas
     source = store.catalog()[0]
     assert source['unit'] == '盒'
-    raw = '測試商品\n鐵盒重量：510g／680g\n包郵海快13.5元／盒\n裝箱48盒'
+    raw = f'測試商品\n{label}：510g／680g\n包郵海快13.5元／盒\n裝箱48盒'
     inputs = legacy_inputs(source, formulas)
     inputs.update(carton_kg="0", unit_g="0")  # Explicit saved confirmation; never infer a weight.
-    evidence = make_evidence(source, formulas, raw, inputs, notes=NOTES, origin="test")
+    evidence = make_evidence(source, formulas, raw, inputs, notes=notes, origin="test")
     assert audit(source, formulas, evidence)['quote_math_pass']
-    _, pending = queue_evidence({}, '富酷', 1, formulas, raw, inputs, {}, NOTES)
+    _, pending = queue_evidence({}, '富酷', 1, formulas, raw, inputs, {}, notes)
     save_evidence(store, pending)
     report, _ = store.cost_audit(source)
     assert report['source_ready'] and report['quote_math_pass']
-    assert report['raw_source'] == raw and report['notes'] == NOTES
-    for bad in (NOTES.replace('確認依據：測試確認', ''), NOTES.replace('510g/680g', '511g/680g')):
+    assert report['raw_source'] == raw and report['notes'] == notes
+    for bad in (notes.replace('確認依據：測試確認', ''), notes.replace('510g/680g', '511g/680g')):
         e = make_evidence(source, formulas, raw, inputs, notes=bad, origin="test")
         assert not audit(source, formulas, e)['quote_math_pass']
     for bad_weight in ('0', '510'):

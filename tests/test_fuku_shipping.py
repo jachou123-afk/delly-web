@@ -246,13 +246,17 @@ def test_form_weight_notes_confirmation_is_bound_and_supplier_gated(vendor):
 
 
 @pytest.mark.parametrize('bullet', ['-', '· ', '• '])
-def test_paired_weight_list_bullets_preserve_original_and_other_guards(bullet):
+@pytest.mark.parametrize('label', ['鐵盒重量', '單盒'])
+def test_paired_weight_list_bullets_preserve_original_and_other_guards(bullet, label):
     from fuku_quote_display import confirmed_unassigned_weight_display, unassigned_weight_note
-    raw = _paired_weight_source().replace('鐵盒重量:', bullet + '鐵盒重量:')
+    raw = _paired_weight_source().replace('鐵盒重量:', bullet + label + ':')
     c, _ = ns['parse_text'](raw)
     issues, applied = ns['confirmed_fuku_weight_notes'](c['issues'], raw, c['extra_tags'], 0, 0,
         vendor='v富酷', confirmed=True, evidence='使用者確認雙重量僅保留原文')
     assert applied and not issues and c['raw_text'] == raw
+    blocked, applied_without_confirmation = ns['confirmed_fuku_weight_notes'](c['issues'], raw, c['extra_tags'], 0, 0,
+        vendor='v富酷', confirmed=False, evidence='')
+    assert blocked and not applied_without_confirmation
     notes = c['extra_tags'] + '\n富酷重量僅保留原文；計重欄留空。確認依據：測試確認'
     display = unassigned_weight_note(notes)
     assert confirmed_unassigned_weight_display(raw, notes, display)
