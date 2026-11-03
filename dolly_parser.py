@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.30")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.31")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -349,7 +349,7 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
             if (
                 note_index < len(bulk_rows)
                 and len(bulk_rows[note_index]) > 8
-                and bulk_rows[note_index][8] in {"廣州包郵", "台灣包郵"}
+                and bulk_rows[note_index][8] in {"廣州包郵", "台灣包郵", "包郵海快到台灣"}
             ):
                 formats.append({"range": f"I{base_r + 2}", "format": {
                     "backgroundColor": {"red": 0.8509804, "green": 0.91764706, "blue": 0.827451}}})
@@ -424,7 +424,7 @@ def build_cost_formulas(
     final_price=None,
     blocked=False,
 ):
-    """建立成本公式；方小姐包郵可缺重量，其他廠商維持重量檢查。"""
+    """建立成本公式；方小姐與富酷台灣包郵可缺重量，其他廠商維持重量檢查。"""
     weight_cell = f"H{v_r}"
     domestic_cell = f"I{v_r}"
     international_cell = f"J{v_r}"
@@ -441,7 +441,7 @@ def build_cost_formulas(
             or ex_rate <= 0 or final_qty <= 0 or final_qty != int(final_qty)):
         return blank
     weight_state = resolve_weight_inputs(carton_weight_kg, unit_weight_g, final_qty)
-    if (blocked or final_qty <= 0 or (weight_state["source"] == "missing" and normalize_vendor(vendor) != "v方小姐")
+    if (blocked or final_qty <= 0 or (weight_state["source"] == "missing" and normalize_vendor(vendor) not in {"v方小姐", "v富酷"})
             or weight_state["mismatch_ratio"] >= 0.2
             or (final_price is not None and (not math.isfinite(final_price) or final_price <= 0))):
         return blank
@@ -506,6 +506,12 @@ def build_cost_formulas(
     if normalize_vendor(vendor) == "v方小姐":
         # Taiwan-inclusive price: user requested a direct integer ceiling.
         result["cost"] = f"=ROUNDUP(G{v_r}*{exchange_rate_literal},0)"
+    if normalize_vendor(vendor) == "v富酷":
+        # Confirmed delivered-to-Taiwan cost; preserve the exact product.
+        guard = f'IF(OR(NOT(ISNUMBER(G{v_r})),G{v_r}<=0),"",{{}})'
+        result["domestic"] = '=IFERROR(' + guard.format('0') + ',"")'
+        result["international"] = '=IFERROR(' + guard.format('0') + ',"")'
+        result["cost"] = '=IFERROR(' + guard.format(f'G{v_r}*{exchange_rate_literal}') + ',"")'
     return result
 # --- 3. 工具頁籤；發送管理只使用整理完成的商品資料 ---
 def get_dispatch_store():
@@ -600,7 +606,7 @@ if not dispatch_tab.open:
     st.sidebar.header("⚙️ 成本參數設定")
     ex_rate = st.sidebar.number_input("匯率", value=settings["ex_rate"], step=0.05, format="%.2f")
     intl_rate = st.sidebar.number_input("國際運費 (RMB/kg)", value=settings["intl_rate"], step=0.5)
-    st.sidebar.caption("多品村國際運費固定為 9 RMB/kg；方小姐台灣包郵，內陸與國際運費均為 0；其他廠商使用上方費率。")
+    st.sidebar.caption("多品村國際運費固定為 9 RMB/kg；方小姐台灣包郵；富酷包郵海快到台灣，成本＝進價×匯率，兩段運費0；其他廠商使用上方費率。")
     dom_rate_def = st.sidebar.number_input("內陸運費 (RMB/kg)", value=settings["dom_rate"], step=0.5)
     if st.sidebar.button("📌 將目前數值設為預設"):
         if save_settings({"ex_rate": ex_rate, "intl_rate": intl_rate, "dom_rate": dom_rate_def}):
@@ -1080,7 +1086,7 @@ def parse_text_legacy(text):
             '尺寸','單個尺寸','单个尺寸','單個包裝','单个包装',
             '彩盒','外箱','產品','产品','規格','规格','亞克力','亚克力',
             '包裝','包装','運費','运费','材積','材积','條碼','条码',
-            '配件','需要','帶鐳','帶雷','镭射','电池','電池'
+            '包郵','海快','配件','需要','帶鐳','帶雷','镭射','电池','電池'
         ]
 
         name_lines = []
@@ -1283,8 +1289,10 @@ def wooden_rack_cost_basis_text(text):
 
 def parse_text(text):
     """單一報價的保守解析；不把多則獨立報價套用同一組數字。"""
-    from inline_quote_parser import expand_inline_quote
-    normalized = expand_inline_quote(zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw"))
+    from inline_quote_parser import expand_inline_quote, expand_inclusive_sea_quote
+    from fuku_quote_parser import prepare_inclusive_sea_layout
+    layout_text, inclusive_layout = prepare_inclusive_sea_layout(zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw"))
+    normalized = expand_inline_quote(expand_inclusive_sea_quote(layout_text))
     # Strict aliases only: a quantity-labelled specification must contain a
     # whole count and unit; dimension labels must retain explicit cm/mm units.
     # The untouched source remains in raw_text below.
@@ -1482,6 +1490,7 @@ def parse_text(text):
                 re.match(meta, line, re.I)
                 or re.match(r"^(?:碼數|鞋碼|尺碼)\s*[:：]", line)
                 or is_name_metadata_line(line)
+                or re.match(r"^包郵\s*海快", line)
                 or re.search(r"木架|木框", line)
                 or supplemental_uncertainty_issues(line)
             ):
@@ -1534,12 +1543,19 @@ def parse_text(text):
         if re.fullmatch(r"展示盒\s*\d+\s*(?:個|隻|只|盒|套)", line):
             notes.append(line)
         if (
-            re.search(r"帶[鐳雷]射|正版授權|材質|顏色|圖案|端盒|木架|木框|包裝|USB|充電|約.*(?:kg|公斤|克)|另加|另計|加收|另收|額外收費|附加費|運費|物流費|快遞費|郵費|配送費|打包費|包裝費|加工費|手工費|貼標費|印刷費|組裝費|開模費|版費|配件費|稅費|稅點|服務費|搬運費|裝卸費|差價|待定|待確認", line, re.I)
+            re.search(r"包郵\s*海快|帶[鐳雷]射|正版授權|材質|顏色|圖案|端盒|木架|木框|包裝|USB|充電|約.*(?:kg|公斤|克)|另加|另計|加收|另收|額外收費|附加費|運費|物流費|快遞費|郵費|配送費|打包費|包裝費|加工費|手工費|貼標費|印刷費|組裝費|開模費|版費|配件費|稅費|稅點|服務費|搬運費|裝卸費|差價|待定|待確認", line, re.I)
             or supplemental_uncertainty_issues(line)
         ):
             notes.append(line)
     if rack_context["state"] == "optional":
         notes.append("可加木架；成本按無木架的進價及重量計算")
+    if inclusive_layout:
+        if len(products) == 1 and inclusive_layout["name"]:
+            products[0]["name"] = inclusive_layout["name"]
+        notes.extend(inclusive_layout["notes"])
+        for line in inclusive_layout["notes"]:
+            if re.search(r"(?:重量|單盒)\s*[:：]\s*\d+(?:\.\d+)?\s*(?:g|kg)\s*/", line, re.I):
+                issues.append("原文並列兩個重量，未標明各自基準；保留原值，不選大值或小值")
     common["extra_tags"] = "\n".join(dict.fromkeys(notes))
     return common, products
 
@@ -1556,10 +1572,12 @@ def cost_blockers(price, qty, carton_kg, unit_g, dom, intl, ex, issues=(), price
     if min(carton_kg, unit_g, dom, intl) < 0 or ex <= 0:
         reasons.append("重量、運費或匯率不合法")
     weight = resolve_weight_inputs(carton_kg, unit_g, qty)
-    if weight["source"] == "missing" and normalize_vendor(vendor) != "v方小姐":
+    if weight["source"] == "missing" and normalize_vendor(vendor) not in {"v方小姐", "v富酷"}:
         reasons.append("缺少有效重量來源")
     if weight["mismatch_ratio"] >= 0.2:
         reasons.append("單個與整箱重量差異達20%，須先核對")
+    if normalize_vendor(vendor) == "v富酷" and not price_unit:
+        reasons.append("富酷計價單位未確認")
     if not qty_unit:
         reasons.append("裝箱單位未確認")
     if price_unit and qty_unit and price_unit != qty_unit:
@@ -2180,7 +2198,7 @@ weight_state = resolve_weight_inputs(
     final_qty,
 )
 if weight_state["source"] == "missing":
-    st.info("未提供重量：下方選擇「v方小姐」可按台灣包郵價入表，重量留空；其他廠商仍須提供重量。")
+    st.info("未提供重量：下方選擇「v方小姐」或「v富酷」可按台灣包郵價入表，重量留空；其他廠商仍須提供重量。")
 elif weight_state["source"] == "unit":
     st.info(
         f"ℹ️ 已辨識單個重量 {final_unit_weight_g:g}g；運費將以 "
@@ -2228,6 +2246,7 @@ if any("非木架額外費用" in issue for issue in active_issues):
         final_extra += "\n附加費用確認：" + extra_basis.strip()
 effective_price_unit = common_data["price_unit"]
 unit_needs_review = bool(effective_price_unit and final_qty_unit and effective_price_unit != final_qty_unit)
+unit_needs_review = unit_needs_review or bool(not effective_price_unit and final_qty_unit and re.search(r"包郵\s*海快", user_input_tw))
 weight_needs_review = "重量欄位「重量」未標明單個或整箱，須確認重量範圍" in active_issues
 if unit_needs_review or weight_needs_review:
     review_key = hashlib.sha256(repr((draft_key, user_input, final_price, final_qty,
@@ -2311,7 +2330,7 @@ if user_input.strip():
     category_options = [""] + list(dict.fromkeys((*QUOTE_CATEGORIES, *quote_category_codes)))
 
     if operation == "新增商品":
-        from quote_create_form import render_create_form
+        from quote_create_form import render_create_form, new_quote_destination
 
         approved_code_conflicts = []
         code_conflict_note = ""
@@ -2366,11 +2385,19 @@ if user_input.strip():
             st.stop()
         final_category = submission["category"]
         final_vendor = normalize_vendor(submission["vendor"])
+        try:
+            final_category = new_quote_destination(final_category, final_vendor)
+        except ValueError as exc:
+            hard_reasons.append(str(exc))
         block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
                                      final_dom, intl_rate, ex_rate, active_issues, effective_price_unit,
                                      final_qty_unit, vendor=final_vendor)
         if final_vendor == "v方小姐":
             cost_notes += "\n台灣包郵：成本為進價×當次匯率，無條件進位整數；未提供重量時留空，兩段運費均為0。"
+        if final_vendor == "v富酷":
+            final_dom = 0.0
+            cost_inputs["dom_rate"] = 0.0
+            cost_notes += "\n富酷包郵海快到台灣：成本＝進價×當次匯率，保留直接換算結果；未提供重量留空，兩段運費均為0。"
         if approved_code_conflicts and final_vendor != "v多品村":
             hard_reasons.append("同貨號分開建檔目前僅適用已確認中間商規則的多品村")
         cost_inputs["intl_rate"] = international_rate_for_vendor(final_vendor, intl_rate)

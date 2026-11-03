@@ -77,3 +77,25 @@ def expand_inline_bag_quote(text):
     return (f"{match['name'].strip()}\n包裝:{match['pack']}（原文包郵）\n"
             f"裝箱:{match['qty']}{match['qty_unit']}\n"
             f"單{match['price_unit']}價格:{match['price']}元")
+
+
+def expand_inclusive_sea_quote(text):
+    """Recognize labelled inclusive-sea prices without inferring supplier/units."""
+    label = r"包郵\s*海快(?:價)?"
+    amount = rf"(?:RMB|¥)?\s*(?P<price>{_NUMBER})\s*元?"
+    patterns = [
+        re.compile(rf"^{label}\s*[:：]?\s*{amount}\s*[/／]\s*(?P<unit>{_UNIT})\s*$", re.I),
+        re.compile(rf"^{label}\s*[:：]?\s*(?:一|每|單)(?P<unit>{_UNIT})\s*{amount}\s*$", re.I),
+        re.compile(rf"^(?:一|每|單)(?P<unit>{_UNIT})\s*{label}\s*[:：]?\s*{amount}\s*$", re.I),
+        re.compile(rf"^{label}\s*[:：]?\s*{amount}\s*$", re.I),
+    ]
+    lines = []
+    for line in text.splitlines():
+        match = next((m for pattern in patterns if (m := pattern.fullmatch(line.strip()))), None)
+        if match:
+            unit = match.groupdict().get('unit', '')
+            lines.append(f"單{unit}價格:{match['price']}元" if unit else f"價格:{match['price']}元")
+            lines.append("包郵海快")
+        else:
+            lines.append(line)
+    return '\n'.join(lines)

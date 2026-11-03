@@ -8,6 +8,8 @@ import hashlib
 
 import streamlit as st
 
+from supplier_names import normalize_vendor
+
 
 CONFIRM_LABEL = "我已逐欄對照原文、補充資訊及廠商，確認新增這 1 款商品"
 
@@ -26,6 +28,15 @@ def advance_create_revision(previous, basis_digest):
         "basis": basis_digest,
         "revision": previous.get("revision", 0) + 1,
     }
+
+
+def new_quote_destination(category, vendor):
+    """The explicitly selected supplier controls FuKu's dedicated sheet."""
+    if normalize_vendor(vendor) == "v富酷":
+        return "富酷"
+    if category == "富酷":
+        raise ValueError("富酷分頁僅接受 v富酷；請核對廠商")
+    return category
 
 
 def _capture_submission(receipt_key, selection_key, widget_keys, basis, revision):
@@ -71,6 +82,8 @@ def render_create_form(*, basis, categories, vendors, disabled=False,
     category_default = previous_selection.get("category", "")
     vendor_default = previous_selection.get("vendor", "")
 
+    if "v富酷" in vendor_options:
+        st.caption("選擇 v富酷 時固定存入「富酷」分頁；包郵海快已到台灣，成本＝進價×匯率，兩段運費0。")
     with st.form(f"{scope}_form", enter_to_submit=False):
         st.selectbox(
             "📂 分頁", category_options,

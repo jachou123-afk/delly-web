@@ -18,7 +18,7 @@ DEFAULT_VENDORS = get_common_rules().default_vendors
 def international_rate_for_vendor(vendor, default_rate):
     """Apply confirmed supplier freight terms without changing global defaults."""
     canonical = normalize_vendor(vendor)
-    if canonical == "v方小姐":
+    if canonical in {"v方小姐", "v富酷"}:
         return 0.0  # Taiwan delivery is already included in this supplier's price.
     return 9.0 if canonical == "v多品村" else default_rate
 

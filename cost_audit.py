@@ -57,7 +57,7 @@ def calculate(inputs, vendor):
     if price <= 0 or qty <= 0 or qty != qty.to_integral_value() or values["ex_rate"] <= 0:
         raise ValueError("進價、整數裝箱量、匯率必須大於零")
     candidates = [w for w in (carton * 1000 / qty, unit) if w > 0]
-    included_delivery = supplier_rule(vendor).canonical_name == "v方小姐"
+    included_delivery = supplier_rule(vendor).canonical_name in {"v方小姐", "v富酷"}
     if not candidates and not included_delivery:
         raise ValueError("沒有原始重量，不能由計費重量倒推")
     if len(candidates) == 2 and (max(candidates) - min(candidates)) / max(candidates) >= Decimal("0.2"):
@@ -71,6 +71,9 @@ def calculate(inputs, vendor):
     if supplier_rule(vendor).canonical_name == "v方小姐":
         cost = (price * values["ex_rate"]).to_integral_value(rounding=ROUND_CEILING)
         cost_note = f"{fmt(price)} × {fmt(values['ex_rate'])} → 無條件進位整數"
+    if supplier_rule(vendor).canonical_name == "v富酷":
+        cost = price * values["ex_rate"]
+        cost_note = f"{fmt(price)} × {fmt(values['ex_rate'])}；包郵海快到台灣，直接換算"
     quote = (cost / Decimal("0.9")).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     sale = quote.to_integral_value(rounding=ROUND_CEILING)
     weight_basis = f"{fmt(carton)} kg ÷ {fmt(qty)} × 1000" if carton > 0 else f"{fmt(unit)} g"
@@ -116,7 +119,7 @@ def legacy_inputs(source, formulas):
     rates = re.findall(r"ROUND\(\(G\$?\d+\+I\$?\d+\+J\$?\d+\)\*(\d+(?:\.\d+)?),1\)", formulas[1][10].upper().replace(" ", ""))
     if len(rates) == 1:
         result["ex_rate"] = rates[0]
-    if supplier_rule(source.get("vendor", "")).canonical_name == "v方小姐":
+    if supplier_rule(source.get("vendor", "")).canonical_name in {"v方小姐", "v富酷"}:
         if note == "重量 未提供" and not saved[1][7] and not formulas[1][7]:
             result.update(carton_kg="0", unit_g="0")
         result["intl_rate"] = "0"
@@ -125,6 +128,11 @@ def legacy_inputs(source, formulas):
             rf"=ROUNDUP\(\$?G\$?{row_number}\*(\d+(?:\.\d+)?),0\)",
             formulas[1][10].upper().replace(" ", ""),
         )
+        if supplier_rule(source.get("vendor", "")).canonical_name == "v富酷":
+            direct = re.fullmatch(
+                rf'=IFERROR\(IF\(OR\(NOT\(ISNUMBER\(G{row_number}\)\),G{row_number}<=0\),"",G{row_number}\*(\d+(?:\.\d+)?)\),""\)',
+                formulas[1][10].upper().replace(" ", ""),
+            )
         if direct:
             result["ex_rate"] = direct[1]
     if free_shipping(source.get("vendor", "")):
@@ -172,7 +180,7 @@ def audit(source, formulas=None, evidence=None):
                             "驗算使用值": result["inputs"].get(key) or "未保存／無法辨識", "依據": label}
                             for key, title in INPUT_LABELS.items()]
     try:
-        omitted_weight = (supplier_rule(source["vendor"]).canonical_name == "v方小姐"
+        omitted_weight = (supplier_rule(source["vendor"]).canonical_name in {"v方小姐", "v富酷"}
                           and number(result["inputs"].get("carton_kg", "")) == 0
                           and number(result["inputs"].get("unit_g", "")) == 0)
     except (ValueError, InvalidOperation):
