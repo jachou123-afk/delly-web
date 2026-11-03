@@ -183,8 +183,8 @@ def test_explicit_paired_weight_notes_keep_original_and_exact_cost():
     assert not ns['cost_blockers'](13.5,48,0,0,0,0,5,issues,'盒','盒','v富酷')
     block=ns['build_product_block']('no1','2026/11/3',2,'測試商品','TEST-PAIR',13.5,48,'盒',
         0,0,0,0,5,'v富酷',extra=c['extra_tags']+'\n富酷重量僅保留原文；計重欄留空。')
-    assert block[1][7]=='' and '510g/680g' in block[1][1]
-    assert block[3][1]=='重量 保留原文備註（未指定計重基準）'
+    assert block[1][7]=='' and '510g/680g' not in block[1][1]
+    assert block[3][1]=='重量 510g/680g（原文，未指定淨重／毛重）'
 
 
 @pytest.mark.parametrize('vendor,confirmed,evidence,kg,g', [

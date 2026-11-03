@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.32")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.33")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -354,6 +354,12 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
                 formats.append({"range": f"I{base_r + 2}", "format": {
                     "backgroundColor": {"red": 0.8509804, "green": 0.91764706, "blue": 0.827451}}})
         sheet.batch_format(formats)
+        if category_name == "富酷" and all(
+            normalize_vendor(bulk_rows[i][11]) == "v富酷"
+            for i in range(0, len(bulk_rows), block_size)
+        ):
+            from fuku_quote_display import layout_requests
+            spreadsheet.batch_update({"requests": layout_requests(sheet.id, st_r, num_blocks)})
         return True
     except Exception as e:
         get_all_sheets_data.clear()
@@ -1780,6 +1786,9 @@ def build_product_block(
     if extra:
         info_lines.append(str(extra).strip())
     info_display = "\n".join(info_lines)
+    if vendor == "v富酷":
+        from fuku_quote_display import compact_specs
+        info_display = compact_specs(qty_unit, prod_size, color_size, outer_size, extra)
 
     if carton_weight_kg > 0 and unit_weight_g > 0:
         weight_note = f"整箱毛重 {carton_weight_kg:g}KG／單個重量 {unit_weight_g:g}g"
@@ -1788,7 +1797,8 @@ def build_product_block(
     elif unit_weight_g > 0:
         weight_note = f"單個重量 {unit_weight_g:g}g"
     elif vendor == "v富酷" and "富酷重量僅保留原文；計重欄留空。" in str(extra):
-        weight_note = "重量 保留原文備註（未指定計重基準）"
+        from fuku_quote_display import unassigned_weight_note
+        weight_note = unassigned_weight_note(extra)
     else:
         weight_note = "重量 未提供"
 

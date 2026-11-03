@@ -192,7 +192,12 @@ def audit(source, formulas=None, evidence=None):
     for col in (2, 7, 8, 9, 10):
         formula = formulas[1][col].upper()
         if col == 7 and omitted_weight:
-            if formula or saved[1][col] or saved[3][1] != "重量 未提供":
+            weight_label_ok = saved[3][1] == "重量 未提供"
+            if supplier_rule(source["vendor"]).canonical_name == "v富酷" and result["source_ready"]:
+                from fuku_quote_display import confirmed_unassigned_weight_display
+                weight_label_ok = weight_label_ok or confirmed_unassigned_weight_display(
+                    result["raw_source"], result["notes"], saved[3][1])
+            if formula or saved[1][col] or not weight_label_ok:
                 result["errors"].append("未提供重量的台灣包郵商品，重量欄必須留空並保留未提供註記")
             continue
         if not formula.startswith("="):
