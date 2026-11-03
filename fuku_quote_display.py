@@ -3,6 +3,12 @@ import re
 import unicodedata
 
 
+def normalize_weight_line(line):
+    """Ignore list bullets only before a weight label; preserve numeric signs."""
+    line = unicodedata.normalize("NFKC", str(line)).strip()
+    return re.sub(r"^[-·•]\s*(?=(?:鐵盒)?重量\s*[:：])", "", line)
+
+
 def compact_specs(unit, product_size, color_size, outer_size, notes):
     # Confirmation/audit prose belongs to saved evidence, never the display.
     source = re.split(r"人工確認依據[：:]|富酷重量僅保留原文", str(notes), maxsplit=1)[0]
@@ -44,7 +50,7 @@ def unassigned_weight_note(notes):
     source = re.split(r"人工確認依據[：:]|富酷重量僅保留原文", str(notes), maxsplit=1)[0]
     pattern = r"^(?:鐵盒)?重量\s*[:：]\s*(.+)$"
     values = [m[1].strip() for line in source.splitlines()
-              if (m := re.match(pattern, line.strip()))]
+              if (m := re.match(pattern, normalize_weight_line(line)))]
     if not values:
         return "重量 保留原文備註（未指定計重基準）"
     return "重量 " + "；".join(dict.fromkeys(values)) + "（原文，未指定淨重／毛重）"
@@ -73,8 +79,8 @@ def confirmed_unassigned_weight_display(raw_source, notes, display):
     if marker not in notes or not notes.split(marker, 1)[1].strip():
         return False
     normalize = lambda text: re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
-    raw_lines = [line.strip() for line in str(raw_source).splitlines()
-                 if re.match(r"^(?:鐵盒)?重量\s*[:：]", line.strip())]
+    raw_lines = [normalize_weight_line(line) for line in str(raw_source).splitlines()
+                 if re.match(r"^(?:鐵盒)?重量\s*[:：]", normalize_weight_line(line))]
     dual = r"^(?:鐵盒)?重量\s*[:：]\s*\d+(?:\.\d+)?\s*(?:kg|g)\s*[/／]\s*\d+(?:\.\d+)?\s*(?:kg|g)\s*$"
     if not raw_lines or not all(re.fullmatch(dual, line, re.I) for line in raw_lines):
         return False

@@ -243,3 +243,23 @@ def test_form_weight_notes_confirmation_is_bound_and_supplier_gated(vendor):
     next(x for x in app.number_input if x.label=='進價(RMB)').set_value(14.0).run()
     assert save_button(app).disabled
     assert not next(x for x in app.checkbox if x.label.startswith('已確認本款為富酷包郵海快')).value
+
+
+@pytest.mark.parametrize('bullet', ['-', '· ', '• '])
+def test_paired_weight_list_bullets_preserve_original_and_other_guards(bullet):
+    from fuku_quote_display import confirmed_unassigned_weight_display, unassigned_weight_note
+    raw = _paired_weight_source().replace('鐵盒重量:', bullet + '鐵盒重量:')
+    c, _ = ns['parse_text'](raw)
+    issues, applied = ns['confirmed_fuku_weight_notes'](c['issues'], raw, c['extra_tags'], 0, 0,
+        vendor='v富酷', confirmed=True, evidence='使用者確認雙重量僅保留原文')
+    assert applied and not issues and c['raw_text'] == raw
+    notes = c['extra_tags'] + '\n富酷重量僅保留原文；計重欄留空。確認依據：測試確認'
+    display = unassigned_weight_note(notes)
+    assert confirmed_unassigned_weight_display(raw, notes, display)
+    assert not confirmed_unassigned_weight_display(raw, notes.replace('510g', '511g'), display)
+    for bad in ('整箱毛重:24kg', '另加運費5元'):
+        changed = raw + '\n' + bad
+        parsed, _ = ns['parse_text'](changed)
+        left, _ = ns['confirmed_fuku_weight_notes'](parsed['issues'], changed, parsed['extra_tags'], 0, 0,
+            vendor='v富酷', confirmed=True, evidence='測試確認')
+        assert left
