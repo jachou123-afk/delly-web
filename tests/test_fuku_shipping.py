@@ -168,3 +168,78 @@ def test_layout_never_hides_conflicting_prices_codes_or_fees():
     for extra in ('\n價格:20元','\n貨號:TEST-FK-04','\n箱規:60/箱','\n另加運費5元'):
         c,_=ns['parse_text'](raw+extra)
         assert c['issues']
+
+
+def _paired_weight_source():
+    return '測試商品\n貨號:TEST-PAIR\n鐵盒重量:510g/680g\n包郵海快:13.5元/盒\n裝箱48盒'
+
+
+def test_explicit_paired_weight_notes_keep_original_and_exact_cost():
+    raw=_paired_weight_source(); c,_=ns['parse_text'](raw)
+    issues,applied=ns['confirmed_fuku_weight_notes'](c['issues'],raw,c['extra_tags'],0,0,
+        vendor='v富酷',confirmed=True,evidence='使用者確認重量保留原文')
+    assert applied and not issues and c['raw_text']==raw
+    assert '510g/680g' in c['extra_tags'] and c['weight']==c['unit_weight_g']==0
+    assert not ns['cost_blockers'](13.5,48,0,0,0,0,5,issues,'盒','盒','v富酷')
+    block=ns['build_product_block']('no1','2026/11/3',2,'測試商品','TEST-PAIR',13.5,48,'盒',
+        0,0,0,0,5,'v富酷',extra=c['extra_tags']+'\n富酷重量僅保留原文；計重欄留空。')
+    assert block[1][7]=='' and '510g/680g' in block[1][1]
+    assert block[3][1]=='重量 保留原文備註（未指定計重基準）'
+
+
+@pytest.mark.parametrize('vendor,confirmed,evidence,kg,g', [
+    ('v菲凡',True,'yes',0,0),('v多品村',True,'yes',0,0),('v方小姐',True,'yes',0,0),
+    ('v富酷',False,'yes',0,0),('v富酷',True,'',0,0),('v富酷',True,'yes',1,0),
+    ('v富酷',True,'yes',0,510)])
+def test_weight_notes_cannot_guess_weight_or_cross_supplier(vendor,confirmed,evidence,kg,g):
+    raw=_paired_weight_source();c,_=ns['parse_text'](raw)
+    result,applied=ns['confirmed_fuku_weight_notes'](c['issues'],raw,c['extra_tags'],kg,g,
+        vendor=vendor,confirmed=confirmed,evidence=evidence)
+    assert not applied and result==c['issues']
+
+
+@pytest.mark.parametrize('extra', ['\n另加運費5元','\n價格20元/盒','\n裝箱60盒','\n貨號TEST-OTHER'])
+def test_weight_notes_leave_every_unrelated_guard(extra):
+    raw=_paired_weight_source()+extra;c,_=ns['parse_text'](raw)
+    result,_=ns['confirmed_fuku_weight_notes'](c['issues'],raw,c['extra_tags'],0,0,
+        vendor='v富酷',confirmed=True,evidence='重量保留原文')
+    assert result and ns['cost_blockers'](13.5,48,0,0,0,0,5,result,'盒','盒','v富酷')
+
+
+@pytest.mark.parametrize('change', ['removed_note','changed_note','scoped_weight','no_inclusive_price','negative_weight'])
+def test_weight_notes_require_exact_retained_unscoped_source(change):
+    raw=_paired_weight_source()
+    if change=='scoped_weight':raw+='\n整箱毛重24kg'
+    if change=='no_inclusive_price':raw=raw.replace('包郵海快','單盒價格')
+    if change=='negative_weight':raw=raw.replace('510g','-510g')
+    c,_=ns['parse_text'](raw);notes=c['extra_tags']
+    if change=='removed_note':notes=''
+    if change=='changed_note':notes=notes.replace('510g','500g')
+    result,applied=ns['confirmed_fuku_weight_notes'](c['issues'],raw,notes,0,0,
+        vendor='v富酷',confirmed=True,evidence='重量保留原文')
+    assert not applied and result==c['issues']
+
+
+@pytest.mark.parametrize('vendor', ['v富酷','v菲凡','v方小姐'])
+def test_form_weight_notes_confirmation_is_bound_and_supplier_gated(vendor):
+    from test_v74_ui import paste,save_button
+    raw=_paired_weight_source();app=paste(raw,select_source=False)
+    assert save_button(app).disabled and not app.exception
+    next(x for x in app.text_input if x.label=='富酷重量原文保留確認依據').set_value('使用者確認重量保留原文').run()
+    next(x for x in app.checkbox if x.label.startswith('已確認本款為富酷包郵海快')).check().run()
+    assert not save_button(app).disabled
+    next(x for x in app.selectbox if x.label=='📂 分頁').set_value('富酷' if vendor=='v富酷' else 'G正版')
+    next(x for x in app.selectbox if x.label=='🏷️ 廠商').set_value(vendor)
+    next(x for x in app.checkbox if x.label.startswith('我已逐欄對照')).check()
+    save_button(app).click().run()
+    assert not app.exception
+    if vendor=='v富酷':
+        assert app.session_state['test_save_calls']==1
+        assert app.session_state['test_saved_category']=='富酷'
+        assert app.session_state['test_evidence']['raw']==raw
+        assert app.session_state['test_evidence']['inputs']['unit_g']==0
+    else:
+        assert 'test_save_calls' not in app.session_state
+    next(x for x in app.number_input if x.label=='進價(RMB)').set_value(14.0).run()
+    assert save_button(app).disabled
+    assert not next(x for x in app.checkbox if x.label.startswith('已確認本款為富酷包郵海快')).value

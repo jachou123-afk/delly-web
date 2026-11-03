@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.31")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.32")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -1661,6 +1661,38 @@ def confirmed_cost_basis(issues, price_unit, qty_unit, *, unit_confirmed=False,
     return result, price_unit
 
 
+def confirmed_fuku_weight_notes(issues, raw_source, notes, carton_kg, unit_g, *,
+                                vendor="", confirmed=False, evidence=""):
+    """Explicitly retain unscoped paired weights for inclusive FuKu quotes only.
+
+    The raw weight lines must survive in notes; no numeric weight is selected.
+    Other costs, identities, units and clearly scoped weights remain guarded.
+    """
+    result = list(issues)
+    if (normalize_vendor(vendor) != "v富酷" or not confirmed or not evidence.strip()
+            or carton_kg != 0 or unit_g != 0):
+        return result, False
+    raw = zhconv.convert(unicodedata.normalize("NFKC", raw_source or ""), "zh-tw")
+    saved_notes = zhconv.convert(unicodedata.normalize("NFKC", notes or ""), "zh-tw")
+    parsed, _ = parse_text(raw_source)
+    if (not re.search(r"包郵\s*海快", raw) or parsed["weight"] != 0
+            or parsed["unit_weight_g"] != 0):
+        return result, False
+    weight_lines = [line.strip() for line in raw.splitlines() if weight_field_info(line.strip())]
+    if not weight_lines:
+        return result, False
+    allowed = {"原文並列兩個重量，未標明各自基準；保留原值，不選大值或小值"}
+    for line in weight_lines:
+        match = re.fullmatch(r"(重量|鐵盒重量)\s*[:：]\s*(\d+(?:\.\d+)?)\s*(g|kg)\s*/\s*"
+                             r"(\d+(?:\.\d+)?)\s*(g|kg)", line, re.I)
+        if (not match or min(float(match[2]), float(match[4])) <= 0
+                or line not in {n.strip() for n in saved_notes.splitlines()}):
+            return result, False
+        allowed |= set(metadata_format_issues(line))
+    removed = [issue for issue in result if issue in allowed]
+    return [issue for issue in result if issue not in allowed], bool(removed)
+
+
 def confirmed_dimension_basis(issues, dimensions, *, confirmed=False, evidence=""):
     """Resolve only the exact dimension-format issue with a reviewed valid value."""
     resolved = set()
@@ -1755,6 +1787,8 @@ def build_product_block(
         weight_note = f"整箱毛重 {carton_weight_kg:g}KG"
     elif unit_weight_g > 0:
         weight_note = f"單個重量 {unit_weight_g:g}g"
+    elif vendor == "v富酷" and "富酷重量僅保留原文；計重欄留空。" in str(extra):
+        weight_note = "重量 保留原文備註（未指定計重基準）"
     else:
         weight_note = "重量 未提供"
 
@@ -2264,6 +2298,24 @@ if unit_needs_review or weight_needs_review:
         weight_confirmed=reviewed_weight, evidence=reviewed_basis)
     if reviewed_basis.strip() and (reviewed_unit or reviewed_weight):
         final_extra += "\n人工確認依據：" + reviewed_basis.strip()
+# An explicit per-source decision, limited to new inclusive FuKu quotes.
+fuku_weight_notes_applied = False
+fuku_weight_preview, fuku_weight_eligible = confirmed_fuku_weight_notes(
+    active_issues, user_input, final_extra, final_carton_weight_kg, final_unit_weight_g,
+    vendor="v富酷", confirmed=True, evidence="eligibility check")
+if fuku_weight_eligible:
+    fuku_weight_key = hashlib.sha256(repr((user_input, final_extra, final_price,
+                                         final_qty, final_qty_unit, final_carton_weight_kg,
+                                         final_unit_weight_g)).encode()).hexdigest()
+    st.caption("僅限富酷包郵海快：經使用者確認後，並列重量只保留原文備註，計重欄留空。")
+    fuku_weight_basis = st.text_input("富酷重量原文保留確認依據", key="fuku_weight_basis_" + fuku_weight_key)
+    fuku_weight_confirmed = st.checkbox("已確認本款為富酷包郵海快，重量只保留原文，不指定淨重或毛重",
+                                        key="fuku_weight_notes_" + fuku_weight_key)
+    active_issues, fuku_weight_notes_applied = confirmed_fuku_weight_notes(
+        active_issues, user_input, final_extra, final_carton_weight_kg, final_unit_weight_g,
+        vendor="v富酷", confirmed=fuku_weight_confirmed, evidence=fuku_weight_basis)
+    if fuku_weight_notes_applied:
+        final_extra += "\n富酷重量僅保留原文；計重欄留空。確認依據：" + fuku_weight_basis.strip()
 dimension_fields = {"產品尺寸": final_prod_size, "單個尺寸": final_prod_size, "尺寸": final_prod_size,
                     "產品": final_prod_size, "彩盒尺寸": final_color_size, "彩盒": final_color_size,
                     "外箱尺寸": final_outer_size, "外箱規格": final_outer_size, "外箱": final_outer_size}
@@ -2308,6 +2360,9 @@ if user_input.strip():
         help="原位修正不新增列、不更改 NO 或原日期，也不處理圖片與格式。",
         key=draft_key + "operation",
     )
+    if operation != "新增商品" and fuku_weight_notes_applied:
+        st.error("重量原文保留確認僅適用本次新增富酷商品，不可用於修正既有商品。")
+        st.stop()
     to_save_df = edited_df[
         (edited_df["寫入"] == True)
         & ((edited_df["貨號"] != "") | (edited_df["名稱"] != ""))
@@ -2392,6 +2447,8 @@ if user_input.strip():
         block_reasons = cost_blockers(final_price, final_qty, final_carton_weight_kg, final_unit_weight_g,
                                      final_dom, intl_rate, ex_rate, active_issues, effective_price_unit,
                                      final_qty_unit, vendor=final_vendor)
+        if fuku_weight_notes_applied and final_vendor != "v富酷":
+            hard_reasons.append("重量只保留原文的確認僅適用v富酷，其他廠商仍須核對計重基準")
         if final_vendor == "v方小姐":
             cost_notes += "\n台灣包郵：成本為進價×當次匯率，無條件進位整數；未提供重量時留空，兩段運費均為0。"
         if final_vendor == "v富酷":
