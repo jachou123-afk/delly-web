@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.36")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.37")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -670,7 +670,7 @@ def labeled_dimension_info(value):
         return None
     number = r"\d+(?:\.\d+)?"
     numeric_shape = rf"{number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*"
-    dimension_value = numeric_shape + r"\s*(?:cm|mm|公分|毫米)"
+    dimension_value = r"(?:約\s*)?" + numeric_shape + r"\s*(?:cm|mm|公分|毫米)"
     valid = bool(re.fullmatch(dimension_value, raw_value, re.I))
     if not valid and label in {"產品尺寸", "單個尺寸", "尺寸", "產品"}:
         valid = bool(re.fullmatch(

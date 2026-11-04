@@ -4,7 +4,7 @@ import unicodedata
 
 
 def _unbullet(line):
-    line = line.strip()
+    line = re.sub(r'^\[(?:愛心|爱心)\]\s*', '', line.strip())
     while line and (unicodedata.category(line[0]) in {'So', 'Sk'} or line[0] in '✔✓👉→·•⚡!！\ufe0f'):
         line = line[1:].lstrip()
     return re.sub(r'^-\s*(?=(?:數量|編號|重量|包裝|電池|插腳)\s*[:：])', '', line)

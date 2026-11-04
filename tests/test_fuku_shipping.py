@@ -303,3 +303,15 @@ def test_explicit_umbrella_unit_is_preserved_and_price_stays_unconfirmed():
     assert unit=='把' and not issues
     result=calculate(dict(price=11,qty=24,unit='把',carton_kg=0,unit_g=0,dom_rate=0,intl_rate=0,ex_rate=5),'v富酷')
     assert result['cost'][0]==55
+
+
+def test_approximate_dimensions_keep_original_qualifier_and_units():
+    raw='[爱心]測試體重秤\n編號:TEST-SCALE\n▪產品尺寸:約26×26cm\n▪重量:990g/1240g\n箱規:12個/箱\n包郵海快:42元'
+    c,p=ns['parse_text'](raw)
+    assert p==[{'code':'TEST-SCALE','name':'測試體重秤'}]
+    assert c['raw_text']==raw and c['prod_size']=='約26×26cm'
+    left,ok=ns['confirmed_fuku_weight_notes'](c['issues'],raw,c['extra_tags'],0,0,
+        vendor='v富酷',confirmed=True,evidence='雙重量保留原文')
+    assert ok and not left
+    for bad in ['約26×26','約26×?cm','約26×26m','約-26×26cm']:
+        assert not ns['labeled_dimension_info']('產品尺寸:'+bad)['valid']
