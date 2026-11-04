@@ -107,8 +107,8 @@ def test_format_animation_pixels_and_original_count_are_still_guarded():
     with pytest.raises(DispatchError, match="靜態"):
         validate_image(output.getvalue(), "synthetic.png")
     output = BytesIO()
-    Image.new("RGB", (5001, 5000)).save(output, "PNG")
-    with pytest.raises(DispatchError, match="2500 萬像素"):
+    Image.new("RGB", (8001, 5000)).save(output, "PNG")
+    with pytest.raises(DispatchError, match="4000 萬像素"):
         validate_image(output.getvalue(), "synthetic.png")
     for count in (5, 6, 10):
         assert len(checked_assets([picture(n) for n in range(count)])) == count

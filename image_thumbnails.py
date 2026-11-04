@@ -11,17 +11,30 @@ THUMB_SIDE = 640
 THUMB_BYTES = 128 * 1024
 
 
+def _reduce_large(opened, side):
+    """PNG must decode once, but never copy/rotate/convert its full-size raster."""
+    if opened.width * opened.height <= MAX_IMAGE_PIXELS:
+        return
+    if opened.format == "JPEG":
+        opened.draft("RGB", (side, side))
+    # In-place reduction precedes exif_transpose and color-mode conversion.
+    opened.thumbnail((side, side), Image.Resampling.LANCZOS)
+
+
 def display_bytes(data):
-    """Only large JPEG display is reduced; storage/download bytes stay original."""
+    """Bound large display rasters; storage/download bytes stay original."""
     with Image.open(BytesIO(data)) as opened:
-        if opened.format != "JPEG" or opened.width * opened.height <= MAX_IMAGE_PIXELS:
+        if opened.width * opened.height <= MAX_IMAGE_PIXELS:
             return data
-        validate_image(data, "display.jpg")
-        opened.draft("RGB", (1600, 1600))
-        im = ImageOps.exif_transpose(opened).convert("RGB")
-        im.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+        fmt = opened.format
+        validate_image(data, "display-original")
+        _reduce_large(opened, 1600)
+        im = ImageOps.exif_transpose(opened)
         out = BytesIO()
-        im.save(out, format="JPEG", quality=90)
+        if fmt == "PNG":
+            im.save(out, format="PNG")
+        else:
+            im.convert("RGB").save(out, format="JPEG", quality=90)
         return out.getvalue()
 
 
@@ -38,8 +51,7 @@ def check_thumbnail(asset):
 def make_thumbnail(asset):
     clean = validate_image(asset_bytes(asset), asset["name"])
     with Image.open(BytesIO(asset_bytes(clean))) as opened:
-        if opened.format == "JPEG" and opened.width * opened.height > MAX_IMAGE_PIXELS:
-            opened.draft("RGB", (THUMB_SIDE, THUMB_SIDE))
+        _reduce_large(opened, THUMB_SIDE)
         im = ImageOps.exif_transpose(opened).convert("RGBA")
         im.thumbnail((THUMB_SIDE, THUMB_SIDE), Image.Resampling.LANCZOS)
         canvas = Image.new("RGB", im.size, "white")

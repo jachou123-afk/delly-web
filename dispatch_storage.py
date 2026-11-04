@@ -26,6 +26,7 @@ MAX_IMAGE_MB = 20
 MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
 MAX_LEGACY_IMAGE_BYTES = 2 * 1024 * 1024  # Larger originals use NAS, not Sheets payloads.
 MAX_IMAGE_PIXELS = 25_000_000
+MAX_PNG_PIXELS = 40_000_000  # Bounded original decode; previews shrink before copies.
 MAX_JPEG_PIXELS = 64_000_000  # JPEG previews use decoder downsampling before loading.
 
 
@@ -86,7 +87,7 @@ def validate_image(data, name):
         with Image.open(BytesIO(data)) as image:
             if image.format not in ("JPEG", "PNG", "WEBP"):
                 raise DispatchError("請使用 JPG、PNG、WebP 靜態商品圖，且不超過 2500 萬像素")
-            pixel_limit = MAX_JPEG_PIXELS if image.format == "JPEG" else MAX_IMAGE_PIXELS
+            pixel_limit = {"JPEG": MAX_JPEG_PIXELS, "PNG": MAX_PNG_PIXELS}.get(image.format, MAX_IMAGE_PIXELS)
             if image.width * image.height > pixel_limit:
                 raise DispatchError(f"圖片超過 {pixel_limit // 10000} 萬像素上限；保留原檔，不自動壓縮")
             if getattr(image, "is_animated", False):
