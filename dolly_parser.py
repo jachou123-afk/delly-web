@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.37")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.38")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -1459,7 +1459,7 @@ def parse_text(text):
         issues.append("偵測到多款商品；目前請每款分別貼上解析，避免共用錯誤參數")
     if codes and len(codes) == 1:
         products = [{"code": normalize_code(codes[0][1]), "name": products[0]["name"] if products else ""}]
-    size = rf"({number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*\s*(?:cm|mm|公分|毫米))"
+    size = rf"((?:約\s*)?{number}(?:\s*[-~～]\s*{number})?(?:\s*[*xX×]\s*{number})*\s*(?:cm|mm|公分|毫米))"
     fields = {
         "outer_box_size": r"^(?:外箱規格|外箱尺寸|外箱)\s*:?\s*",
         "color_box_size": r"^(?:彩盒尺寸|彩盒)\s*:?\s*",
