@@ -5,7 +5,7 @@ import unicodedata
 
 def _unbullet(line):
     line = line.strip()
-    while line and (unicodedata.category(line[0]) in {'So', 'Sk'} or line[0] in '✔✓👉→·•⚡\ufe0f'):
+    while line and (unicodedata.category(line[0]) in {'So', 'Sk'} or line[0] in '✔✓👉→·•⚡!！\ufe0f'):
         line = line[1:].lstrip()
     return re.sub(r'^-\s*(?=(?:數量|編號|重量|包裝|電池|插腳)\s*[:：])', '', line)
 
@@ -15,9 +15,9 @@ def prepare_inclusive_sea_layout(text):
     lines = [_unbullet(line) for line in text.splitlines()]
     if not any(re.match(r'^包郵\s*海快(?:價)?\s*[:：]', line) for line in lines):
         return text, None
-    boilerplate = re.compile(r'^(?:現貨[!！\s]*)+$|^下單可馬上發貨[!！\s]*$')
+    boilerplate = re.compile(r'^(?:現貨[!！\s]*)+$|^下單可(?:馬上發貨|立馬安排發貨)[!！\s]*$|^(?:日本商超熱賣款|爆品上新|禮品渠道爆款)[!！💥\s]*$')
     packaging = re.compile(r'^(?:#.*盒|【[^】]*盒[^】]*】|(?:巨無霸|方形|長方形|長方|長盒)鐵?盒[|｜].*系列)')
-    metadata = re.compile(r'^(?:產品貨號|貨號|編號|型號|數量|箱規|重量|鐵盒重量|單盒|包裝|彩盒|鐵盒尺寸|電池|插腳|備註|台灣控價|臺灣控價|包郵)\s*[:：]?')
+    metadata = re.compile(r'^(?:產品貨號|貨號|編號|型號|數量|一箱數量|箱裝|箱規|重量|鐵盒重量|一盒重量|產品重量|單盒|包裝|彩盒|鐵盒尺寸|電池|插腳|備註|台灣控價|臺灣控價|包郵)\s*[:：]?')
     name = ''
     output = []
     notes = []
@@ -30,12 +30,15 @@ def prepare_inclusive_sea_layout(text):
             continue
         if not name and not metadata.match(line):
             name = line.strip('—– ').strip()
+            # NFKC turns the decorative circled M into plain M.
+            if name.startswith('M') and name.endswith('M') and re.search(r'[\u4e00-\u9fff]', name[1:-1]):
+                name = name[1:-1].strip()
         else:
             notes.append(line)
-        quantity = re.fullmatch(r'(?:箱規|數量)\s*[:：]\s*(\d+)\s*/\s*箱', line)
+        quantity = re.fullmatch(r'(?:箱規|數量|一箱數量|箱裝)\s*[:：]\s*(\d+)\s*(個|盒|把|套|雙)?\s*/\s*箱', line)
         if quantity:
             # A known count is useful; absent individual units remain absent.
-            line = '裝箱:' + quantity[1]
+            line = '裝箱:' + quantity[1] + (quantity[2] or '')
         if re.match(r'^鐵盒尺寸\s*[:：]', line):
             line = re.sub(r'^鐵盒尺寸', '包裝尺寸', line)
         output.append(line)

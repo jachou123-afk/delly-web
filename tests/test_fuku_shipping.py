@@ -245,7 +245,7 @@ def test_form_weight_notes_confirmation_is_bound_and_supplier_gated(vendor):
     assert not next(x for x in app.checkbox if x.label.startswith('已確認本款為富酷包郵海快')).value
 
 
-@pytest.mark.parametrize('bullet', ['-', '· ', '• '])
+@pytest.mark.parametrize('bullet', ['-', '· ', '• ', '▪'])
 @pytest.mark.parametrize('label', ['鐵盒重量', '單盒'])
 def test_paired_weight_list_bullets_preserve_original_and_other_guards(bullet, label):
     from fuku_quote_display import confirmed_unassigned_weight_display, unassigned_weight_note
@@ -267,3 +267,39 @@ def test_paired_weight_list_bullets_preserve_original_and_other_guards(bullet, l
         left, _ = ns['confirmed_fuku_weight_notes'](parsed['issues'], changed, parsed['extra_tags'], 0, 0,
             vendor='v富酷', confirmed=True, evidence='測試確認')
         assert left
+
+
+@pytest.mark.parametrize('promo', ['‼下單可馬上發貨！', '下單可立馬安排發貨!', '日本商超熱賣款', '💥爆品上新💥'])
+@pytest.mark.parametrize('quantity', ['一箱數量:9/箱', '箱裝:9/箱', '箱規:9盒/箱'])
+def test_new_inclusive_layout_keeps_name_count_and_missing_price_unit(promo, quantity):
+    raw=promo+'\n測試暖風機\n編號:TEST-NEW\n'+quantity+'\n包郵海快:21.5元'
+    c,p=ns['parse_text'](raw)
+    assert p==[{'code':'TEST-NEW','name':'測試暖風機'}]
+    assert c['qty']==9 and c['price']==21.5 and c['price_unit']==''
+    assert c['raw_text']==raw
+    c,_=ns['parse_text'](raw+'\n數量:11/箱\n另加運費3元')
+    assert c['issues']
+
+@pytest.mark.parametrize('label',['一盒重量','產品重量'])
+def test_paired_weight_aliases_require_confirmation_and_exact_source(label):
+    from fuku_quote_display import unassigned_weight_note,confirmed_unassigned_weight_display
+    raw=_paired_weight_source().replace('鐵盒重量',label)
+    c,_=ns['parse_text'](raw)
+    issues,ok=ns['confirmed_fuku_weight_notes'](c['issues'],raw,c['extra_tags'],0,0,
+        vendor='v富酷',confirmed=True,evidence='已確認雙重量僅保留原文')
+    assert ok and not issues and c['weight']==c['unit_weight_g']==0
+    notes=c['extra_tags']+'\n富酷重量僅保留原文；計重欄留空。確認依據：測試確認'
+    assert confirmed_unassigned_weight_display(raw,notes,unassigned_weight_note(notes))
+    assert not confirmed_unassigned_weight_display(raw,notes.replace('510g','511g'),unassigned_weight_note(notes))
+    blocked,ok=ns['confirmed_fuku_weight_notes'](c['issues'],raw,c['extra_tags'],0,0,
+        vendor='v富酷',confirmed=False,evidence='')
+    assert blocked and not ok
+
+def test_explicit_umbrella_unit_is_preserved_and_price_stays_unconfirmed():
+    raw='測試傘\n編號:TEST-UMBRELLA\n數量:24把/箱\n包郵海快:11元'
+    c,_=ns['parse_text'](raw)
+    assert c['qty']==24 and c['qty_unit']=='把' and c['price_unit']==''
+    issues,unit=ns['confirmed_cost_basis'](c['issues'],'','把',unit_confirmed=True,evidence='每把報價確認')
+    assert unit=='把' and not issues
+    result=calculate(dict(price=11,qty=24,unit='把',carton_kg=0,unit_g=0,dom_rate=0,intl_rate=0,ex_rate=5),'v富酷')
+    assert result['cost'][0]==55

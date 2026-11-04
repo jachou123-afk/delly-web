@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.35")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.36")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
@@ -1331,7 +1331,7 @@ def parse_text(text):
     if not normalized.strip():
         return common, []
     number = r"\d+(?:\.\d+)?"
-    units = r"pcs|pc|個|隻|只|雙|盒|套|瓶|罐|包|袋|件"
+    units = r"pcs|pc|個|隻|只|雙|盒|套|瓶|罐|包|袋|件|把"
     issues = common["issues"]
     issues.extend(metadata_format_issues(normalized))
     # 未知的「單X價格」不能悄悄退回只有數字、沒有計價單位的成本。
@@ -1660,7 +1660,7 @@ def confirmed_cost_basis(issues, price_unit, qty_unit, *, unit_confirmed=False,
     """Resolve only explicitly reviewed unit/weight ambiguity, never other guards."""
     result = list(issues)
     if evidence.strip():
-        if unit_confirmed and qty_unit in ("個", "雙", "盒", "套", "瓶", "罐", "包", "袋"):
+        if unit_confirmed and qty_unit in ("個", "雙", "盒", "套", "瓶", "罐", "包", "袋", "把"):
             price_unit = qty_unit
         if weight_confirmed:
             result = [issue for issue in result if issue != "重量欄位「重量」未標明單個或整箱，須確認重量範圍"]
@@ -1692,7 +1692,7 @@ def confirmed_fuku_weight_notes(issues, raw_source, notes, carton_kg, unit_g, *,
         return result, False
     allowed = {"原文並列兩個重量，未標明各自基準；保留原值，不選大值或小值"}
     for line in weight_lines:
-        match = re.fullmatch(r"(重量|鐵盒重量|單盒)\s*[:：]\s*(\d+(?:\.\d+)?)\s*(g|kg)\s*/\s*"
+        match = re.fullmatch(r"(重量|鐵盒重量|一盒重量|產品重量|單盒)\s*[:：]\s*(\d+(?:\.\d+)?)\s*(g|kg)\s*/\s*"
                              r"(\d+(?:\.\d+)?)\s*(g|kg)", line, re.I)
         if (not match or min(float(match[2]), float(match[4])) <= 0
                 or line not in {normalize_weight_line(n) for n in saved_notes.splitlines()}):
@@ -2262,7 +2262,7 @@ packaging_key = draft_key + "packaging_v87_18_"
 final_color_size = c7.text_input("彩盒尺寸（僅有彩盒依據時填）", value=common_data["color_box_size"], key=packaging_key + "color_size")
 final_outer_size = st.text_input("外箱尺寸 (沒抓到可手動輸入)", value=common_data["outer_box_size"], key=draft_key + "outer_size")
 final_extra = st.text_area("額外備註（保留顏色、材質、端盒、木架等）", value=common_data["extra_tags"], key=packaging_key + "extra")
-unit_options = ["", "個", "雙", "盒", "套", "瓶", "罐", "包", "袋"]
+unit_options = ["", "個", "雙", "盒", "套", "瓶", "罐", "包", "袋", "把"]
 parsed_unit = common_data["qty_unit"]
 final_qty_unit = st.selectbox("装箱及計價單位（必須一致；不同時先人工換算）", unit_options,
                                 index=unit_options.index(parsed_unit) if parsed_unit in unit_options else 0,
