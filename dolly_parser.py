@@ -1359,7 +1359,13 @@ def wooden_rack_cost_basis_text(text):
 def parse_text(text):
     """單一報價的保守解析；不把多則獨立報價套用同一組數字。"""
     from inline_quote_parser import expand_inline_quote, expand_inclusive_sea_quote
-    from fuku_quote_parser import prepare_inclusive_sea_layout
+    import fuku_quote_parser
+    # Streamlit can reload this script while retaining imported helper modules.
+    # Refresh only an older helper once, without interrupting active sessions.
+    if getattr(fuku_quote_parser, "LAYOUT_VERSION", 1) < 2:
+        import importlib
+        importlib.reload(fuku_quote_parser)
+    prepare_inclusive_sea_layout = fuku_quote_parser.prepare_inclusive_sea_layout
     layout_text, inclusive_layout = prepare_inclusive_sea_layout(zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw"))
     normalized = expand_inline_quote(expand_inclusive_sea_quote(layout_text))
     # Strict aliases only: a quantity-labelled specification must contain a

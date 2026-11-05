@@ -2,6 +2,8 @@
 import re
 import unicodedata
 
+LAYOUT_VERSION = 2
+
 
 def _unbullet(line):
     line = re.sub(r'^\[(?:愛心|爱心)\]\s*', '', line.strip())
