@@ -74,3 +74,24 @@ def first_product_layout(sheet_id, start_row, block_size=6):
         "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"}},
         "fields": "userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment"}})
     return requests
+
+
+def initialize_category_codes(current_store, history_store):
+    """Explicit setup: carry forward validated codes, never product/price rows."""
+    from category_codes import CATEGORY_SHEET
+    if not is_continuation(current_store.spreadsheet) or history_store.spreadsheet.id != LEGACY_ID:
+        raise ValueError("分類設定只限指定新舊採購表")
+    source = history_store.category_settings()
+    current = current_store.category_settings()
+    if any(source["codes"].get(k) != v for k, v in current["codes"].items()):
+        raise ValueError("新表分類代碼與原表不同，停止設定")
+    for category, code in source["codes"].items():
+        if category not in current["codes"]:
+            current = current_store.save_category_code(
+                category, code, actor="新採購表接續設定", expected_revision=current["_revision"])
+    # Native batch verification requires the record sheet even if only defaults exist.
+    current_store._sheet(CATEGORY_SHEET, create=True)
+    saved = current_store.category_settings()
+    if saved["codes"] != source["codes"]:
+        raise ValueError("新表分類設定讀回不符")
+    return saved

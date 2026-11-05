@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.40")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.41")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 from quote_workbooks import ACTIVE_ID, LEGACY_ID, ACTIVE_TITLE
 st.caption(f"新報價保存至 [{ACTIVE_TITLE}](https://docs.google.com/spreadsheets/d/{ACTIVE_ID}/edit)。"
@@ -591,6 +591,18 @@ def get_history_dispatch_store():
     from quote_workbooks import LEGACY_ID
     client = gspread.authorize(get_credentials())
     return configured_store(client.open_by_key(LEGACY_ID), lambda: st.secrets.get("nas_images"))
+
+
+with st.sidebar.expander("新表接續設定"):
+    st.caption("只沿用原表分類代碼；不搬商品、價格、圖片或發送批次。")
+    if st.button("沿用舊表分類設定", key="initialize_continuation_codes"):
+        try:
+            from quote_workbooks import initialize_category_codes
+            initialized_codes = initialize_category_codes(get_dispatch_store(), get_history_dispatch_store())
+            st.success("分類設定已保存新表並讀回核對：" + "、".join(
+                f"{category}={code}" for category, code in initialized_codes["codes"].items()))
+        except Exception as exc:
+            st.error(f"分類設定尚未完成：{exc}")
 
 
 @st.cache_data(ttl=300)

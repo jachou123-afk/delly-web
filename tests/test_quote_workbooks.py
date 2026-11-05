@@ -93,3 +93,30 @@ def test_snapshot_uses_live_history_for_next_no(monkeypatch):
     snapshot = ns['get_quote_save_snapshot']('G正版')
     assert snapshot['next_no'] == 'no1484'
     sheet.update.assert_not_called()
+
+
+def test_explicit_category_setup_is_additive_idempotent_and_conflict_safe():
+    from types import SimpleNamespace
+    from quote_workbooks import initialize_category_codes, ACTIVE_ID, LEGACY_ID
+    class Store:
+        def __init__(self, sid, codes):
+            self.spreadsheet=SimpleNamespace(id=sid)
+            self.codes=dict(codes); self.writes=[]; self.revision=""
+        def category_settings(self):
+            return {"codes":dict(self.codes),"_revision":self.revision}
+        def save_category_code(self, category, code, *, actor, expected_revision):
+            assert expected_revision==self.revision
+            self.writes.append((category,code));self.codes[category]=code
+            self.revision=str(len(self.writes));return self.category_settings()
+        def _sheet(self,title,create=False):
+            assert title=="_分類代碼" and create
+    old=Store(LEGACY_ID,{"G正版":"G","S生活用品":"S","W玩具":"W"})
+    new=Store(ACTIVE_ID,{"G正版":"G","S生活用品":"S"})
+    assert initialize_category_codes(new,old)["codes"]==old.codes
+    assert new.writes==[("W玩具","W")] and old.writes==[]
+    initialize_category_codes(new,old)
+    assert new.writes==[("W玩具","W")]
+    new.codes["W玩具"]="BAD"
+    with pytest.raises(ValueError, match="不同"):
+        initialize_category_codes(new,old)
+    assert new.writes==[("W玩具","W")]
