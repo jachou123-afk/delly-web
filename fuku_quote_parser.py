@@ -2,7 +2,7 @@
 import re
 import unicodedata
 
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
 
 
 def _unbullet(line):
@@ -15,7 +15,7 @@ def _unbullet(line):
 def prepare_inclusive_sea_layout(text):
     """Recognize the explicit shipping phrase, never infer a supplier from it."""
     lines = [_unbullet(line) for line in text.splitlines()]
-    if not any(re.match(r'^包郵\s*海快(?:價)?\s*[:：]', line) for line in lines):
+    if not any(re.match(r'^包郵\s*海快(?:價)?\s*[:：]?\s*\d', line) for line in lines):
         return text, None
     boilerplate = re.compile(r'^(?:現貨[!！\s]*)+$|^下單可(?:馬上發貨|馬上安排發貨|立馬安排發貨)[!！\s]*$|^(?:日本商超熱賣款|爆品上新|禮品渠道爆款)[!！💥\s]*$')
     packaging = re.compile(r'^(?:#.*盒|【[^】]*盒[^】]*】|(?:巨無霸|方形|長方形|長方|長盒)鐵?盒[|｜].*系列)')
@@ -26,17 +26,24 @@ def prepare_inclusive_sea_layout(text):
     for line in lines:
         if not line or boilerplate.fullmatch(line):
             continue
+        if re.fullmatch(r'(?:Zero零界新品[!！]\s*廚房必備神器[!！]|三合同創系列[|｜]巨無霸鐵盒|野獸狗&三合同創聯名款)', line):
+            notes.append(line)
+            continue
         if packaging.match(line):
             notes.append(line)
             output.append('包裝描述:' + line)
             continue
         if not name and not metadata.match(line):
             name = line.strip('—– ').strip()
+            name = re.sub(r'\s*[|｜]\s*(?:貨號|編號)\s*[:：]?\s*[A-Za-z0-9-]+$', '', name)
             # NFKC turns the decorative circled M into plain M.
             if name.startswith('M') and name.endswith('M') and re.search(r'[\u4e00-\u9fff]', name[1:-1]):
                 name = name[1:-1].strip()
         else:
             notes.append(line)
+        # A vertical rule after a known field is a layout delimiter, not a unit.
+        line = re.sub(r'^(彩盒|重量|箱規)\s*[|｜]\s*', r'\1:', line)
+        line = re.sub(r'^(包郵\s*海快(?:價)?)\s*(?=\d)', r'\1:', line)
         quantity = re.fullmatch(r'(?:箱規|數量|一箱數量|箱裝)\s*[:：]\s*(\d+)\s*(個|盒|把|套|雙)?\s*/\s*箱', line)
         if quantity:
             # A known count is useful; absent individual units remain absent.

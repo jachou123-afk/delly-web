@@ -16,6 +16,15 @@ def test_boilerplate_and_trailing_dimension_separator_preserve_source():
     assert '包裝:30*14*16*cm' in common['extra_tags']
     assert not any('尺寸欄位' in issue for issue in common['issues'])
     assert any('並列兩個重量' in issue for issue in common['issues'])
+
+
+def test_vertical_weight_confirmation_requires_evidence_and_preserved_note():
+    raw = '測試小家電\n編號:TEST-WEIGHT\n重量｜500g/625g\n箱規｜一箱24盒\n包郵海快：36元'
+    common, _ = ns['parse_text'](raw)
+    confirm = ns['confirmed_fuku_weight_notes']
+    assert confirm(common['issues'], raw, common['extra_tags'], 0, 0, vendor='v富酷', confirmed=False, evidence='已確認')[1] is False
+    assert confirm(common['issues'], raw, '', 0, 0, vendor='v富酷', confirmed=True, evidence='已確認')[1] is False
+    assert confirm(common['issues'], raw, common['extra_tags'], 0, 0, vendor='v富酷', confirmed=True, evidence='已確認')[1] is True
     assert ns['cost_blockers'](20,12,0,0,0,0,5,common['issues'],'','','v富酷')
 
 
@@ -30,3 +39,22 @@ def test_no_guess_for_incomplete_or_other_fields(line):
 def test_non_inclusive_input_is_unchanged():
     raw = '下單可馬上安排發貨！\n測試桌面機\n包裝:30*14*16*cm\n單價20元'
     assert prepare_inclusive_sea_layout(raw) == (raw, None)
+
+
+def test_known_vertical_fields_keep_dual_weight_guard_and_original():
+    raw = ('Zero零界新品！ 廚房必備神器！\n測試小家電｜貨號TEST-PIPE\n'
+           '彩盒｜15×15×30cm\n重量｜500g/625g\n箱規｜一箱24盒\n包郵海快：36元')
+    common, products = ns['parse_text'](raw)
+    assert common['raw_text'] == raw
+    assert products == [{'code': 'TEST-PIPE', 'name': '測試小家電'}]
+    assert common['price'] == 36 and common['qty'] == 24
+    assert common['weight'] == common['unit_weight_g'] == 0
+    assert any('並列兩個重量' in issue for issue in common['issues'])
+
+
+def test_inclusive_price_without_colon_preserves_guard():
+    raw = '測試料理機\n編號:TEST-NOCOLON\n箱規:32個/箱\n重量:380g/470g\n包郵海快23元'
+    common, products = ns['parse_text'](raw)
+    assert common['raw_text'] == raw and common['price'] == 23 and common['qty'] == 32
+    assert products == [{'code': 'TEST-NOCOLON', 'name': '測試料理機'}]
+    assert any('並列兩個重量' in issue for issue in common['issues'])

@@ -1362,9 +1362,13 @@ def parse_text(text):
     import fuku_quote_parser
     # Streamlit can reload this script while retaining imported helper modules.
     # Refresh only an older helper once, without interrupting active sessions.
-    if getattr(fuku_quote_parser, "LAYOUT_VERSION", 1) < 2:
+    if getattr(fuku_quote_parser, "LAYOUT_VERSION", 1) < 3:
         import importlib
         importlib.reload(fuku_quote_parser)
+    import fuku_quote_display
+    if getattr(fuku_quote_display, "LAYOUT_VERSION", 1) < 2:
+        import importlib
+        importlib.reload(fuku_quote_display)
     prepare_inclusive_sea_layout = fuku_quote_parser.prepare_inclusive_sea_layout
     layout_text, inclusive_layout = prepare_inclusive_sea_layout(zhconv.convert(unicodedata.normalize("NFKC", text or ""), "zh-tw"))
     normalized = expand_inline_quote(expand_inclusive_sea_quote(layout_text))
@@ -1629,7 +1633,7 @@ def parse_text(text):
             products[0]["name"] = inclusive_layout["name"]
         notes.extend(inclusive_layout["notes"])
         for line in inclusive_layout["notes"]:
-            if re.search(r"(?:重量|單盒)\s*[:：]\s*\d+(?:\.\d+)?\s*(?:g|kg)\s*/", line, re.I):
+            if re.search(r"(?:重量|單盒)\s*[:：|｜]\s*\d+(?:\.\d+)?\s*(?:g|kg)\s*/", line, re.I):
                 issues.append("原文並列兩個重量，未標明各自基準；保留原值，不選大值或小值")
     common["extra_tags"] = "\n".join(dict.fromkeys(notes))
     return common, products

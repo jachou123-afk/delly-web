@@ -2,10 +2,13 @@
 import re
 import unicodedata
 
+LAYOUT_VERSION = 2
+
 
 def normalize_weight_line(line):
     """Ignore list bullets only before a weight label; preserve numeric signs."""
     line = unicodedata.normalize("NFKC", str(line)).strip()
+    line = re.sub(r"^((?:[-·•▪]\s*)?(?:重量|鐵盒重量|一盒重量|產品重量|單盒))\s*[|｜]\s*", r"\1:", line)
     return re.sub(r"^[-·•▪]\s*(?=(?:重量|鐵盒重量|一盒重量|產品重量|單盒)\s*[:：])", "", line)
 
 
