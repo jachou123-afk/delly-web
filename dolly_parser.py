@@ -1362,7 +1362,7 @@ def parse_text(text):
     import fuku_quote_parser
     # Streamlit can reload this script while retaining imported helper modules.
     # Refresh only an older helper once, without interrupting active sessions.
-    if getattr(fuku_quote_parser, "LAYOUT_VERSION", 1) < 3:
+    if getattr(fuku_quote_parser, "LAYOUT_VERSION", 1) < 4:
         import importlib
         importlib.reload(fuku_quote_parser)
     import fuku_quote_display

@@ -48,6 +48,7 @@ def test_known_vertical_fields_keep_dual_weight_guard_and_original():
     assert common['raw_text'] == raw
     assert products == [{'code': 'TEST-PIPE', 'name': '測試小家電'}]
     assert common['price'] == 36 and common['qty'] == 24
+    assert not any('尺寸欄位' in issue for issue in common['issues'])
     assert common['weight'] == common['unit_weight_g'] == 0
     assert any('並列兩個重量' in issue for issue in common['issues'])
 

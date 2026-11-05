@@ -2,7 +2,7 @@
 import re
 import unicodedata
 
-LAYOUT_VERSION = 3
+LAYOUT_VERSION = 4
 
 
 def _unbullet(line):
@@ -43,6 +43,7 @@ def prepare_inclusive_sea_layout(text):
             notes.append(line)
         # A vertical rule after a known field is a layout delimiter, not a unit.
         line = re.sub(r'^(彩盒|重量|箱規)\s*[|｜]\s*', r'\1:', line)
+        line = re.sub(r'^箱規\s*[:：]\s*一箱\s*(\d+)\s*(個|盒|把|套|雙)\s*$', r'裝箱:\1\2', line)
         line = re.sub(r'^(包郵\s*海快(?:價)?)\s*(?=\d)', r'\1:', line)
         quantity = re.fullmatch(r'(?:箱規|數量|一箱數量|箱裝)\s*[:：]\s*(\d+)\s*(個|盒|把|套|雙)?\s*/\s*箱', line)
         if quantity:
