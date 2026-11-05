@@ -15,7 +15,7 @@ def prepare_inclusive_sea_layout(text):
     lines = [_unbullet(line) for line in text.splitlines()]
     if not any(re.match(r'^包郵\s*海快(?:價)?\s*[:：]', line) for line in lines):
         return text, None
-    boilerplate = re.compile(r'^(?:現貨[!！\s]*)+$|^下單可(?:馬上發貨|立馬安排發貨)[!！\s]*$|^(?:日本商超熱賣款|爆品上新|禮品渠道爆款)[!！💥\s]*$')
+    boilerplate = re.compile(r'^(?:現貨[!！\s]*)+$|^下單可(?:馬上發貨|馬上安排發貨|立馬安排發貨)[!！\s]*$|^(?:日本商超熱賣款|爆品上新|禮品渠道爆款)[!！💥\s]*$')
     packaging = re.compile(r'^(?:#.*盒|【[^】]*盒[^】]*】|(?:巨無霸|方形|長方形|長方|長盒)鐵?盒[|｜].*系列)')
     metadata = re.compile(r'^(?:產品貨號|貨號|編號|型號|數量|一箱數量|箱裝|箱規|重量|鐵盒重量|一盒重量|產品重量|單盒|包裝|彩盒|鐵盒尺寸|電池|插腳|備註|台灣控價|臺灣控價|包郵)\s*[:：]?')
     name = ''
@@ -41,5 +41,11 @@ def prepare_inclusive_sea_layout(text):
             line = '裝箱:' + quantity[1] + (quantity[2] or '')
         if re.match(r'^鐵盒尺寸\s*[:：]', line):
             line = re.sub(r'^鐵盒尺寸', '包裝尺寸', line)
+        # A trailing separator before an explicit unit is layout punctuation.
+        # Keep the original line in notes; never infer a missing fourth axis.
+        line = re.sub(
+            r'^(包裝(?:尺寸)?\s*[:：]\s*\d+(?:\.\d+)?(?:\s*[*xX×]\s*\d+(?:\.\d+)?){2})\s*\*\s*(cm|mm|公分|毫米)$',
+            r'\1\2', line, flags=re.I,
+        )
         output.append(line)
     return '\n'.join(output), {'name': name, 'notes': notes}

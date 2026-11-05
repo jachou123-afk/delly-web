@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.41")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.42")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 from quote_workbooks import ACTIVE_ID, LEGACY_ID, ACTIVE_TITLE
 st.caption(f"新報價保存至 [{ACTIVE_TITLE}](https://docs.google.com/spreadsheets/d/{ACTIVE_ID}/edit)。"
