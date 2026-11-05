@@ -60,8 +60,9 @@ class SettingsStorageTests(unittest.TestCase):
 
         result = load_open_spreadsheet(fake_st)(client)
 
-        self.assertEqual(result, "opened-by-title")
-        self.assertEqual(client.calls, [("title", "半自動 - 採購報價彙整表BGD")])
+        self.assertEqual(result, "opened-by-id")
+        from quote_workbooks import ACTIVE_ID
+        self.assertEqual(client.calls, [("id", ACTIVE_ID)])
 
     def test_gspread_updates_use_keyword_arguments(self):
         update_calls = [

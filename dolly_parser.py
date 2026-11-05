@@ -22,8 +22,11 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.39")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.40")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
+from quote_workbooks import ACTIVE_ID, LEGACY_ID, ACTIVE_TITLE
+st.caption(f"新報價保存至 [{ACTIVE_TITLE}](https://docs.google.com/spreadsheets/d/{ACTIVE_ID}/edit)。"
+           "新增前會核對新舊兩表，NO 接續原分類編號。")
 with st.sidebar.expander("連線設定"):
     if st.toggle("顯示連線檢查", key="show_connection_check"):
         render_nas_connection_check()
@@ -61,11 +64,30 @@ def get_credentials():
         return ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
 
 def open_spreadsheet(client):
-    """優先使用固定試算表 ID，未設定時才以正式檔名開啟。"""
+    """Use the explicitly authorized continuation book, with no title guessing."""
+    from quote_workbooks import active_id
     spreadsheet_id = clean_str(str(st.secrets.get("spreadsheet_id", "")))
-    if spreadsheet_id:
-        return client.open_by_key(spreadsheet_id)
-    return client.open(SHEET_NAME)
+    return client.open_by_key(active_id(spreadsheet_id))
+
+
+def get_quote_history(spreadsheet):
+    from quote_workbooks import is_continuation, LEGACY_ID
+    from quote_sheet_reads import read_public_sheet_values
+    if not is_continuation(spreadsheet):
+        return {}
+    client = gspread.authorize(get_credentials())
+    return read_public_sheet_values(client.open_by_key(LEGACY_ID))
+
+
+def get_new_quote_review_catalog():
+    from quote_workbooks import combined_catalog
+    try:
+        spreadsheet = open_spreadsheet(gspread.authorize(get_credentials()))
+        from quote_sheet_reads import read_public_sheet_values
+        return combined_catalog(read_public_sheet_values(spreadsheet), get_quote_history(spreadsheet))
+    except Exception as exc:
+        st.error(f"新舊表查重讀取失敗，停止新增：{exc}")
+        return None
 
 @st.cache_data(ttl=15)
 def get_all_sheets_data():
@@ -89,7 +111,12 @@ def load_settings():
         try:
             ws = spreadsheet.worksheet(SETTINGS_WS)
         except gspread.exceptions.WorksheetNotFound:
-            return defaults
+            from quote_workbooks import is_continuation, LEGACY_ID
+            if not is_continuation(spreadsheet):
+                return defaults
+            # Inherit the live historical defaults until saved in the new book.
+            # Missing history is a blocking error, never a fallback to 4.7.
+            ws = client.open_by_key(LEGACY_ID).worksheet(SETTINGS_WS)
         for row in ws.get_all_values():
             if len(row) >= 2 and row[0] in defaults:
                 try:
@@ -292,7 +319,11 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
         if not bulk_rows or len(bulk_rows) % block_size:
             raise ValueError("商品區塊不完整")
         incoming = extract_saved_products(bulk_rows)
-        conflicts = duplicate_messages(incoming, live_sheets,
+        from quote_workbooks import combined_catalog, is_continuation, validate_next_numbers
+        history = get_quote_history(spreadsheet)
+        if is_continuation(spreadsheet):
+            validate_next_numbers(category_name, live_sheets, history, incoming)
+        conflicts = duplicate_messages(incoming, combined_catalog(live_sheets, history),
                                        approved_code_conflicts=approved_code_conflicts)
         if conflicts:
             st.error("；".join(conflicts))
@@ -354,6 +385,9 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
                 formats.append({"range": f"I{base_r + 2}", "format": {
                     "backgroundColor": {"red": 0.8509804, "green": 0.91764706, "blue": 0.827451}}})
         sheet.batch_format(formats)
+        if is_continuation(spreadsheet) and not extract_saved_products(expected_rows):
+            from quote_workbooks import first_product_layout
+            spreadsheet.batch_update({"requests": first_product_layout(sheet.id, st_r, block_size)})
         if category_name == "富酷" and all(
             normalize_vendor(bulk_rows[i][11]) == "v富酷"
             for i in range(0, len(bulk_rows), block_size)
@@ -531,15 +565,32 @@ def get_quote_save_snapshot(category_name):
     try:
         store = get_dispatch_store()
         sheet = store.worksheet(category_name)
-        return {"category": category_name, "store": store, "sheet": sheet,
-                "rows": sheet.get_all_values()}
+        rows = sheet.get_all_values()
+        context = {"category": category_name, "store": store, "sheet": sheet, "rows": rows}
+        from quote_workbooks import is_continuation, next_product_no
+        if is_continuation(store.spreadsheet):
+            history = get_quote_history(store.spreadsheet)
+            context["next_no"] = next_product_no(category_name, {category_name: rows}, history)
+        return context
     except Exception as exc:
         st.error(f"雲表讀取失敗，停止存檔；不會當成空表或建立分頁：{exc}")
         return None
 
 
 def get_category_codes():
-    return get_dispatch_store().category_settings()["codes"]
+    store = get_dispatch_store()
+    from quote_workbooks import is_continuation
+    if is_continuation(store.spreadsheet):
+        return get_history_dispatch_store().category_settings()["codes"]
+    return store.category_settings()["codes"]
+
+
+def get_history_dispatch_store():
+    """Historical ads stay on their original workbook; no records are copied."""
+    from nas_dispatch_storage import configured_store
+    from quote_workbooks import LEGACY_ID
+    client = gspread.authorize(get_credentials())
+    return configured_store(client.open_by_key(LEGACY_ID), lambda: st.secrets.get("nas_images"))
 
 
 @st.cache_data(ttl=300)
@@ -2125,7 +2176,8 @@ def get_fresh_line_ad_block(category_name, base_row, expected_block):
 if dispatch_tab.open:
     get_quote_category_codes.clear()
     with dispatch_tab:
-        render_dispatch_manager(get_dispatch_store, correction_tools={"parse": parse_text, "formulas": build_cost_formulas})
+        st.info("歷史發送批次仍讀取原採購表。原表已永久唯讀，請勿新增或修改歷史批次。")
+        render_dispatch_manager(get_history_dispatch_store, correction_tools={"parse": parse_text, "formulas": build_cost_formulas})
     st.stop()
 
 with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
@@ -2403,7 +2455,7 @@ if user_input.strip():
         approved_code_conflicts = []
         code_conflict_note = ""
         if source_product and st.checkbox("中間商同貨號不同商品：開啟分開建檔核對", key=draft_key + "review_code_conflicts"):
-            review_sheets = get_all_sheets_data()
+            review_sheets = get_new_quote_review_catalog()
             if review_sheets is None:
                 hard_reasons.append("無法讀取同貨號商品，停止分開建檔")
             else:
@@ -2502,7 +2554,7 @@ if user_input.strip():
                     if match:
                         max_no = max(max_no, int(match.group(1)))
             start_row = true_last_row + 2 if true_last_row > 0 else 1
-            next_no = f"no{max_no + 1}"
+            next_no = save_context.get("next_no", f"no{max_no + 1}")
             today = datetime.datetime.now(ZoneInfo("Asia/Taipei"))
             today_str = f"{today.year}/{today.month}/{today.day}"
             source_row = to_save_df.iloc[0]

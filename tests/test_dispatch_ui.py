@@ -278,7 +278,7 @@ def test_main_app_can_switch_to_dispatch_without_loading_cost_settings():
     from test_v74_ui import app_source as quote_app_source
     tree = ast.parse(quote_app_source())
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "get_dispatch_store":
+        if isinstance(node, ast.FunctionDef) and node.name in {"get_dispatch_store", "get_history_dispatch_store"}:
             node.body = ast.parse("return CloudDispatchStore(FakeSpreadsheet())").body
         elif isinstance(node, ast.FunctionDef) and node.name == "get_settings_cached":
             node.body = ast.parse("raise AssertionError('dispatch page must not load cost settings')").body
