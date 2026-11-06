@@ -1,6 +1,7 @@
 """Send historical products while journaling new work only in the continuation book."""
 
 from dispatch_manager import DispatchError
+from dispatch_storage import asset_bytes, validate_image
 from quote_workbooks import ACTIVE_ID, LEGACY_ID
 
 
@@ -15,7 +16,7 @@ class LegacyDispatchStore:
         "category_settings", "migration_status", "verify_migrated_images",
     })
     _BLOCKED_WRITES = frozenset({
-        "put_asset", "put_assets", "put_quote_evidence", "save_product_images",
+        "put_assets", "put_quote_evidence", "save_product_images",
         "save_category_code", "migrate_next_images", "_publish_locations",
     })
 
@@ -34,6 +35,23 @@ class LegacyDispatchStore:
         if name in self._SOURCE_READS:
             return getattr(self.source, name)
         return getattr(self.journal, name)
+
+    def put_asset(self, data, name):
+        """Allow selecting an unchanged historical original in a new batch.
+
+        The draft editor calls this for every selected source image, even when
+        only the advert text changed. Verify the exact old bytes and return
+        their existing ID; never write an image or pointer to the old book.
+        """
+        candidate = validate_image(data, name)
+        try:
+            reader = getattr(self.source, "get_display_asset", self.source.get_asset)
+            original = reader(candidate["sha256"])
+            if asset_bytes(original) == data:
+                return candidate["sha256"]
+        except (DispatchError, KeyError):
+            pass
+        raise DispatchError("歷史商品只可採用已保存且位元組相同的原圖；不能在此新增或改寫圖片")
 
     def list_batches(self):
         current = [batch for batch in self.journal.list_batches()

@@ -1,10 +1,14 @@
 """Cross-workbook routing tests without network or third-party packages."""
 
 import unittest
+from io import BytesIO
+
+from PIL import Image
 from copy import deepcopy
 from types import SimpleNamespace
 
 from dispatch_manager import DispatchError, batch_digest, new_batch
+from dispatch_storage import validate_image
 from legacy_dispatch_routing import LegacyDispatchStore
 from quote_workbooks import ACTIVE_ID, LEGACY_ID
 
@@ -22,6 +26,7 @@ class FakeStore:
         self.spreadsheet = SimpleNamespace(id=spreadsheet_id)
         self.records = deepcopy(records or {})
         self.writes = 0
+        self.asset_data = None
 
     def list_batches(self):
         return list(deepcopy(self.records).values())
@@ -43,6 +48,14 @@ class FakeStore:
 
     def get_asset(self, identity):
         return (self.spreadsheet.id, identity)
+
+    def get_display_asset(self, identity):
+        if self.asset_data is None:
+            raise DispatchError("找不到已保存的商品圖片")
+        asset = validate_image(self.asset_data, "original.png")
+        if asset["sha256"] != identity:
+            raise DispatchError("找不到已保存的商品圖片")
+        return asset
 
 
 class RoutingTests(unittest.TestCase):
@@ -83,10 +96,21 @@ class RoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(DispatchError, "指定的新表紀錄"):
             LegacyDispatchStore(self.source, self.journal)
 
-    def test_source_mutations_are_blocked(self):
-        with self.assertRaisesRegex(DispatchError, "原商品表永久唯讀"):
-            self.store.put_asset(b"bytes", "x.jpg")
+    def test_existing_original_is_reused_without_any_write(self):
+        image = BytesIO()
+        Image.new("RGB", (2, 2), "red").save(image, format="PNG")
+        data = image.getvalue()
+        self.source.asset_data = data
+        identity = validate_image(data, "original.png")["sha256"]
+        self.assertEqual(self.store.put_asset(data, "original.png"), identity)
         self.assertEqual(self.source.writes, 0)
+        self.assertEqual(self.journal.writes, 0)
+        self.source.asset_data = None
+        with self.assertRaisesRegex(DispatchError, "歷史商品只可採用已保存"):
+            self.store.put_asset(data, "new.png")
+        self.assertEqual(self.source.writes, 0)
+        with self.assertRaisesRegex(DispatchError, "原商品表永久唯讀"):
+            self.store.put_assets([])
 
 
 if __name__ == "__main__":
