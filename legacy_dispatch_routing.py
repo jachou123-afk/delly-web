@@ -14,6 +14,8 @@ class LegacyDispatchStore:
         "get_display_asset", "get_thumbnails", "image_locations",
         "product_image_refs", "product_image_bindings", "review_issues",
         "category_settings", "migration_status", "verify_migrated_images",
+        "worksheet", "_load_evidence", "_evidence", "_cost_report",
+        "verify_known_issues",
     })
     _BLOCKED_WRITES = frozenset({
         "put_assets", "put_quote_evidence", "save_product_images",

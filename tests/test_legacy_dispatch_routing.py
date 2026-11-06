@@ -46,6 +46,15 @@ class FakeStore:
     def catalog(self):
         return [{"source_url": f"https://docs.google.com/spreadsheets/d/{self.spreadsheet.id}/edit"}]
 
+    def worksheet(self, category):
+        return self.spreadsheet.id, category
+
+    def _load_evidence(self, identities):
+        return self.spreadsheet.id, identities
+
+    def _evidence(self, identity):
+        return self.spreadsheet.id, identity
+
     def get_asset(self, identity):
         return (self.spreadsheet.id, identity)
 
@@ -66,6 +75,9 @@ class RoutingTests(unittest.TestCase):
 
     def test_source_reads_and_new_journal_writes_are_separate(self):
         self.assertEqual(self.store.catalog(), self.source.catalog())
+        self.assertEqual(self.store.worksheet("G正版"), (LEGACY_ID, "G正版"))
+        self.assertEqual(self.store._load_evidence(["G正版:no1"]), (LEGACY_ID, ["G正版:no1"]))
+        self.assertEqual(self.store._evidence("G正版:no1"), (LEGACY_ID, "G正版:no1"))
         self.assertEqual(self.store.get_asset("sha"), (LEGACY_ID, "sha"))
         saved = self.store.save_batch(batch("new"))
         self.assertEqual(saved["source_workbook_id"], LEGACY_ID)
