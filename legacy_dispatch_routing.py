@@ -1,7 +1,9 @@
 """Send historical products while journaling new work only in the continuation book."""
 
 from dispatch_manager import DispatchError
+from dispatch_review import inspect_source
 from dispatch_storage import asset_bytes, validate_image
+from category_codes import add_code
 from quote_workbooks import ACTIVE_ID, LEGACY_ID
 
 
@@ -13,13 +15,13 @@ class LegacyDispatchStore:
         "cost_audits", "verify_cost_checks", "get_asset", "get_assets",
         "get_display_asset", "get_thumbnails", "image_locations",
         "product_image_refs", "product_image_bindings", "review_issues",
-        "category_settings", "migration_status", "verify_migrated_images",
+        "migration_status", "verify_migrated_images",
         "worksheet", "_load_evidence", "_evidence", "_cost_report",
         "verify_known_issues",
     })
     _BLOCKED_WRITES = frozenset({
         "put_assets", "put_quote_evidence", "save_product_images",
-        "save_category_code", "migrate_next_images", "_publish_locations",
+        "migrate_next_images", "_publish_locations",
     })
 
     def __init__(self, journal, source):
@@ -54,6 +56,34 @@ class LegacyDispatchStore:
         except (DispatchError, KeyError):
             pass
         raise DispatchError("歷史商品只可採用已保存且位元組相同的原圖；不能在此新增或改寫圖片")
+
+    def category_settings(self):
+        historical = self.source.category_settings()
+        current = self.journal.category_settings()
+        if any(current["codes"].get(category) != code
+               for category, code in historical["codes"].items()):
+            raise DispatchError("新舊表既有分類代碼不一致，停止產生廣告品號")
+        return {**current, "codes": {**historical["codes"], **current["codes"]}}
+
+    def save_category_code(self, category, code, *, actor, expected_revision):
+        state = self.category_settings()
+        if state["_revision"] != expected_revision:
+            raise DispatchError("分類設定已更新，請重新載入")
+        if category not in {ws.title for ws in self.source.spreadsheet.worksheets()}:
+            raise DispatchError("原商品表沒有指定分頁，停止設定舊商品代碼")
+        add_code(state["codes"], category, code)
+        self.journal.save_category_code(category, code, actor=actor,
+                                        expected_revision=expected_revision)
+        return self.category_settings()
+
+    def catalog(self):
+        products = self.source.catalog()
+        historical_codes = self.source.category_settings()["codes"]
+        codes = self.category_settings()["codes"]
+        for product in products:
+            if product["category"] in codes and product["category"] not in historical_codes:
+                product.update(inspect_source(product["category"], product["block"], codes))
+        return products
 
     def list_batches(self):
         current = [batch for batch in self.journal.list_batches()

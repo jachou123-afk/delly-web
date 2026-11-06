@@ -6,6 +6,7 @@ from io import BytesIO
 from PIL import Image
 from copy import deepcopy
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from dispatch_manager import DispatchError, batch_digest, new_batch
 from dispatch_storage import validate_image
@@ -23,10 +24,13 @@ def batch(identity, *, source_id=LEGACY_ID):
 
 class FakeStore:
     def __init__(self, spreadsheet_id, records=None):
-        self.spreadsheet = SimpleNamespace(id=spreadsheet_id)
+        self.spreadsheet = SimpleNamespace(id=spreadsheet_id,
+                                           worksheets=lambda: [SimpleNamespace(title="富酷")])
         self.records = deepcopy(records or {})
         self.writes = 0
         self.asset_data = None
+        self.codes = {"G正版": "G", "S生活用品": "S"}
+        self.category_writes = 0
 
     def list_batches(self):
         return list(deepcopy(self.records).values())
@@ -44,7 +48,17 @@ class FakeStore:
         return deepcopy(saved)
 
     def catalog(self):
-        return [{"source_url": f"https://docs.google.com/spreadsheets/d/{self.spreadsheet.id}/edit"}]
+        return deepcopy(getattr(self, "products", []))
+
+    def category_settings(self):
+        return {"codes": deepcopy(self.codes), "_revision": str(self.category_writes)}
+
+    def save_category_code(self, category, code, *, actor, expected_revision):
+        if expected_revision != str(self.category_writes):
+            raise DispatchError("revision mismatch")
+        self.codes[category] = code
+        self.category_writes += 1
+        return self.category_settings()
 
     def worksheet(self, category):
         return self.spreadsheet.id, category
@@ -85,6 +99,21 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(self.journal.writes, 1)
         self.assertEqual({b["id"] for b in self.store.list_batches()}, {"old", "new"})
         self.assertEqual(self.store.get_batch("new"), saved)
+
+    def test_new_category_code_is_saved_only_to_journal_and_reparses_old_product(self):
+        self.source.products = [{"category": "富酷", "block": [["no1"]],
+                                 "code": "", "copy": "", "source_hash": "unchanged"}]
+        with patch("legacy_dispatch_routing.inspect_source", return_value={
+                "code": "BGD-FK-1", "copy": "測試文案", "errors": []}) as inspect:
+            self.store.save_category_code("富酷", "FK", actor="Codex",
+                                          expected_revision=self.store.category_settings()["_revision"])
+            catalog = self.store.catalog()
+        self.assertEqual(self.journal.codes["富酷"], "FK")
+        self.assertNotIn("富酷", self.source.codes)
+        self.assertEqual(self.source.category_writes, 0)
+        self.assertEqual(catalog[0]["code"], "BGD-FK-1")
+        self.assertEqual(catalog[0]["source_hash"], "unchanged")
+        inspect.assert_called_once()
 
     def test_regular_batch_creation_and_digest_survive_routing_marker(self):
         product = {"key": "富酷:3:no1", "identity": "富酷:no1", "copy": "合成測試文案",

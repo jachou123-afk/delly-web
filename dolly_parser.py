@@ -581,7 +581,11 @@ def get_category_codes():
     store = get_dispatch_store()
     from quote_workbooks import is_continuation
     if is_continuation(store.spreadsheet):
-        return get_history_dispatch_store().category_settings()["codes"]
+        historical = get_history_dispatch_store().category_settings()["codes"]
+        current = store.category_settings()["codes"]
+        if any(current.get(category) != code for category, code in historical.items()):
+            raise ValueError("新舊表既有分類代碼不一致，停止產生廣告品號")
+        return {**historical, **current}
     return store.category_settings()["codes"]
 
 
