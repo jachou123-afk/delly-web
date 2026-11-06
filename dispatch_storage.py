@@ -205,17 +205,35 @@ class CloudDispatchStore(ProductImageStoreMixin, CategoryCodeStoreMixin, ReviewI
             raise DispatchError("雲端批次紀錄尚未寫入完整；請重新載入")
         if not latest:
             return []
-        rows_by_record = {}
-        for entity, record_id in latest.items():
+        rows_by_record = {record_id: [] for record_id in latest.values()}
+        requests = []
+        for record_id in latest.values():
             positions = sorted(revisions[record_id]["parts"].values())
-            rows_by_record[record_id] = []
-            for offset in range(0, len(positions), 50):
-                group_positions = positions[offset:offset + 50]
-                ranges = [f"A{number}:H{number}" for number in group_positions]
-                groups = ws.batch_get(ranges)
-                if len(groups) != len(ranges) or any(len(group) != 1 for group in groups):
+            start = end = positions[0]
+            for number in positions[1:]:
+                if number == end + 1 and end - start + 1 < 200:
+                    end = number
+                else:
+                    requests.append((record_id, start, end))
+                    start = end = number
+            requests.append((record_id, start, end))
+        # Revisions are append-only, so their parts usually occupy consecutive
+        # rows. Batch ranges across batches, with a bounded response size.
+        pending, row_count = [], 0
+        for request in requests + [None]:
+            size = request[2] - request[1] + 1 if request else 0
+            if pending and (request is None or len(pending) == 20 or row_count + size > 200):
+                groups = ws.batch_get([f"A{first}:H{last}" for _, first, last in pending])
+                if len(groups) != len(pending):
                     raise DispatchError("批次紀錄讀取不完整，停止顯示清單")
-                rows_by_record[record_id].extend(group[0] for group in groups)
+                for (record_id, first, last), group in zip(pending, groups):
+                    if len(group) != last - first + 1:
+                        raise DispatchError("批次紀錄讀取不完整，停止顯示清單")
+                    rows_by_record[record_id].extend(group)
+                pending, row_count = [], 0
+            if request is not None:
+                pending.append(request)
+                row_count += size
         batches = []
         for entity, record_id in latest.items():
             records = decode_records(rows_by_record[record_id])
