@@ -435,6 +435,17 @@ def _draft(store, batch, history):
         selected = _select_item("查看商品", review_items, batch, "draft",
                             lambda k: next(f"{i['order']}. {i['source']['code'] or i['id']}｜{i['source']['name']}" for i in items if i["id"] == k))
         item = next(i for i in items if i["id"] == selected)
+        if deferred_images and not item["excluded"]:
+            with st.form("dispatch_quick_hold_" + batch["id"] + item["id"] + batch.get("_revision", "")):
+                hold_reason = st.text_input("本款暫緩原因（不需載入原圖）")
+                if st.form_submit_button("暫緩這款"):
+                    try:
+                        updated = edit_item(batch, item["id"], text=item["copy"], images=item["images"],
+                                            excluded=True, reason=hold_reason, reviewed=False,
+                                            actor=batch["actor"], duplicate_note=item["duplicate_note"])
+                        _save(store, updated, batch)
+                    except Exception as exc:
+                        st.error(str(exc))
         if not deferred_images or st.checkbox("載入這款原圖與編輯欄位", key="dispatch_detail_load_" + batch["id"]):
             unsaved = _draft_item(store, batch, item, history, source_images.get(item["id"], []))
         else:
