@@ -593,6 +593,12 @@ def get_history_dispatch_store():
     return configured_store(client.open_by_key(LEGACY_ID), lambda: st.secrets.get("nas_images"))
 
 
+def get_legacy_pending_dispatch_store():
+    """Read old products and originals; save only new batch records to no2."""
+    from legacy_dispatch_routing import LegacyDispatchStore
+    return LegacyDispatchStore(get_dispatch_store(), get_history_dispatch_store())
+
+
 with st.sidebar.expander("新表接續設定"):
     st.caption("只沿用原表分類代碼；不搬商品、價格、圖片或發送批次。")
     if st.button("沿用舊表分類設定", key="initialize_continuation_codes"):
@@ -2198,8 +2204,8 @@ def get_fresh_line_ad_block(category_name, base_row, expected_block):
 if dispatch_tab.open:
     get_quote_category_codes.clear()
     with dispatch_tab:
-        st.info("歷史發送批次仍讀取原採購表。原表已永久唯讀，請勿新增或修改歷史批次。")
-        render_dispatch_manager(get_history_dispatch_store, correction_tools={"parse": parse_text, "formulas": build_cost_formulas})
+        st.info("舊商品、原圖與報價依據由原採購表唯讀取得；本次新發送批次及回執只寫入 no2 表。原表歷史批次維持唯讀。")
+        render_dispatch_manager(get_legacy_pending_dispatch_store)
     st.stop()
 
 with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):
