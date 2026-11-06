@@ -416,18 +416,29 @@ def _draft(store, batch, history):
         return prepare_batch(batch, source_images, reports)
     initial, _ = prepare()
     initial_issues = preparation_issues(initial, st.session_state["dispatch_review_catalog"], history)
-    render_batch_image_preview(store, visible, source_images, batch["id"])
+    # A continuation batch can reference many NAS-only originals without
+    # precomputed thumbnails. Keep the review controls responsive while the
+    # operator chooses which images to inspect; this never approves an image.
+    deferred_images = bool(batch.get("source_workbook_id"))
+    if not deferred_images or st.checkbox("載入商品圖片預覽", key="dispatch_preview_load_" + batch["id"]):
+        render_batch_image_preview(store, visible, source_images, batch["id"])
+    else:
+        st.caption("圖片尚未在此畫面載入；核對時請逐款開啟預覽，待發確認仍須檢查原圖。")
     cached_candidates = source_images
     render_batch_cost_tools(store, batch, items, visible, row_state, cached_candidates)
     st.subheader("③ 發送前問題與修正")
     diagnosis_slot = st.container()
+    unsaved = False
     with st.expander("查看／修改單款（需要時再展開）",
                      expanded=bool(st.session_state.get("dispatch_problem_open_" + batch["id"]))):
         review_items = sorted(items, key=lambda i: (i["excluded"], i["order"]))
         selected = _select_item("查看商品", review_items, batch, "draft",
                             lambda k: next(f"{i['order']}. {i['source']['code'] or i['id']}｜{i['source']['name']}" for i in items if i["id"] == k))
         item = next(i for i in items if i["id"] == selected)
-        unsaved = _draft_item(store, batch, item, history, source_images.get(item["id"], []))
+        if not deferred_images or st.checkbox("載入這款原圖與編輯欄位", key="dispatch_detail_load_" + batch["id"]):
+            unsaved = _draft_item(store, batch, item, history, source_images.get(item["id"], []))
+        else:
+            st.caption("選定商品後載入這款原圖，完成目視核對或必要修改。")
     if unsaved:
         st.warning("本款有尚未儲存的修改，請先按「儲存本款修改」，再確認整批。")
     with st.expander("調整發送順序"):
