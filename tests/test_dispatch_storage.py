@@ -51,6 +51,28 @@ def test_batch_list_reads_index_and_latest_records_without_whole_sheet(monkeypat
                for name in ws.read_ranges)
 
 
+def test_batch_list_groups_latest_revisions_into_bounded_reads(monkeypatch):
+    store = CloudDispatchStore(FakeSpreadsheet())
+    saved = [store.save_batch(new_batch(f"第 {number} 批", "測試群組",
+                                        store.catalog(), "測試核對人"))
+             for number in range(12)]
+    ws = store.spreadsheet.sheets[BATCH_SHEET]
+    calls = []
+    original = ws.batch_get
+
+    def counted(ranges):
+        calls.append(list(ranges))
+        return original(ranges)
+
+    monkeypatch.setattr(ws, "batch_get", counted)
+    batches = CloudDispatchStore(store.spreadsheet).list_batches()
+
+    assert {batch["id"] for batch in batches} == {batch["id"] for batch in saved}
+    assert len(calls) == 1
+    assert len(calls[0]) == 12
+    assert all(name.startswith("A") and ":H" in name for name in calls[0])
+
+
 def test_batch_list_rejects_a_false_empty_index(monkeypatch):
     store = CloudDispatchStore(FakeSpreadsheet())
     store.save_batch(ready_batch())
