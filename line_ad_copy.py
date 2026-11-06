@@ -309,13 +309,17 @@ def validate_sheet_pricing(rows):
     missing_weight = raw_weight is None or (
         isinstance(raw_weight, str) and not raw_weight.strip()
     )
+    raw_weight_note = _clean_text(block[3][1])
     included_delivery = (
-        rule.canonical_name == "v方小姐"
-        and rule.domestic_shipping == "free"
-        and rule.domestic_shipping_note == "台灣包郵"
-        and _clean_text(block[2][8]) == "台灣包郵"
-        and _clean_text(block[3][1]) == "重量 未提供"
+        rule.domestic_shipping == "free"
+        and rule.domestic_shipping_note == _clean_text(block[2][8])
         and missing_weight
+        and (
+            (rule.canonical_name == "v方小姐"
+             and raw_weight_note == "重量 未提供")
+            or (rule.canonical_name == "v富酷"
+                and re.fullmatch(r"重量\s+\d+(?:\.\d+)?g\s*/\s*\d+(?:\.\d+)?g（原文，未指定淨重／毛重）", raw_weight_note))
+        )
     )
     if included_delivery:
         # A saved inclusive-delivery quote may omit weight, never invent zero.
