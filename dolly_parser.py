@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.42")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.43")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 from quote_workbooks import ACTIVE_ID, LEGACY_ID, ACTIVE_TITLE
 st.caption(f"新報價保存至 [{ACTIVE_TITLE}](https://docs.google.com/spreadsheets/d/{ACTIVE_ID}/edit)。"
@@ -601,6 +601,11 @@ def get_legacy_pending_dispatch_store():
     """Read old products and originals; save only new batch records to no2."""
     from legacy_dispatch_routing import LegacyDispatchStore
     return LegacyDispatchStore(get_dispatch_store(), get_history_dispatch_store())
+
+
+def get_continuation_dispatch_store():
+    from legacy_dispatch_routing import ContinuationDispatchStore
+    return ContinuationDispatchStore(get_dispatch_store(), get_history_dispatch_store())
 
 
 with st.sidebar.expander("新表接續設定"):
@@ -2208,8 +2213,11 @@ def get_fresh_line_ad_block(category_name, base_row, expected_block):
 if dispatch_tab.open:
     get_quote_category_codes.clear()
     with dispatch_tab:
-        st.info("舊商品、原圖與報價依據由原採購表唯讀取得；本次新發送批次及回執只寫入 no2 表。原表歷史批次維持唯讀。")
-        render_dispatch_manager(get_legacy_pending_dispatch_store)
+        st.info("選擇商品所在的報價表。新批次及回執保存到 no2，原表維持唯讀。")
+        render_dispatch_manager(get_legacy_pending_dispatch_store, source_options={
+            "原表商品": get_legacy_pending_dispatch_store,
+            "no2 新商品": get_continuation_dispatch_store,
+        })
     st.stop()
 
 with st.expander("📣 LINE 廣告文案（從雲表唯讀產生）"):

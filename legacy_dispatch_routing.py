@@ -118,3 +118,48 @@ class LegacyDispatchStore:
             {**batch, "source_workbook_id": LEGACY_ID},
             expected_revision=expected_revision, record_id=record_id,
         )
+
+
+class ContinuationDispatchStore:
+    """Read and save no2 work; include old batches in duplicate checks."""
+
+    def __init__(self, journal, history):
+        if (getattr(journal.spreadsheet, "id", None) != ACTIVE_ID
+                or getattr(history.spreadsheet, "id", None) != LEGACY_ID):
+            raise DispatchError("新商品發送只接受指定的 no2 與原商品表")
+        self.journal = journal
+        self.history = history
+        self.spreadsheet = journal.spreadsheet
+
+    def __getattr__(self, name):
+        return getattr(self.journal, name)
+
+    @staticmethod
+    def can_open_batch(batch):
+        items = batch.get("items", [])
+        source_prefix = f"https://docs.google.com/spreadsheets/d/{ACTIVE_ID}/"
+        return (batch.get("source_workbook_id") in (None, ACTIVE_ID) and bool(items)
+                and all(str(item.get("source", {}).get("source_url", "")).startswith(source_prefix)
+                        for item in items))
+
+    def list_batches(self):
+        batches = self.journal.list_batches() + self.history.list_batches()
+        if len({batch["id"] for batch in batches}) != len(batches):
+            raise DispatchError("新舊表批次識別碼重複，停止顯示與保存")
+        return sorted(batches, key=lambda batch: batch["created_at"], reverse=True)
+
+    def get_batch(self, batch_id):
+        batch = self.journal.get_batch(batch_id)
+        if batch is not None and not self.can_open_batch(batch):
+            raise DispatchError("此批次來源不是 no2 商品表")
+        return batch
+
+    def save_batch(self, batch, expected_revision="", record_id=None):
+        if not self.can_open_batch(batch):
+            raise DispatchError("本批商品不全屬於 no2 商品表")
+        if self.get_batch(batch["id"]) is None and self.history.get_batch(batch["id"]) is not None:
+            raise DispatchError("歷史批次永久唯讀；不能在新表修改舊批次")
+        return self.journal.save_batch(
+            {**batch, "source_workbook_id": ACTIVE_ID},
+            expected_revision=expected_revision, record_id=record_id,
+        )

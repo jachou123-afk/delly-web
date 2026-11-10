@@ -719,12 +719,37 @@ def _progress_finish(store, batch, report):
                 st.error(str(exc))
 
 
-def render_dispatch_manager(store_factory, correction_tools=None):
+def _clear_dispatch_read_state():
+    for key in (RUN_KEY, "dispatch_history", "dispatch_catalog", "dispatch_review_catalog"):
+        st.session_state.pop(key, None)
+    for key in list(st.session_state):
+        if key.startswith(("dispatch_source_images_", "dispatch_cost_", "dispatch_bulk_result_",
+                           "dispatch_library_", "dispatch_category_", "image_binding_revision_")):
+            st.session_state.pop(key, None)
+
+
+def render_dispatch_manager(store_factory, correction_tools=None, *, source_options=None):
     st.header("📣 發送管理")
     st.caption("選商品 → 預覽與核對 → 確認待發清單 → 登記 LINE 結果 → 逐款對帳")
     from audit_save_recovery import PENDING_KEY
     from audit_save_ui import render_pending_save
     from product_correction_ui import PENDING, render_pending_correction
+    if source_options:
+        source = st.radio("商品來源", tuple(source_options), horizontal=True,
+                          key="dispatch_source_choice",
+                          disabled=bool(st.session_state.get(PENDING) or st.session_state.get(PENDING_KEY)))
+        previous = st.session_state.get("dispatch_source_context")
+        if previous is not None and previous != source:
+            _clear_dispatch_read_state()
+            for key in ("dispatch_active", "dispatch_dates", "dispatch_vendors",
+                        "dispatch_categories", "dispatch_scope_reason", "dispatch_name",
+                        "dispatch_auto_name", "dispatch_image_cache_scope"):
+                st.session_state.pop(key, None)
+            for key in list(st.session_state):
+                if key.startswith("dispatch_selected_"):
+                    st.session_state.pop(key, None)
+        st.session_state["dispatch_source_context"] = source
+        store_factory = source_options[source]
     if st.session_state.get(PENDING):
         render_pending_correction(store_factory)
         st.stop()
@@ -735,14 +760,7 @@ def render_dispatch_manager(store_factory, correction_tools=None):
     if notice:
         st.success(notice)
     if st.button("重新載入雲端", key="dispatch_reload"):
-        st.session_state.pop(RUN_KEY, None)
-        st.session_state.pop("dispatch_history", None)
-        st.session_state.pop("dispatch_catalog", None)
-        st.session_state.pop("dispatch_review_catalog", None)
-        for key in list(st.session_state):
-            if key.startswith(("dispatch_source_images_", "dispatch_cost_", "dispatch_bulk_result_",
-                               "dispatch_library_", "dispatch_category_", "image_binding_revision_")):
-                st.session_state.pop(key, None)
+        _clear_dispatch_read_state()
         st.rerun()
     try:
         store = store_factory()
@@ -783,11 +801,13 @@ def render_dispatch_manager(store_factory, correction_tools=None):
             render_nas_image_management(store)
             render_thumbnail_management(store)
             render_category_settings(store)
-    options = [""] + [b["id"] for b in history]
+    can_open = getattr(store, "can_open_batch", None)
+    visible_batches = {b["id"]: b for b in history if can_open is None or can_open(b)}
+    options = [""] + list(visible_batches)
     active = st.session_state.get("dispatch_active", "")
     history_revision = digest([(b["id"], b.get("_revision", "")) for b in history])[:16]
     chosen = st.selectbox("廣告批次", options, index=options.index(active) if active in options else 0,
-                          format_func=lambda k: "＋ 建立新批次" if not k else next(_batch_label(b) for b in history if b["id"] == k),
+                          format_func=lambda k: "＋ 建立新批次" if not k else _batch_label(visible_batches[k]),
                           key="dispatch_batch_selector_" + active + history_revision)
     if chosen != active:
         st.session_state.pop(RUN_KEY, None)
@@ -798,7 +818,7 @@ def render_dispatch_manager(store_factory, correction_tools=None):
         st.caption("既有 LINE 歷史不會自動匯入；首次安排舊商品時，請先核對是否已發過。")
         st.caption("儲存草稿時才會建立專用雲端紀錄表。商品報價表的原有列與公式不會被發送管理改寫。")
         return
-    batch = next(b for b in history if b["id"] == chosen)
+    batch = visible_batches[chosen]
     st.write(f"**{batch['name']}** · {batch['target']} · {STATUS[batch['status']]}")
     st.caption(f"批次 {batch['id'][:8]} · 建立於 {batch['created_at']}")
     uncertain = [p for p in st.session_state.get('dispatch_uncertain_corrections', [])

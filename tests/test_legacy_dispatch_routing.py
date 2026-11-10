@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from dispatch_manager import DispatchError, batch_digest, new_batch
 from dispatch_storage import validate_image
-from legacy_dispatch_routing import LegacyDispatchStore
+from legacy_dispatch_routing import ContinuationDispatchStore, LegacyDispatchStore
 from quote_workbooks import ACTIVE_ID, LEGACY_ID
 
 
@@ -152,6 +152,39 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(self.source.writes, 0)
         with self.assertRaisesRegex(DispatchError, "原商品表永久唯讀"):
             self.store.put_assets([])
+
+
+class ContinuationRoutingTests(unittest.TestCase):
+    def setUp(self):
+        self.history = FakeStore(LEGACY_ID, {"old": batch("old")})
+        self.journal = FakeStore(ACTIVE_ID, {
+            "old-source": {**batch("old-source"), "source_workbook_id": LEGACY_ID},
+            "no2": batch("no2", source_id=ACTIVE_ID),
+        })
+        self.store = ContinuationDispatchStore(self.journal, self.history)
+
+    def test_no2_catalog_and_images_use_no2_while_duplicate_history_keeps_both_books(self):
+        self.journal.products = [{"identity": "G正版:no2"}]
+        self.assertEqual(self.store.catalog(), self.journal.products)
+        self.assertEqual(self.store.get_asset("sha"), (ACTIVE_ID, "sha"))
+        history = self.store.list_batches()
+        self.assertEqual({value["id"] for value in history}, {"old", "old-source", "no2"})
+        self.assertEqual([value["id"] for value in history if self.store.can_open_batch(value)], ["no2"])
+
+    def test_no2_save_rejects_mixed_source_and_historical_ids(self):
+        pending = batch("no2-new", source_id=ACTIVE_ID)
+        mixed = {**pending, "items": pending["items"] + batch("old")["items"]}
+        with self.assertRaisesRegex(DispatchError, "不全屬於 no2"):
+            self.store.save_batch(mixed)
+        with self.assertRaisesRegex(DispatchError, "永久唯讀"):
+            self.store.save_batch(batch("old", source_id=ACTIVE_ID))
+        with self.assertRaisesRegex(DispatchError, "來源不是 no2"):
+            self.store.save_batch(batch("old-source", source_id=ACTIVE_ID))
+        saved = self.store.save_batch(pending)
+        self.assertEqual(saved["source_workbook_id"], ACTIVE_ID)
+        self.assertEqual(self.store.get_batch("no2-new"), saved)
+        self.assertEqual(self.journal.writes, 1)
+        self.assertEqual(self.history.writes, 0)
 
 
 if __name__ == "__main__":
