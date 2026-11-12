@@ -96,6 +96,54 @@ def test_inline_unknown_clauses_are_not_removed(extra):
     assert expand_inline_bag_quote(raw) == raw
 
 
+@pytest.mark.parametrize("size,qty,price,unit", [
+    ("60x90cm", 80, 13.5, "張"),
+    ("120x160cm", 45, 19.5, "张"),
+    ("140x190cm", 40, 28, "張"),
+])
+def test_blanket_quote_retains_sheet_unit_through_cost_and_saved_block(size, qty, price, unit):
+    name = f"測試毛毯({size})"
+    raw = (
+        f"{name}\n產品尺寸：{size}\n裝箱規格：{qty}{unit}\n"
+        f"單{unit}價格：{price}元\n包裝及出貨原文：獨立袋子、卡片、絲帶；一件{qty}{unit}"
+    )
+    common, products = ns["parse_text"](raw)
+    assert products == [{"code": "", "name": name}]
+    assert common["raw_text"] == raw
+    assert (common["price"], common["qty"], common["price_unit"], common["qty_unit"]) == (price, qty, "張", "張")
+    assert common["prod_size"] == size
+    assert f"一件{qty}張" in common["extra_tags"]
+    assert not ns["cost_blockers"](price, qty, 0, 0, 0, 0, 5, common["issues"], "張", "張", "v方小姐")
+    block = ns["build_product_block"]("no1", "2026/1/1", 2, name, "", price, qty, "張",
+                                     0, 0, 0, 0, 5, "v方小姐", extra=common["extra_tags"], prod_size=size)
+    assert block[1][1].startswith("計價單位：張")
+    assert block[1][7] == ""
+    assert block[1][10] == "=ROUNDUP(G2*5,0)"
+    assert block[2][1] == f"裝箱 {qty}張/箱"
+    result = calculate(dict(price=price, qty=qty, unit="張", carton_kg=0, unit_g=0,
+                            dom_rate=0, intl_rate=0, ex_rate=5), "v方小姐")
+    assert result["cost"][0] == Decimal(str(price * 5)).to_integral_value(rounding="ROUND_CEILING")
+
+
+def test_inline_blanket_keeps_per_sheet_unit():
+    raw = "測試毛毯產品尺寸60x90cm 一箱80张一张包邮13.5元"
+    common, products = ns["parse_text"](raw)
+    assert products == [{"code": "", "name": "測試毛毯"}]
+    assert common["raw_text"] == raw
+    assert (common["price_unit"], common["qty_unit"], common["price"], common["qty"]) == ("張", "張", 13.5, 80)
+    assert not common["issues"]
+
+
+@pytest.mark.parametrize("quote", [
+    "每箱數量：80盒\n單張價格：13.5元/盒",
+    "每箱數量：80張/盒\n單張價格：13.5元",
+    "每箱數量：80張\n13.5元/張/盒",
+])
+def test_blanket_quote_stops_conflicting_units(quote):
+    common, _ = ns["parse_text"]("測試毛毯\n" + quote)
+    assert any("單位" in issue for issue in common["issues"])
+
+
 @pytest.mark.parametrize("vendor,allowed", [("方小姐", True), ("V-方小姐", True),
                                            ("v多品村", False), ("v菲凡", False),
                                            ("方小姐其他店", False), ("", False)])
