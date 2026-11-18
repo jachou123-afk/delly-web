@@ -24,6 +24,8 @@ HEADER = ["record_id", "entity_id", "parent", "part", "total", "sha256", "payloa
 CHUNK_SIZE = 20000  # Also below 50k UTF-16 units for all-emoji content.
 MAX_IMAGE_MB = 20
 MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
+MAX_NAS_ORIGINAL_MB = 32
+MAX_NAS_ORIGINAL_BYTES = MAX_NAS_ORIGINAL_MB * 1024 * 1024
 MAX_LEGACY_IMAGE_BYTES = 2 * 1024 * 1024  # Larger originals use NAS, not Sheets payloads.
 MAX_IMAGE_PIXELS = 25_000_000
 MAX_PNG_PIXELS = 41_000_000  # Bound decoding; resize before application preview conversions.
@@ -81,8 +83,17 @@ def decode_records(rows):
 
 
 def validate_image(data, name):
-    if not data or len(data) > MAX_IMAGE_BYTES:
-        raise DispatchError(f"每張圖片需為非空檔案且不超過 {MAX_IMAGE_MB} MB；保留原檔，不自動壓縮")
+    return _validate_image(data, name, MAX_IMAGE_BYTES, MAX_IMAGE_MB)
+
+
+def validate_nas_original(data, name):
+    """NAS original-only capacity; ordinary image entry points remain 20 MiB."""
+    return _validate_image(data, name, MAX_NAS_ORIGINAL_BYTES, MAX_NAS_ORIGINAL_MB)
+
+
+def _validate_image(data, name, byte_limit, megabytes):
+    if not data or len(data) > byte_limit:
+        raise DispatchError(f"每張圖片需為非空檔案且不超過 {megabytes} MB；保留原檔，不自動壓縮")
     try:
         with Image.open(BytesIO(data)) as image:
             if image.format not in ("JPEG", "PNG", "WEBP"):
@@ -103,11 +114,20 @@ def validate_image(data, name):
 
 
 def asset_bytes(asset):
+    return _asset_bytes(asset, MAX_IMAGE_BYTES)
+
+
+def nas_original_bytes(asset):
+    """Decode exact NAS original bytes; not a general/advertisement size policy."""
+    return _asset_bytes(asset, MAX_NAS_ORIGINAL_BYTES)
+
+
+def _asset_bytes(asset, byte_limit):
     try:
         data = base64.b64decode(asset["data"], validate=True)
     except Exception as exc:
         raise DispatchError("雲端圖片內容損壞") from exc
-    if len(data) > MAX_IMAGE_BYTES or hashlib.sha256(data).hexdigest() != asset["sha256"]:
+    if len(data) > byte_limit or hashlib.sha256(data).hexdigest() != asset["sha256"]:
         raise DispatchError("圖片校驗失敗，請重新核對")
     return data
 

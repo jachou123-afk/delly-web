@@ -74,7 +74,7 @@ class NasThumbnailMixin:
         verified = {}
         with self._nas() as nas:
             for identity in selected:
-                verified[identity] = nas.put_thumbnail(make_thumbnail(originals[identity]))
+                verified[identity] = nas.put_thumbnail(make_thumbnail(originals[identity], nas_original=True))
         current = self.thumbnail_locations(selected)
         if any(not _same_location(meta, verified[k]) for k, meta in current.items()):
             raise DispatchError("縮圖索引已變動，停止發布")
@@ -123,6 +123,6 @@ class NasThumbnailMixin:
         if missing:
             for identity in sorted(missing):
                 original = self.get_display_asset(identity)
-                result[identity] = {**make_thumbnail(original),
+                result[identity] = {**make_thumbnail(original, nas_original=True),
                                     **({"_cloud_backup": True} if original.get("_cloud_backup") else {})}
         return result

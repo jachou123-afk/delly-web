@@ -18,6 +18,15 @@ def subject_key(source):
 
 def checked_assets(assets):
     from dispatch_storage import asset_bytes, validate_image
+    return _checked_assets(assets, asset_bytes, validate_image)
+
+
+def checked_nas_originals(assets):
+    from dispatch_storage import nas_original_bytes, validate_nas_original
+    return _checked_assets(assets, nas_original_bytes, validate_nas_original)
+
+
+def _checked_assets(assets, asset_bytes, validate_image):
     checked = {}
     for asset in assets:
         clean = validate_image(asset_bytes(asset), asset["name"])

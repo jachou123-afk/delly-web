@@ -2,7 +2,7 @@
 import streamlit as st
 
 from dispatch_manager import digest
-from dispatch_storage import asset_bytes
+from dispatch_storage import nas_original_bytes as asset_bytes
 from image_thumbnails import display_bytes
 from quote_image_inspection import inspect_nas_files, read_bound_originals, inspection_error
 
@@ -50,7 +50,7 @@ def render_image_inspection(get_store, plan, assets, *, selection_errors=False):
             for index, asset in enumerate(bound["assets"], 1):
                 raw = asset_bytes(asset)
                 label = f"原圖 {index}" + ("（原主圖）" if index == 1 else "")
-                st.image(display_bytes(raw), caption=label + " · " + asset["sha256"], width="stretch")
+                st.image(display_bytes(raw, nas_original=True), caption=label + " · " + asset["sha256"], width="stretch")
                 st.download_button("下載" + label, data=raw,
                                    file_name=f"{index:02d}-{asset['sha256']}.{EXTENSIONS[asset['mime']]}",
                                    mime=asset["mime"], key=PREFIX + "download_" + selection + "_" + str(index))

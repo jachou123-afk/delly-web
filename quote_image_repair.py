@@ -3,8 +3,7 @@ from copy import deepcopy
 
 from cost_audit import block
 from dispatch_manager import DispatchError, digest
-from dispatch_storage import asset_bytes, validate_image
-from product_images import checked_assets, source_problem, subject_key
+from product_images import source_problem, subject_key
 
 
 def _unique_source(store, identity):
@@ -87,9 +86,9 @@ def _verify_saved_images(store, source, assets):
     returned = store.get_assets(binding["assets"])
     for asset in assets:
         stored = returned.get(asset["sha256"])
-        if stored is None or asset_bytes(stored) != asset_bytes(asset):
+        if stored is None or store._original_asset_bytes(stored) != store._original_asset_bytes(asset):
             raise DispatchError("圖片原檔讀回不一致，未確認補圖成功")
-        validate_image(asset_bytes(stored), stored["name"])
+        store._validate_original_image(store._original_asset_bytes(stored), stored["name"])
     return binding
 
 
@@ -106,7 +105,7 @@ def save_image_repair(store, plan, assets, *, actor):
 def _save_image_repair(store, plan, assets, *, actor, origin, expected_revision=None):
     if not isinstance(actor, str) or not actor.strip():
         raise DispatchError("請填圖片保存人")
-    assets = checked_assets(assets)
+    assets = store._checked_product_images(assets)
     source = _current_source(store, plan)
     binding = store.product_image_bindings().get(source["identity"])
     _matching_binding(binding, source, assets)
@@ -147,7 +146,7 @@ def save_existing_nas_image_repair(store, plan, assets, *, actor):
 
     if not isinstance(actor, str) or not actor.strip():
         raise DispatchError("請填圖片保存人")
-    assets = checked_assets(assets)
+    assets = store._checked_product_images(assets)
     source = _current_source(store, plan)
     binding = store.product_image_bindings().get(source["identity"])
     _matching_binding(binding, source, assets)

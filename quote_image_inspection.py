@@ -2,11 +2,12 @@
 from copy import deepcopy
 
 from dispatch_manager import DispatchError, now
-from dispatch_storage import asset_bytes, validate_image
+from dispatch_storage import (nas_original_bytes as asset_bytes,
+                              validate_nas_original as validate_image)
 from nas_dispatch_storage import NasDispatchStore
-from product_images import checked_assets, subject_key
+from product_images import checked_nas_originals as checked_assets, subject_key
 from quote_image_repair import _current_source
-from quote_image_repair_batch import safe_repair_error
+from quote_image_repair_batch import safe_repair_error, safe_service_diagnostic
 
 
 def inspection_error(exc):
@@ -67,6 +68,10 @@ def inspect_nas_files(store, plan, assets):
                         raise DispatchError("NAS 檔案資訊回應不一致；未當成原圖完成")
                     row.update(exists=False, status="missing", reason="File Station API 408：檔案不存在；未自動上傳")
             except Exception as exc:
+                diagnostic = safe_service_diagnostic(exc)
+                if diagnostic and (diagnostic.get("http_status") == 429 or diagnostic.get("api_code") == 429
+                                   or diagnostic["kind"] == "read_budget_wait"):
+                    raise
                 row["reason"] = inspection_error(exc)
             result.append(row)
     final_source, final_binding = _current_binding(store, plan)

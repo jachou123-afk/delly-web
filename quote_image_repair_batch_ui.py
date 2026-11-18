@@ -9,7 +9,7 @@ from product_image_ui import clear_library_cache
 from batch_read_pacing import paced_nas_store
 from quote_image_repair_batch import (prepare_batch_repair, process_next_repair,
                                       repair_table, retry_failed_repair, safe_repair_error,
-                                      repair_receipt_payload)
+                                      repair_receipt_payload, inspect_batch_nas_files)
 from quote_image_repair_zip import MAX_ZIP_BYTES, read_repair_zip
 
 PREFIX = "quote_image_repair_batch_"
@@ -56,6 +56,37 @@ def render_batch_image_repair(get_store):
         confirmed = st.checkbox("我已逐款核對查核表的實際 NO、主圖與原圖組", key=PREFIX + "confirmed_" + run["scope_digest"])
         actor = st.text_input("批次原圖保存人", value="報價補圖操作者", key=PREFIX + "actor")
         limit = st.number_input("本次最多處理款數", min_value=1, max_value=10, value=5, step=1, key=PREFIX + "limit")
+        unfinished = counts["ready"] + counts["failed"]
+        with st.expander("本包未完成款 NAS 檔案資訊（唯讀）"):
+            st.caption("只查待處理及失敗商品，每次最多10款；跳過已完成，不改保存方式、不上傳、不發布圖片配對。存在或大小相同不等於原bytes／SHA驗收完成。")
+            start = st.number_input("檔案資訊查核起始款", min_value=1, max_value=max(1, unfinished),
+                                    value=1, step=1, key=PREFIX + "stat_start_" + run["scope_digest"] + "_" + str(unfinished))
+            if st.button("只查本包未完成款 NAS 檔案資訊", key=PREFIX + "stat", disabled=not unfinished):
+                st.session_state.pop(PREFIX + "stat_report", None)
+                try:
+                    with st.spinner("只查本包未完成原圖的 NAS 檔案資訊…"):
+                        store = paced_nas_store(get_store())
+                        st.session_state[PREFIX + "stat_report"] = inspect_batch_nas_files(
+                            store, package, run, offset=int(start) - 1, limit=10)
+                except Exception as exc:
+                    st.error("本包檔案資訊尚未確認：" + safe_repair_error(exc))
+            stat_report = st.session_state.get(PREFIX + "stat_report")
+            if stat_report:
+                if stat_report.get("halt"):
+                    st.warning("唯讀查核已停止：" + stat_report["halt"]["reason"] + "；未改原補存進度或自動接續其他款。")
+                rows = []
+                for item in stat_report["items"]:
+                    if not item["images"]:
+                        rows.append({"商品": item["identity"], "查核時間": item["checked_at"], "原因": item["reason"]})
+                    for image in item["images"]:
+                        rows.append({"商品": item["identity"], "原圖 SHA-256": image["sha256"],
+                                     "原檔大小": image["expected_size"], "NAS 大小": image["size"],
+                                     "存在": {True: "是", False: "否", None: "未確認"}[image["exists"]],
+                                     "大小相同": image["size_matches"], "查核時間": item["checked_at"], "原因": image["reason"]})
+                st.dataframe(rows, hide_index=True, width="stretch")
+                stat_json = json.dumps(stat_report, ensure_ascii=False, indent=2)
+                st.download_button("下載本包唯讀檔案資訊 JSON", data=stat_json,
+                                   file_name="nas-original-stat-only.json", mime="application/json", key=PREFIX + "stat_json")
         if st.button("處理下一批", key=PREFIX + "next", disabled=not confirmed or not actor.strip() or not counts["ready"]):
             progress = st.empty()
             waited = [0.0]

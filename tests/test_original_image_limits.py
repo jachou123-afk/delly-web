@@ -12,7 +12,7 @@ from streamlit.testing.v1 import AppTest
 
 from dispatch_fakes import FakeSpreadsheet, image_data, product_rows
 from dispatch_manager import DispatchError
-from dispatch_storage import (CloudDispatchStore, IMAGE_SHEET, MAX_IMAGE_BYTES,
+from dispatch_storage import (CloudDispatchStore, IMAGE_SHEET, MAX_IMAGE_BYTES, MAX_NAS_ORIGINAL_BYTES,
                               asset_bytes, validate_image)
 from nas_dispatch_storage import NasDispatchStore
 from product_images import checked_assets
@@ -54,13 +54,13 @@ def test_large_original_nas_binding_roundtrip_preserves_exact_bytes_and_sha(size
     assert list(network.objects.values()) == [raw]
 
 
-def test_larger_than_20mb_or_empty_is_rejected_without_nas_or_sheet_writes():
+def test_larger_than_nas_32mb_or_empty_is_rejected_without_nas_or_sheet_writes():
     sheet = FakeSpreadsheet(product_rows([1]))
     network = Network()
     store = NasDispatchStore(sheet, config(), nas_factory=network.factory)
     before = deepcopy(sheet.sheets["G正版"].rows)
-    for raw in (b"", b"x" * (MAX_IMAGE_BYTES + 1)):
-        with pytest.raises(DispatchError, match="20 MB"):
+    for raw in (b"", b"x" * (MAX_NAS_ORIGINAL_BYTES + 1)):
+        with pytest.raises(DispatchError, match="32 MB"):
             store.put_asset(raw, "synthetic.png")
     assert set(sheet.sheets) == {"G正版"}
     assert sheet.sheets["G正版"].rows == before

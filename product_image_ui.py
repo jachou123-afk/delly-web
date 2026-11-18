@@ -3,7 +3,8 @@ import streamlit as st
 
 from dispatch_images import extract_sheet_images, match_image_pack
 from dispatch_manager import digest
-from dispatch_storage import MAX_IMAGE_MB, asset_bytes, validate_image
+from dispatch_storage import (MAX_IMAGE_MB, MAX_NAS_ORIGINAL_MB, asset_bytes,
+                              validate_image, nas_original_bytes, validate_nas_original)
 from image_limits import MAX_LINE_IMAGES, MAX_PRODUCT_ORIGINALS
 from product_images import subject_key, unique_proposals
 from image_thumbnails import display_bytes
@@ -16,15 +17,19 @@ def clear_library_cache():
 
 
 def render_quote_images(key, *, title="本款原圖（隨報價保存到圖庫）",
-                        caption=f"選填；圖庫每款最多 {MAX_PRODUCT_ORIGINALS} 張原圖，單張 {MAX_IMAGE_MB} MB（超過 2 MB 需使用 NAS 商品圖庫）。原圖只需提供一次；發送管理每款仍最多採用 {MAX_LINE_IMAGES} 張，不改雲表原有圖片。"):
+                        caption=f"選填；圖庫每款最多 {MAX_PRODUCT_ORIGINALS} 張原圖，單張 {MAX_IMAGE_MB} MB（超過 2 MB 需使用 NAS 商品圖庫）。原圖只需提供一次；發送管理每款仍最多採用 {MAX_LINE_IMAGES} 張，不改雲表原有圖片。",
+                        nas_originals=False):
     st.markdown("#### " + title)
     st.caption(caption)
+    max_mb = MAX_NAS_ORIGINAL_MB if nas_originals else MAX_IMAGE_MB
+    validator = validate_nas_original if nas_originals else validate_image
+    decode = nas_original_bytes if nas_originals else asset_bytes
     uploads = st.file_uploader("本款商品原圖", type=["jpg", "jpeg", "png", "webp"],
-                               accept_multiple_files=True, max_upload_size=MAX_IMAGE_MB, key=key)
+                               accept_multiple_files=True, max_upload_size=max_mb, key=key)
     assets, errors = {}, []
     for upload in uploads or []:
         try:
-            asset = validate_image(upload.getvalue(), upload.name)
+            asset = validator(upload.getvalue(), upload.name)
             assets[asset["sha256"]] = asset
         except ValueError as exc:
             errors.append(f"{upload.name}：{exc}")
@@ -33,7 +38,7 @@ def render_quote_images(key, *, title="本款原圖（隨報價保存到圖庫�
     if assets:
         columns = st.columns(min(5, len(assets)))
         for n, asset in enumerate(assets.values()):
-            columns[n % len(columns)].image(display_bytes(asset_bytes(asset)), caption=asset["name"], width="stretch")
+            columns[n % len(columns)].image(display_bytes(decode(asset), nas_original=nas_originals), caption=asset["name"], width="stretch")
     return list(assets.values()), errors
 
 
@@ -128,9 +133,11 @@ def render_save_current_images(store, source, assets, actor, key, disabled=False
                 previous = store.get_assets(saved["assets"])
                 selected_assets = [previous[identity] for identity in saved["assets"]]
                 columns = st.columns(min(5, len(selected_assets)))
+                from nas_dispatch_storage import NasDispatchStore
                 for number, asset in enumerate(selected_assets):
                     columns[number % len(columns)].image(
-                        display_bytes(asset_bytes(asset)), caption=f"變更前已綁定原圖 {number + 1} · {asset['name']}", width="stretch")
+                        display_bytes(store._original_asset_bytes(asset), nas_original=isinstance(store, NasDispatchStore)),
+                        caption=f"變更前已綁定原圖 {number + 1} · {asset['name']}", width="stretch")
                 replace = st.checkbox("我已逐張核對：變更前綁定原圖仍是本款同一商品",
                                       key="image_reuse_stale_" + key)
                 button_label = "沿用舊圖並更新本商品配對"

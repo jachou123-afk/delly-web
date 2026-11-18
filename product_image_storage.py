@@ -108,6 +108,17 @@ def image_error_summary(diagnostic):
 
 
 class ProductImageStoreMixin:
+    def _checked_product_images(self, assets):
+        return checked_assets(assets)
+
+    def _original_asset_bytes(self, asset):
+        from dispatch_storage import asset_bytes
+        return asset_bytes(asset)
+
+    def _validate_original_image(self, data, name):
+        from dispatch_storage import validate_image
+        return validate_image(data, name)
+
     def product_image_bindings(self):
         from dispatch_storage import decode_records
         ws = self._sheet(PRODUCT_IMAGE_SHEET)
@@ -205,7 +216,7 @@ class ProductImageStoreMixin:
                 problem = source_problem(source, fresh)
                 if problem:
                     raise DispatchError(problem)
-                assets = checked_assets(assignment["assets"])
+                assets = self._checked_product_images(assignment["assets"])
                 ids, saved = [a["sha256"] for a in assets], bindings.get(identity)
                 if saved and saved["subject"] == subject_key(source) and saved["assets"] == ids:
                     self.get_assets(ids)

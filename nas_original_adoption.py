@@ -8,9 +8,10 @@ boundary; no outcome is automatically retried.
 from copy import deepcopy
 
 from dispatch_manager import DispatchError, now
-from dispatch_storage import asset_bytes, encode_record
+from dispatch_storage import nas_original_bytes as asset_bytes, encode_record
 from nas_dispatch_storage import NasDispatchStore, _same_location
-from product_images import PRODUCT_IMAGE_SHEET, checked_assets, subject_key
+from product_images import (PRODUCT_IMAGE_SHEET, checked_nas_originals as checked_assets,
+                            subject_key)
 from quote_image_repair import _snapshot_digest, prepare_image_repair
 from nas_repair_snapshot import (prepare_batched_existing_image_repair,
                                  supports_batched_existing_snapshot)

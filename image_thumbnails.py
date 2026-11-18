@@ -4,7 +4,8 @@ from io import BytesIO
 from PIL import Image, ImageOps
 
 from dispatch_manager import DispatchError
-from dispatch_storage import MAX_IMAGE_PIXELS, asset_bytes, validate_image
+from dispatch_storage import (MAX_IMAGE_PIXELS, asset_bytes, validate_image,
+                              nas_original_bytes, validate_nas_original)
 
 THUMB_VERSION = 1
 THUMB_SIDE = 640
@@ -24,13 +25,14 @@ def _reduce_large(opened, side):
     opened.thumbnail((side, side), Image.Resampling.LANCZOS)
 
 
-def display_bytes(data):
+def display_bytes(data, *, nas_original=False):
     """Bound large display rasters; storage/download bytes stay original."""
     with Image.open(BytesIO(data)) as opened:
         if opened.width * opened.height <= MAX_IMAGE_PIXELS:
             return data
         fmt = opened.format
-        validate_image(data, "display-original")
+        validator = validate_nas_original if nas_original else validate_image
+        validator(data, "display-original")
         _reduce_large(opened, 1600)
         im = ImageOps.exif_transpose(opened)
         out = BytesIO()
@@ -51,9 +53,11 @@ def check_thumbnail(asset):
     return asset
 
 
-def make_thumbnail(asset):
-    clean = validate_image(asset_bytes(asset), asset["name"])
-    with Image.open(BytesIO(asset_bytes(clean))) as opened:
+def make_thumbnail(asset, *, nas_original=False):
+    decode = nas_original_bytes if nas_original else asset_bytes
+    validator = validate_nas_original if nas_original else validate_image
+    clean = validator(decode(asset), asset["name"])
+    with Image.open(BytesIO(decode(clean))) as opened:
         _reduce_large(opened, THUMB_SIDE)
         im = ImageOps.exif_transpose(opened).convert("RGBA")
         im.thumbnail((THUMB_SIDE, THUMB_SIDE), Image.Resampling.LANCZOS)

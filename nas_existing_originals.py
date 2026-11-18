@@ -1,8 +1,8 @@
 """Adopt verified physical NAS originals without any upload or legacy fallback."""
 from dispatch_manager import DispatchError
-from dispatch_storage import asset_bytes
+from dispatch_storage import nas_original_bytes as asset_bytes
 from nas_dispatch_storage import NasDispatchStore, _ids, _same_location
-from product_images import checked_assets
+from product_images import checked_nas_originals as checked_assets
 
 
 class ExistingNasOriginalStore(NasDispatchStore):

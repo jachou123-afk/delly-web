@@ -4,7 +4,7 @@ from copy import deepcopy
 import re
 
 from dispatch_manager import DispatchError, digest, now
-from dispatch_storage import asset_bytes
+from dispatch_storage import nas_original_bytes as asset_bytes
 from nas_dispatch_storage import NasDispatchStore, _same_location
 from nas_original_adoption import adopt_existing_nas_originals
 from nas_repair_snapshot import (prepare_batched_existing_image_repair,
@@ -236,6 +236,43 @@ def _verify_complete_existing_nas(store, plan, assets):
     if final["snapshot_digest"] != plan["snapshot_digest"] or final["binding"] != binding:
         raise DispatchError("既有商品或圖片版本在讀回期間已變更；未確認完成")
     return binding
+
+
+def inspect_batch_nas_files(store, package, run, *, offset=0, limit=MAX_CHUNK_PRODUCTS):
+    """Explicit read-only stat for ready/failed items; never changes run or mode."""
+    from quote_image_inspection import inspect_nas_files
+
+    _require_nas(store)
+    _check_run(package, run)
+    pending = [item for item in run["items"] if item["status"] in {"ready", "failed"}]
+    if (type(offset) is not int or not 0 <= offset < len(pending)
+            or type(limit) is not int or not 1 <= limit <= MAX_CHUNK_PRODUCTS):
+        raise DispatchError("檔案資訊查核只接受未完成商品，每次最多 10 款，請重新選擇起始款")
+    report = {"schema": 1, "mode": "stat_only", "repair_mode": run["mode"],
+              "package_digest": run["package_digest"], "scope_digest": run["scope_digest"],
+              "checked_at": now(), "offset": offset, "unfinished_count": len(pending), "items": []}
+    for item in pending[offset:offset + limit]:
+        row = {"identity": item["identity"], "repair_status": item["status"],
+               "checked_at": now(), "images": [], "reason": ""}
+        try:
+            plan = prepare_image_repair(store, item["identity"])
+            problem = source_problem(item["source"], [plan["source"]])
+            if problem:
+                raise DispatchError(problem)
+            assets = [package["assets"][sha] for sha in item["sha256"]]
+            observed = inspect_nas_files(store, plan, assets)
+            row.update(checked_at=observed["checked_at"], images=observed["images"])
+        except Exception as exc:
+            row["reason"] = safe_repair_error(exc)
+            diagnostic = safe_service_diagnostic(exc)
+            if diagnostic and (diagnostic.get("http_status") == 429 or diagnostic.get("api_code") == 429
+                               or diagnostic["kind"] == "read_budget_wait"):
+                report["halt"] = {"identity": item["identity"], "diagnostic": diagnostic,
+                                  "reason": row["reason"], "checked_at": row["checked_at"]}
+        report["items"].append(row)
+        if report.get("halt"):
+            break
+    return report
 
 
 def process_next_repair(store, package, run, *, actor, limit=MAX_CHUNK_PRODUCTS, on_update=None):

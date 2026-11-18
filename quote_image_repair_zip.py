@@ -12,7 +12,9 @@ from zipfile import BadZipFile, ZIP_DEFLATED, ZIP_STORED, ZipFile
 from zlib import error as ZlibError
 
 from dispatch_manager import DispatchError, digest
-from dispatch_storage import MAX_IMAGE_BYTES, asset_bytes, validate_image
+from dispatch_storage import (MAX_NAS_ORIGINAL_BYTES as MAX_IMAGE_BYTES,
+                              nas_original_bytes as asset_bytes,
+                              validate_nas_original as validate_image)
 from image_limits import MAX_PRODUCT_ORIGINALS
 
 MAX_ZIP_BYTES = 50 * 1024 * 1024

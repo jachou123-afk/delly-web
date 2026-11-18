@@ -4,7 +4,8 @@ import json
 import re
 
 from dispatch_manager import DispatchError, digest, now
-from dispatch_storage import asset_bytes, decode_records, encode_record, validate_image
+from dispatch_storage import (nas_original_bytes as asset_bytes, decode_records,
+                              encode_record, validate_nas_original as validate_image)
 from image_limits import MAX_PRODUCT_ORIGINALS
 from nas_dispatch_storage import NasDispatchStore
 from product_images import PRODUCT_IMAGE_SHEET, subject_key

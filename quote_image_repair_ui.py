@@ -4,7 +4,8 @@ from collections import Counter
 import streamlit as st
 
 from dispatch_manager import digest
-from dispatch_storage import MAX_IMAGE_MB
+from dispatch_storage import MAX_IMAGE_MB, MAX_NAS_ORIGINAL_MB
+from nas_dispatch_storage import NasDispatchStore
 from image_limits import MAX_PRODUCT_ORIGINALS
 from product_image_ui import clear_library_cache, render_quote_images
 from quote_image_repair import (prepare_image_repair, save_image_repair,
@@ -73,7 +74,10 @@ def render_image_repair(get_store):
         plan = None
         try:
             with st.spinner("重新核對商品與既有圖片配對…"):
-                plan = prepare_image_repair(get_store(), chosen)
+                store = get_store()
+                plan = prepare_image_repair(store, chosen)
+                plan["nas_originals"] = (isinstance(store, NasDispatchStore)
+                    and store.nas_config is not None and not store.nas_config_error)
             st.session_state[PREFIX + "plan"] = plan
             st.session_state[PREFIX + "generation"] = st.session_state.get(PREFIX + "generation", 0) + 1
         except Exception as exc:
@@ -88,8 +92,11 @@ def render_image_repair(get_store):
     if binding:
         st.info(f"這款已有 {len(binding['assets'])} 張綁定圖片。上傳同一組原圖可讀回核對；此入口不替換既有不同圖片。")
     image_key = PREFIX + "uploads_" + digest([plan["snapshot_digest"], st.session_state.get(PREFIX + "generation", 0)])[:20]
+    nas_originals = plan.get("nas_originals") is True
+    max_mb = MAX_NAS_ORIGINAL_MB if nas_originals else MAX_IMAGE_MB
     assets, errors = render_quote_images(image_key, title="本款原圖（只補圖片）",
-                                         caption=f"每款最多 {MAX_PRODUCT_ORIGINALS} 張原圖，單張 {MAX_IMAGE_MB} MB（超過 2 MB 需使用 NAS 商品圖庫）。請核對圖片上的型號與上方商品一致。")
+                                         caption=f"每款最多 {MAX_PRODUCT_ORIGINALS} 張原圖，單張 {max_mb} MiB（超過 2 MiB 需使用 NAS 商品圖庫）。請核對圖片上的型號與上方商品一致。",
+                                         nas_originals=nas_originals)
     selection = digest([plan["snapshot_digest"], [a["sha256"] for a in assets], errors])
     if st.session_state.get(PREFIX + "report_selection") != selection:
         st.session_state.pop(PREFIX + "report", None)

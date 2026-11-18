@@ -487,13 +487,13 @@ class SynologyImageStore:
         return {"library_id": self.config.library_id, "root": self.config.root, "readable": True}
 
     def _metadata(self, asset):
-        from dispatch_storage import asset_bytes
+        from dispatch_storage import nas_original_bytes as asset_bytes
         return {"schema": 1, "storage": "synology", "library_id": self.config.library_id,
                 "root": self.config.root, "sha256": asset["sha256"], "name": asset["name"],
                 "mime": asset["mime"], "size": len(asset_bytes(asset))}
 
     def _path(self, metadata, *, thumbnail=False):
-        from dispatch_storage import MAX_IMAGE_BYTES
+        from dispatch_storage import MAX_NAS_ORIGINAL_BYTES as MAX_IMAGE_BYTES
         if (not isinstance(metadata, dict) or metadata.get("schema") != 1
                 or metadata.get("storage") != "synology"
                 or metadata.get("library_id") != self.config.library_id
@@ -559,7 +559,7 @@ class SynologyImageStore:
         return check_thumbnail(self._read_asset(metadata, self._path(metadata, thumbnail=True)))
 
     def _read_asset(self, metadata, path):
-        from dispatch_storage import validate_image
+        from dispatch_storage import validate_nas_original as validate_image
         params = self._parameters("SYNO.FileStation.Download", "download", {"path": [path], "mode": "download"})
         raw, content_type = self._request(self._apis["SYNO.FileStation.Download"]["path"], params, limit=metadata["size"])
         if "json" in content_type or "text/html" in content_type:
@@ -580,7 +580,8 @@ class SynologyImageStore:
         return self._put_asset(check_thumbnail(asset), thumbnail=True)
 
     def _put_asset(self, asset, *, thumbnail=False):
-        from dispatch_storage import asset_bytes, validate_image
+        from dispatch_storage import (nas_original_bytes as asset_bytes,
+                                      validate_nas_original as validate_image)
         clean = validate_image(asset_bytes(asset), asset["name"])
         metadata = self._metadata(clean)
         path = self._path(metadata, thumbnail=thumbnail)

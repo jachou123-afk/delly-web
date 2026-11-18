@@ -2,8 +2,11 @@
 import re
 
 from dispatch_manager import DispatchError
-from dispatch_storage import (CloudDispatchStore, IMAGE_SHEET, MAX_IMAGE_BYTES,
-                              asset_bytes, decode_records, encode_record, validate_image)
+from dispatch_storage import (CloudDispatchStore, IMAGE_SHEET,
+                              MAX_NAS_ORIGINAL_BYTES as MAX_IMAGE_BYTES,
+                              nas_original_bytes as asset_bytes, decode_records,
+                              encode_record, validate_nas_original as validate_image)
+from product_images import checked_nas_originals
 from synology_image_store import EXTENSIONS, NAS_REDIRECT_ERROR, NasConfig, SynologyImageStore
 from thumbnail_storage import NasThumbnailMixin
 
@@ -25,6 +28,10 @@ def _same_location(left, right):
 
 
 class NasDispatchStore(NasThumbnailMixin, CloudDispatchStore):
+    _checked_product_images = staticmethod(checked_nas_originals)
+    _original_asset_bytes = staticmethod(asset_bytes)
+    _validate_original_image = staticmethod(validate_image)
+
     def __init__(self, spreadsheet, config=None, *, config_error=False,
                  nas_factory=SynologyImageStore):
         super().__init__(spreadsheet)
