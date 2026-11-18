@@ -26,7 +26,7 @@ MAX_IMAGE_MB = 20
 MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
 MAX_LEGACY_IMAGE_BYTES = 2 * 1024 * 1024  # Larger originals use NAS, not Sheets payloads.
 MAX_IMAGE_PIXELS = 25_000_000
-MAX_PNG_PIXELS = 40_000_000  # Bounded original decode; previews shrink before copies.
+MAX_PNG_PIXELS = 41_000_000  # Bound decoding; resize before application preview conversions.
 MAX_JPEG_PIXELS = 64_000_000  # JPEG previews use decoder downsampling before loading.
 
 

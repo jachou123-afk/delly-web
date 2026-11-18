@@ -12,12 +12,15 @@ THUMB_BYTES = 128 * 1024
 
 
 def _reduce_large(opened, side):
-    """PNG must decode once, but never copy/rotate/convert its full-size raster."""
+    """Decode PNG once; bound application-level EXIF and output conversions.
+
+    Pillow may allocate mode-specific resize buffers internally.
+    """
     if opened.width * opened.height <= MAX_IMAGE_PIXELS:
         return
     if opened.format == "JPEG":
         opened.draft("RGB", (side, side))
-    # In-place reduction precedes exif_transpose and color-mode conversion.
+    # Reduce before the application's exif_transpose and output-mode conversion.
     opened.thumbnail((side, side), Image.Resampling.LANCZOS)
 
 
