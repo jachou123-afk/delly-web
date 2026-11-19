@@ -62,3 +62,26 @@ def test_payload_drops_unapproved_diagnostic_body_fields_and_old_unknown_phase()
     assert payload["items"][0]["failure_phase"] is None
     assert payload["items"][0]["diagnostic"] is None
     assert "secret" not in json.dumps(payload)
+
+
+def test_quota_metric_method_and_redacted_message_survive_real_storage_to_receipt_ui():
+    from test_google_quota_diagnostic import quota_error
+    app = confirm(load_zip(enable(start())))
+    store = app.session_state["test_store"]
+    error = quota_error(method="POST", metric="write_requests", limit="WriteRequestsPerMinutePerUser")
+    def stop(assets):
+        raise error
+    store.put_assets = stop
+    widget(app, "button", "處理下一批").click().run()
+    assert not app.exception
+    payload_text = app.code[0].value
+    payload = json.loads(payload_text)
+    diagnostic = payload["items"][0]["diagnostic"]
+    assert diagnostic["request_method"] == "POST"
+    assert diagnostic["quota_metric"] == "sheets.googleapis.com/write_requests"
+    assert diagnostic["quota_limit"] == "WriteRequestsPerMinutePerUser"
+    assert "[REDACTED]" in diagnostic["google_message"]
+    assert payload["halt"]["diagnostic"] == diagnostic
+    assert [i["status"] for i in payload["items"]] == ["failed", "ready", "ready"]
+    assert [i["attempts"] for i in payload["items"]] == [1, 0, 0]
+    assert all(text not in payload_text for text in ("private-project", "private-sheet", "secret-token", "private@example.test"))

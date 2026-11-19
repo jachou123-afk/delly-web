@@ -9,14 +9,22 @@ from product_images import PRODUCT_IMAGE_SHEET, checked_assets, source_problem, 
 def checked_image_diagnostic(value):
     """Only fixed categories and bounded integers may leave storage failures."""
     from synology_image_store import NasDiagnosticError
+    from google_quota_diagnostic import FIELDS, checked_fields
     if (not isinstance(value, dict) or not {"kind", "origin"} <= set(value)
             or set(value) - {"kind", "origin", "http_status", "api_code", "nas_kind",
-                             "transport_phase", "elapsed_ms", "transport_cause"}
+                             "transport_phase", "elapsed_ms", "transport_cause", *FIELDS}
             or value.get("kind") not in {"google_sheets_api", "http", "network_timeout", "network_connection", "nas", "read_budget_wait"}
             or value.get("origin") != ("local" if value.get("kind") == "read_budget_wait" else "typed")
             or (value.get("kind") == "read_budget_wait" and set(value) != {"kind", "origin"})):
         return None
     result = {"kind": value["kind"], "origin": value["origin"]}
+    quota_fields = {key: value[key] for key in FIELDS if key in value}
+    if quota_fields:
+        checked_quota = checked_fields(quota_fields)
+        if (value["kind"] != "google_sheets_api" or checked_quota is None
+                or (value.get("http_status") != 429 and value.get("api_code") != 429)):
+            return None
+        result.update(checked_quota)
     if "nas_kind" in value:
         if (value["kind"] != "nas" or type(value["nas_kind"]) is not str
                 or value["nas_kind"] not in {*NasDiagnosticError.LABELS, "unknown"}):
@@ -42,7 +50,7 @@ def checked_image_diagnostic(value):
 
 
 def image_error_diagnostic(exc):
-    """Inspect native exception metadata/cause chains, never remote text or JSON."""
+    """Inspect native causes; only allowlisted, redacted Google 429 JSON may leave."""
     from gspread.exceptions import APIError
     import requests
     from synology_image_store import NasDiagnosticError
@@ -73,6 +81,9 @@ def image_error_diagnostic(exc):
                 result["http_status"] = status
             if type(code) is int and 0 <= code <= 999999:
                 result["api_code"] = code
+            if isinstance(exc, APIError):
+                from google_quota_diagnostic import quota_error_fields
+                result.update(quota_error_fields(exc))
             return result
         if isinstance(exc, requests.exceptions.Timeout):
             fallback = {"kind": "network_timeout", "origin": "typed"}
@@ -98,6 +109,11 @@ def image_error_summary(diagnostic):
         parts.append(f"HTTP {value['http_status']}")
     if "api_code" in value:
         parts.append(f"API 代碼 {value['api_code']}")
+    for key, label in (("request_method", "方法"), ("quota_metric", "配額"),
+                       ("quota_limit", "限制"), ("quota_reason", "原因"),
+                       ("google_message", "Google 訊息")):
+        if key in value:
+            parts.append(label + " " + value[key])
     if "transport_phase" in value:
         parts.append("階段：" + NasDiagnosticError.TRANSPORT_PHASE_LABELS[value["transport_phase"]])
     if "elapsed_ms" in value:
