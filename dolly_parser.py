@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.48")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.49")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 from quote_workbooks import ACTIVE_ID, LEGACY_ID, ACTIVE_TITLE
 st.caption(f"新報價保存至 [{ACTIVE_TITLE}](https://docs.google.com/spreadsheets/d/{ACTIVE_ID}/edit)。"
@@ -63,6 +63,13 @@ def get_credentials():
     else:
         return ServiceAccountCredentials.from_json_keyfile_name("giraffe-495919-b7d55659973d.json", scope)
 
+def get_google_client(credentials=None, *, on_wait=None):
+    """Every formal new/history workbook shares the same process read budget."""
+    from batch_read_pacing import paced_google_client
+    return paced_google_client(gspread.authorize(
+        get_credentials() if credentials is None else credentials), on_wait=on_wait)
+
+
 def open_spreadsheet(client):
     """Use the explicitly authorized continuation book, with no title guessing."""
     from quote_workbooks import active_id
@@ -75,14 +82,14 @@ def get_quote_history(spreadsheet):
     from quote_sheet_reads import read_public_sheet_values
     if not is_continuation(spreadsheet):
         return {}
-    client = gspread.authorize(get_credentials())
+    client = get_google_client()
     return read_public_sheet_values(client.open_by_key(LEGACY_ID))
 
 
 def get_new_quote_review_catalog():
     from quote_workbooks import combined_catalog
     try:
-        spreadsheet = open_spreadsheet(gspread.authorize(get_credentials()))
+        spreadsheet = open_spreadsheet(get_google_client())
         from quote_sheet_reads import read_public_sheet_values
         return combined_catalog(read_public_sheet_values(spreadsheet), get_quote_history(spreadsheet))
     except Exception as exc:
@@ -93,7 +100,7 @@ def get_new_quote_review_catalog():
 def get_all_sheets_data():
     try:
         creds = get_credentials()
-        client = gspread.authorize(creds)
+        client = get_google_client(creds)
         spreadsheet = open_spreadsheet(client)
         from quote_sheet_reads import read_public_sheet_values
         return read_public_sheet_values(spreadsheet)
@@ -106,7 +113,7 @@ def load_settings():
     defaults = {"ex_rate": 4.7, "intl_rate": 8.5, "dom_rate": 1.5}
     try:
         creds = get_credentials()
-        client = gspread.authorize(creds)
+        client = get_google_client(creds)
         spreadsheet = open_spreadsheet(client)
         try:
             ws = spreadsheet.worksheet(SETTINGS_WS)
@@ -131,7 +138,7 @@ def load_settings():
 def save_settings(s):
     try:
         creds = get_credentials()
-        client = gspread.authorize(creds)
+        client = get_google_client(creds)
         spreadsheet = open_spreadsheet(client)
         try:
             ws = spreadsheet.worksheet(SETTINGS_WS)
@@ -271,7 +278,7 @@ def get_target_formula_block(category_name, base_row):
     """讀取既有商品的原始值／公式快照，不以計算後顯示值取代公式。"""
     try:
         creds = get_credentials()
-        client = gspread.authorize(creds)
+        client = get_google_client(creds)
         sheet = open_spreadsheet(client).worksheet(category_name)
         rows = sheet.get(
             f"A{base_row}:L{base_row + 5}",
@@ -290,7 +297,7 @@ def save_bulk_to_worksheet(category_name, bulk_rows, st_r, block_size=6, expecte
     try:
         if save_context is None:
             creds = get_credentials()
-            client = gspread.authorize(creds)
+            client = get_google_client(creds)
             spreadsheet = open_spreadsheet(client)
             try:
                 sheet = spreadsheet.worksheet(category_name)
@@ -556,13 +563,13 @@ def build_cost_formulas(
 # --- 3. 工具頁籤；發送管理只使用整理完成的商品資料 ---
 def get_dispatch_store():
     from nas_dispatch_storage import configured_store
-    return configured_store(open_spreadsheet(gspread.authorize(get_credentials())),
+    return configured_store(open_spreadsheet(get_google_client()),
                             lambda: st.secrets.get("nas_images"))
 
 
 def get_paced_dispatch_store(*, on_wait=None):
     from batch_read_pacing import open_paced_nas_store
-    return open_paced_nas_store(gspread.authorize(get_credentials()), open_spreadsheet,
+    return open_paced_nas_store(get_google_client(), open_spreadsheet,
                                 lambda: st.secrets.get("nas_images"), on_wait=on_wait)
 
 
@@ -599,7 +606,7 @@ def get_history_dispatch_store():
     """Historical ads stay on their original workbook; no records are copied."""
     from nas_dispatch_storage import configured_store
     from quote_workbooks import LEGACY_ID
-    client = gspread.authorize(get_credentials())
+    client = get_google_client()
     return configured_store(client.open_by_key(LEGACY_ID), lambda: st.secrets.get("nas_images"))
 
 
@@ -2099,7 +2106,7 @@ def update_existing_product(
             raise ValueError("沒有可套用的變更")
 
         creds = get_credentials()
-        client = gspread.authorize(creds)
+        client = get_google_client(creds)
         spreadsheet = open_spreadsheet(client)
         try:
             sheet = spreadsheet.worksheet(category_name)
@@ -2205,7 +2212,7 @@ def update_existing_product(
 
 def get_fresh_line_ad_block(category_name, base_row, expected_block):
     """Read without the list cache and reject changed/moved/duplicate records."""
-    client = gspread.authorize(get_credentials())
+    client = get_google_client()
     worksheet = open_spreadsheet(client).worksheet(category_name)
     rows = worksheet.get_all_values()
     expected = pad_block(expected_block)

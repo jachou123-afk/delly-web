@@ -46,6 +46,7 @@ def fresh_read(monkeypatch, rows, expected):
     spreadsheet.worksheet.return_value = worksheet
     monkeypatch.setitem(ns, "get_credentials", Mock(return_value="fake"))
     monkeypatch.setitem(ns, "gspread", SimpleNamespace(authorize=Mock()))
+    monkeypatch.setitem(ns, "get_google_client", Mock())
     monkeypatch.setitem(ns, "open_spreadsheet", Mock(return_value=spreadsheet))
     result = ns["get_fresh_line_ad_block"]("G正版", 1, expected)
     worksheet.get_all_values.assert_called_once_with()

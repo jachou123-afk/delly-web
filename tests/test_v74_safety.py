@@ -593,6 +593,7 @@ def mock_cloud(monkeypatch, fresh=None):
     monkeypatch.setitem(ns,"st",Mock())
     monkeypatch.setitem(ns,"get_credentials",Mock())
     monkeypatch.setitem(ns,"gspread",SimpleNamespace(authorize=Mock(), exceptions=SimpleNamespace(WorksheetNotFound=KeyError)))
+    monkeypatch.setitem(ns,"get_google_client",Mock())
     monkeypatch.setitem(ns,"open_spreadsheet",Mock(return_value=book))
     monkeypatch.setitem(ns,"get_all_sheets_data",Mock())
     return sheet,book

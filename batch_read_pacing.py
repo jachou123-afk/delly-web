@@ -1,4 +1,4 @@
-"""Opt-in, per-process pacing of batch Sheets GETs; no caching or retries."""
+"""Shared per-process pacing of formal Sheets GETs; no caching or retries."""
 from collections import deque
 from copy import copy, deepcopy
 import math
@@ -106,6 +106,32 @@ class ReadPacedHTTPClient(HTTPClient):
                                json=json, files=files, headers=headers)
 
 
+def read_paced_http_client(base, *, budget=None, on_wait=None):
+    """Idempotent pacing; callback views share one budget and never nest clients."""
+    if type(base) is not ReadPacedHTTPClient:
+        return ReadPacedHTTPClient(base, budget=budget, on_wait=on_wait)
+    if ((budget is not None and budget is not base._read_budget)
+            or (on_wait is not None and not callable(on_wait))):
+        raise DispatchError("既有讀取節奏不可切換預算或使用不合法等待回報")
+    if on_wait is None or on_wait is base._on_wait:
+        return base
+    view = copy(base)
+    view._on_wait = on_wait
+    return view
+
+
+def paced_google_client(client, *, budget=None, on_wait=None):
+    """Wrap before opening either workbook, preserving the authorized session."""
+    if type(client) is not Client:
+        raise DispatchError("正式讀取節奏需要原生 Google 連線")
+    http_client = read_paced_http_client(client.http_client, budget=budget, on_wait=on_wait)
+    if http_client is client.http_client:
+        return client
+    view = copy(client)
+    view.http_client = http_client
+    return view
+
+
 def open_paced_nas_store(client, open_spreadsheet, read_section, *, budget=None,
                          on_wait=None):
     """Pace the first metadata GET too, preserving the original authorized client.
@@ -115,9 +141,7 @@ def open_paced_nas_store(client, open_spreadsheet, read_section, *, budget=None,
     """
     if type(client) is not Client or not callable(open_spreadsheet) or not callable(read_section):
         raise DispatchError("批次讀取節奏需要原生 Google 連線與既有開表設定")
-    paced_client = copy(client)
-    paced_client.http_client = ReadPacedHTTPClient(client.http_client, budget=budget,
-                                                  on_wait=on_wait)
+    paced_client = paced_google_client(client, budget=budget, on_wait=on_wait)
     spreadsheet = open_spreadsheet(paced_client)
     if (type(spreadsheet) is not Spreadsheet
             or spreadsheet.client is not paced_client.http_client):
@@ -134,7 +158,7 @@ def paced_nas_store(store, *, budget=None, on_wait=None):
     if type(store) is not NasDispatchStore or type(store.spreadsheet) is not Spreadsheet:
         raise DispatchError("批次讀取節奏需要原生 NAS 商品圖庫與 Google 試算表連線")
     original = store.spreadsheet
-    client = ReadPacedHTTPClient(original.client, budget=budget, on_wait=on_wait)
+    client = read_paced_http_client(original.client, budget=budget, on_wait=on_wait)
     cloned = Spreadsheet(client, deepcopy(original._properties))
     if cloned.id != original.id:
         raise DispatchError("批次讀取試算表識別不一致，已停止")
