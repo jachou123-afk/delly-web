@@ -81,13 +81,13 @@ def start():
     return app
 
 
-def test_ui_preflight_is_unpaced_and_only_next_batch_builds_paced_store():
+def test_ui_preflight_and_next_batch_both_build_paced_store():
     app = confirm(load_zip(enable(start())))
-    assert "test_pacing_calls" not in app.session_state
+    assert app.session_state["test_pacing_calls"] == 1
     app.session_state["test_pacing_wait"] = True
     widget(app, "number_input", "本次最多處理款數").set_value(1).run()
     widget(app, "button", "處理下一批").click().run()
-    assert not app.exception and app.session_state["test_pacing_calls"] == 1
+    assert not app.exception and app.session_state["test_pacing_calls"] == 2
     assert app.session_state["quote_image_repair_batch_run"]["items"][0]["status"] == "completed"
 
 

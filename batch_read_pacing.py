@@ -1,17 +1,18 @@
 """Opt-in, per-process pacing of batch Sheets GETs; no caching or retries."""
 from collections import deque
-from copy import deepcopy
+from copy import copy, deepcopy
 import math
 from threading import Lock
 import time
 
 from gspread.http_client import HTTPClient
+from gspread.client import Client
 from gspread.spreadsheet import Spreadsheet
 
 from dispatch_manager import DispatchError
-from nas_dispatch_storage import NasDispatchStore
+from nas_dispatch_storage import NasDispatchStore, configured_store
 
-READ_LIMIT = 45
+READ_LIMIT = 35
 READ_WINDOW_SECONDS = 60.0
 MAX_SLEEP_SECONDS = 1.0
 MAX_WAIT_SECONDS = 120.0
@@ -103,6 +104,25 @@ class ReadPacedHTTPClient(HTTPClient):
         # backoff or pacing is added to any write method.
         return super().request(method, endpoint, params=params, data=data,
                                json=json, files=files, headers=headers)
+
+
+def open_paced_nas_store(client, open_spreadsheet, read_section, *, budget=None,
+                         on_wait=None):
+    """Pace the first metadata GET too, preserving the original authorized client.
+
+    The caller supplies the existing workbook opener and NAS configuration
+    reader. No endpoint, credential, session, timeout or write policy changes.
+    """
+    if type(client) is not Client or not callable(open_spreadsheet) or not callable(read_section):
+        raise DispatchError("批次讀取節奏需要原生 Google 連線與既有開表設定")
+    paced_client = copy(client)
+    paced_client.http_client = ReadPacedHTTPClient(client.http_client, budget=budget,
+                                                  on_wait=on_wait)
+    spreadsheet = open_spreadsheet(paced_client)
+    if (type(spreadsheet) is not Spreadsheet
+            or spreadsheet.client is not paced_client.http_client):
+        raise DispatchError("批次讀取開表連線不一致，已停止")
+    return configured_store(spreadsheet, read_section)
 
 
 def paced_nas_store(store, *, budget=None, on_wait=None):

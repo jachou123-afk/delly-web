@@ -16,7 +16,13 @@ PREFIX = "quote_image_repair_batch_"
 MODES = {"只核對既有 NAS 原圖（不重新上傳）": "existing_only", "保存原圖並核對": "upload"}
 
 
-def render_batch_image_repair(get_store):
+def render_batch_image_repair(get_store, *, get_paced_store=None):
+    def processing_store(**kwargs):
+        # The production factory wraps HTTP before opening the workbook so its
+        # first metadata GET shares the same budget as preflight and processing.
+        return (get_paced_store(**kwargs) if get_paced_store is not None
+                else paced_nas_store(get_store(), **kwargs))
+
     if not st.checkbox("開啟批次 NAS 原圖補存", key=PREFIX + "enabled"):
         return
     with st.expander("批次 NAS 原圖補存", expanded=True):
@@ -36,7 +42,7 @@ def render_batch_image_repair(get_store):
             try:
                 with st.spinner("驗證原圖包並核對雲表實際 NO…"):
                     package = read_repair_zip(raw)
-                    run = prepare_batch_repair(get_store(), package, mode=mode)
+                    run = prepare_batch_repair(processing_store(), package, mode=mode)
                 st.session_state[PREFIX + "package"] = package
                 st.session_state[PREFIX + "run"] = run
             except Exception as exc:
@@ -65,7 +71,7 @@ def render_batch_image_repair(get_store):
                 st.session_state.pop(PREFIX + "stat_report", None)
                 try:
                     with st.spinner("只查本包未完成原圖的 NAS 檔案資訊…"):
-                        store = paced_nas_store(get_store())
+                        store = processing_store()
                         st.session_state[PREFIX + "stat_report"] = inspect_batch_nas_files(
                             store, package, run, offset=int(start) - 1, limit=10)
                 except Exception as exc:
@@ -102,7 +108,7 @@ def render_batch_image_repair(get_store):
 
             try:
                 with st.spinner("依序保存原圖並以新 NAS 連線讀回核對…"):
-                    store = paced_nas_store(get_store(), on_wait=waiting)
+                    store = processing_store(on_wait=waiting)
                     updated = process_next_repair(store, package, run, actor=actor, limit=int(limit), on_update=update)
                 st.session_state[PREFIX + "run"] = updated
                 if any(item["status"] == "completed" for item in updated["items"]):

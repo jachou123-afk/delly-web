@@ -19,10 +19,10 @@ from quote_image_source_refresh_ui import render_binding_source_refresh
 PREFIX = "quote_image_repair_"
 
 
-def render_image_repair(get_store):
+def render_image_repair(get_store, *, get_paced_store=None):
     st.subheader("商品補圖")
     st.caption("商品已存入雲表，但圖片保存失敗時，在這裡單獨補圖。保存後會讀回核對，不需要重新新增商品。")
-    render_batch_image_repair(get_store)
+    render_batch_image_repair(get_store, get_paced_store=get_paced_store)
     with st.form(PREFIX + "search"):
         query = st.text_input("搜尋已保存商品（NO、貨號或品名）", key=PREFIX + "query")
         search = st.form_submit_button("搜尋商品")

@@ -120,3 +120,23 @@ def test_existing_only_failure_does_not_fallback_to_upload():
     assert upload_count(app.session_state["test_network"]) == 0
     assert all(i["status"] == "failed" for i in app.session_state["quote_image_repair_batch_run"]["items"])
     assert not widget(app, "button", "只重新排入失敗款（不處理已完成）").disabled
+
+
+def test_production_factory_is_used_for_zip_preflight_stat_and_processing_without_unpaced_open():
+    factory_app = APP.replace('''    st.session_state["test_store_calls"] += 1
+    return st.session_state["test_store"]''', '''    raise AssertionError("unpaced store must not be opened")''').replace(
+        '''    ui.render_batch_image_repair(get_store)''', '''    def paced_factory(**kwargs):
+        st.session_state["test_factory_calls"] = st.session_state.get("test_factory_calls", 0) + 1
+        return st.session_state["test_store"]
+    ui.render_batch_image_repair(get_store, get_paced_store=paced_factory)''')
+    app = load_zip(enable(AppTest.from_string(factory_app, default_timeout=20).run()))
+    assert not app.exception and app.session_state["test_factory_calls"] == 1
+    widget(app, "button", "只查本包未完成款 NAS 檔案資訊").click().run()
+    assert not app.exception and app.session_state["test_factory_calls"] == 2
+    confirm(app)
+    widget(app, "number_input", "本次最多處理款數").set_value(1).run()
+    widget(app, "button", "處理下一批").click().run()
+    assert not app.exception and app.session_state["test_factory_calls"] == 3
+    assert app.session_state["test_store_calls"] == 0
+    assert "test_pacing_calls" not in app.session_state
+    assert app.session_state["quote_image_repair_batch_run"]["items"][0]["status"] == "completed"

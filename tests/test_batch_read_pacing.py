@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from gspread.exceptions import APIError
 from gspread.http_client import BackOffHTTPClient, HTTPClient
+from gspread.client import Client
 from gspread.spreadsheet import Spreadsheet
 import pytest
 import requests
@@ -227,6 +228,59 @@ def test_clone_metadata_request_is_paced_and_preserves_same_sheet_identifier():
     cloned = pacing.paced_nas_store(original, budget=gate)
     assert clock.now() == 60 and cloned.spreadsheet.id == "synthetic-id"
     assert session.calls[-1]["url"].endswith("/synthetic-id")
+
+
+def test_default_budget_reserves_35_reads_then_waits_for_the_rolling_window():
+    clock = Clock()
+    gate = pacing.RollingBudget(clock=clock.now, sleep=clock.sleep)
+    assert pacing.READ_LIMIT == 35
+    assert [gate.acquire() for _ in range(35)] == [0.0] * 35
+    assert not clock.sleeps
+    assert gate.acquire() == 60.0
+
+
+def test_open_factory_paces_first_metadata_and_preserves_authorized_client():
+    clock, gate = budget(1)
+    session = Session(clock)
+    client = Client(None, session=session)
+    original = client.http_client
+    original.auth, original.timeout = object(), (8, 30)
+    gate.acquire()
+    opened_clients = []
+    def opener(candidate):
+        opened_clients.append(candidate)
+        return candidate.open_by_key("synthetic-id")
+    store = pacing.open_paced_nas_store(client, opener, lambda: None, budget=gate)
+    assert type(store) is NasDispatchStore and store.spreadsheet.id == "synthetic-id"
+    assert opened_clients[0] is not client and client.http_client is original
+    paced = store.spreadsheet.client
+    assert type(paced) is pacing.ReadPacedHTTPClient
+    assert paced.session is original.session and paced.auth is original.auth
+    assert paced.timeout == original.timeout and store.nas_config is None
+    assert len(session.calls) == 1 and session.calls[0]["method"].lower() == "get"
+    assert session.calls[0]["at"] == 60.0 and len(gate._starts) == 1
+
+
+def test_open_factory_and_later_reads_share_process_budget_across_new_stores(monkeypatch):
+    clock, gate = budget(1)
+    monkeypatch.setattr(pacing, "_PROCESS_READ_BUDGET", gate)
+    sessions = [Session(clock), Session(clock)]
+    stores = [pacing.open_paced_nas_store(Client(None, session=session),
+              lambda client: client.open_by_key("synthetic-id"), lambda: None)
+              for session in sessions]
+    stores[0].spreadsheet.fetch_sheet_metadata()
+    assert [call["at"] for session in sessions for call in session.calls] == [0.0, 120.0, 60.0]
+    assert all(store.spreadsheet.client._read_budget is gate for store in stores)
+    assert all(call["method"].lower() == "get" for session in sessions for call in session.calls)
+
+
+def test_open_factory_rejects_unpaced_opener_result_before_reading_nas_config():
+    _, gate, session, base, _ = client()
+    unpaced = Spreadsheet(base, {"id": "synthetic-id"})
+    original = Client(None, session=session)
+    with pytest.raises(DispatchError, match="開表連線不一致"):
+        pacing.open_paced_nas_store(original, lambda ignored: unpaced,
+                                   lambda: pytest.fail("must not load NAS config"), budget=gate)
 
 
 @pytest.mark.parametrize("kind", ["backoff", "custom", "already_paced"])

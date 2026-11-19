@@ -22,7 +22,7 @@ from supplier_names import normalize_vendor, international_rate_for_vendor, vend
 from nas_connection_check import render_nas_connection_check
 # --- 1. 網頁基本設定 ---
 st.set_page_config(page_title="半自動 - 採購報價彙整表", layout="wide")
-st.title("🪐 半自動 - 採購報價彙整表 V87.21.46")
+st.title("🪐 半自動 - 採購報價彙整表 V87.21.47")
 st.caption("報價整理與廣告發送管理，集中在同一個工具。")
 from quote_workbooks import ACTIVE_ID, LEGACY_ID, ACTIVE_TITLE
 st.caption(f"新報價保存至 [{ACTIVE_TITLE}](https://docs.google.com/spreadsheets/d/{ACTIVE_ID}/edit)。"
@@ -560,6 +560,12 @@ def get_dispatch_store():
                             lambda: st.secrets.get("nas_images"))
 
 
+def get_paced_dispatch_store(*, on_wait=None):
+    from batch_read_pacing import open_paced_nas_store
+    return open_paced_nas_store(gspread.authorize(get_credentials()), open_spreadsheet,
+                                lambda: st.secrets.get("nas_images"), on_wait=on_wait)
+
+
 def get_quote_save_snapshot(category_name):
     """Fresh selected-sheet snapshot and handles scoped to this one submission."""
     try:
@@ -679,7 +685,7 @@ if evidence_repair_tab.open:
 if image_repair_tab.open:
     from quote_image_repair_ui import render_image_repair
     with image_repair_tab:
-        render_image_repair(get_dispatch_store)
+        render_image_repair(get_dispatch_store, get_paced_store=get_paced_dispatch_store)
     st.stop()
 # --- 側邊欄設定 ---
 if not dispatch_tab.open:
