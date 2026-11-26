@@ -248,7 +248,9 @@
     share.type = 'button';
     share.addEventListener('click', () => handleShare(product, share));
     actions.append(line, share);
-    info.append(facts, actions);
+    info.append(facts);
+    if (product.imageNote) info.append(element('p', 'image-note', product.imageNote));
+    info.append(actions);
     layout.append(picture(product, true), info);
     section.append(layout);
     app.replaceChildren(section);

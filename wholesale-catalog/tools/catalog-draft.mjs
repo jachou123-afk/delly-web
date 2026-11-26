@@ -24,15 +24,14 @@ function displayText(value, key) {
 }
 
 function customerProduct(row, id) {
-  const price = displayText(row.price, 'price');
-  const numericPrice = Number(price.replaceAll(',', ''));
+  const sourcePrice = displayText(row.price, 'price');
   const pack = /^\d+$/.test(String(row.pack).trim()) ? Number(row.pack) : NaN;
   const image = displayText(row.image, 'image');
   const date = displayText(row.date, 'date');
   const localDate = new Date(`${date}T00:00:00Z`);
 
   if (!productIdPattern.test(id)) throw new Error('商品連結識別碼無效');
-  if (!pricePattern.test(price) || !Number.isFinite(numericPrice) || numericPrice <= 0) {
+  if (!pricePattern.test(sourcePrice) || !/[1-9]/.test(sourcePrice)) {
     throw new Error(`商品 ${id} 缺少可用的台幣售價`);
   }
   if (!Number.isSafeInteger(pack) || pack < 1) throw new Error(`商品 ${id} 箱入數無效`);
@@ -41,12 +40,15 @@ function customerProduct(row, id) {
     throw new Error(`商品 ${id} 需要有效的入表日期`);
   }
 
+  const [whole, fraction = ''] = sourcePrice.replaceAll(',', '').split('.');
+  const roundedPrice = BigInt(whole) + (/[1-9]/.test(fraction) ? 1n : 0n);
+
   return {
     id,
     code: displayText(row.code, 'code'),
     name: displayText(row.name, 'name'),
     category: displayText(row.category, 'category'),
-    price,
+    price: roundedPrice.toLocaleString('en-US'),
     unit: displayText(row.unit, 'unit'),
     pack,
     image,
@@ -71,7 +73,8 @@ function draftEntry(product, mainImageSha256) {
 
 /**
  * 每次只傳入已讀取並整理的 no2 列。price 傳 no2 的 15% 報價欄顯示值，
- * 保留小數位，只去掉幣別與單位。date 傳台灣實際入表日期 YYYY-MM-DD。
+ * 保留來源小數位，只去掉幣別與單位。網站草稿遇到小數就進到下一個整元。
+ * date 傳台灣實際入表日期 YYYY-MM-DD。
  * 單列必須明確通過報價、主圖、規格確認且未暫緩。若商品暫緩或任一條件
  * 變為未確認，仍應將該列與最新狀態傳入，讓本次草稿移除同一分頁和 NO。
  * mainImageSha256 必須取自實際要放進目錄的已驗收圖片位元組。
