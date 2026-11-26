@@ -239,33 +239,17 @@
     const layout = element('article', 'detail-card');
     const info = element('div', 'detail-info');
     info.append(element('p', 'card-meta', product.category), element('h1', '', product.name), price(product));
-    const facts = factList([
-      ['商品編號', product.code],
+    const entries = (product.specs ?? []).map(({ label, value }) => [label, value]);
+    if (product.specNotes?.length) entries.push(['尺寸待確認', product.specNotes.join(' ')]);
+    entries.push(
       ['計價單位', product.unit],
       ['箱入數', cartonText(product)],
-      ['供貨狀態', '供貨請詢問'],
-    ]);
-    info.append(facts);
+      ['商品編號', product.code],
+    );
+    info.append(element('h2', '', '商品資訊'), factList(entries));
     if (product.imageNote) info.append(element('p', 'image-note', product.imageNote));
     layout.append(picture(product, true), info);
     section.append(layout);
-    if (product.specs?.length || product.specNotes?.length) {
-      const specifications = element('section', 'specifications');
-      const heading = element('h2', '', '商品規格');
-      heading.id = 'specifications-title';
-      specifications.setAttribute('aria-labelledby', heading.id);
-      specifications.append(heading);
-      if (product.specs?.length) {
-        specifications.append(factList(product.specs.map(({ label, value }) => [label, value])));
-      }
-      if (product.specNotes?.length) {
-        const review = element('aside', 'spec-review');
-        review.append(element('h3', '', '尺寸待確認'));
-        for (const note of product.specNotes) review.append(element('p', '', note));
-        specifications.append(review);
-      }
-      section.append(specifications);
-    }
     const actions = element('div', 'actions detail-actions');
     const line = element('button', 'button primary', 'LINE 詢價');
     line.type = 'button';
