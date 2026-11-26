@@ -4,29 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#112340">
-  <meta name="description" content="查看正版帶雷標商品、玩具與生活用品的批發售價及箱入數。">
+  <meta name="description" content="查詢正版帶雷標商品、玩具與生活用品的批發單價、箱入數及整箱估算。">
   <meta name="robots" content="noindex, nofollow">
-  <title>大陸工廠直發｜新品目錄</title>
-  <link rel="stylesheet" href="./styles.css?v=12">
+  <title>大陸工廠直發｜新品批發目錄</title>
+  <link rel="stylesheet" href="./styles.css?v=15">
   <script defer src="./catalog-data.js?v=14"></script>
-  <script defer src="./catalog.js?v=13"></script>
+  <script defer src="./catalog.js?v=15"></script>
 </head>
 <body>
   <header class="site-header">
     <div class="site-header-inner shell">
-      <a id="home-link" class="brand" href="./index.html" aria-label="大陸工廠直發新品目錄首頁">
+      <a id="home-link" class="brand" href="./index.html" aria-label="大陸工廠直發新品批發目錄首頁">
         <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
-        <span>大陸工廠直發<small>新品目錄</small></span>
+        <span>大陸工廠直發</span>
       </a>
+      <span class="header-currency">新台幣計價</span>
     </div>
   </header>
   <main id="app">
     <noscript><p class="shell">請開啟 JavaScript 以查看商品目錄。</p></noscript>
   </main>
-  <footer class="site-footer shell">
-    <span>大陸工廠直發</span>
-    <span>價格以新台幣計</span>
-  </footer>
   <div id="notice" class="notice" role="status" hidden></div>
   <dialog id="inquiry" class="inquiry" aria-labelledby="inquiry-title">
     <form method="dialog" class="dialog-top">
@@ -34,6 +31,8 @@
       <button type="submit" class="close-button" aria-label="關閉詢價視窗">×</button>
     </form>
     <p>複製下方的詢價內容，貼到你和店家的 LINE 對話。</p>
+    <label for="inquiry-cartons">預計採購箱數（選填）</label>
+    <input id="inquiry-cartons" class="inquiry-cartons" type="text" inputmode="numeric" pattern="[1-9][0-9]*" maxlength="9">
     <label for="inquiry-message">詢價內容</label>
     <textarea id="inquiry-message" rows="5" readonly></textarea>
     <button id="copy-inquiry" class="button primary" type="button">複製詢價內容</button>

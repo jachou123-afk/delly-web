@@ -5,12 +5,16 @@
   const app = document.querySelector('#app');
   const notice = document.querySelector('#notice');
   const inquiry = document.querySelector('#inquiry');
+  const inquiryCartons = document.querySelector('#inquiry-cartons');
   const inquiryMessage = document.querySelector('#inquiry-message');
   const inquiryStatus = document.querySelector('#inquiry-status');
   const productId = new URLSearchParams(location.search).get('p');
   const latestDate = products.map((product) => product.date).sort().at(-1);
   const ordered = [...products].sort((a, b) => b.date.localeCompare(a.date));
   const categories = ['正版帶雷標', '玩具', '生活用品'];
+  const quoteLabels = ['批發單價', '箱入數', '整箱估算'];
+  const formatAmount = new Intl.NumberFormat('zh-TW');
+  let inquiryProduct;
   let noticeTimer;
 
   function element(tag, className, value) {
@@ -35,14 +39,26 @@
 
   document.querySelector('#home-link').href = catalogUrl().toString();
 
-  function price(product) {
-    const priceNode = element('p', 'price', 'NT$' + product.price + ' ');
-    priceNode.append(element('small', '', '／' + product.unit));
-    return priceNode;
-  }
-
   function cartonText(product) {
     return product.pack + ' ' + product.unit + '／箱';
+  }
+
+  function quoteValues(product) {
+    const cartonAmount = BigInt(product.price.replaceAll(',', '')) * BigInt(product.pack);
+    const values = [
+      ['NT$' + product.price, '／' + product.unit],
+      [cartonText(product)],
+      ['NT$' + formatAmount.format(cartonAmount), '／箱'],
+    ];
+    const list = element('dl', 'quote-values');
+    for (const [index, [amount, unit]] of values.entries()) {
+      const item = element('div', 'quote-metric');
+      const value = element('dd', '', amount);
+      if (unit) value.append(element('small', '', unit));
+      item.append(element('dt', '', quoteLabels[index]), value);
+      list.append(item);
+    }
+    return list;
   }
 
   function picture(product, priority) {
@@ -92,19 +108,21 @@
     return gallery;
   }
 
-  function card(product) {
-    const article = element('article', 'product-card');
+  function quoteRow(product) {
+    const row = element('li', 'quote-row');
     const link = element('a');
     link.href = productUrl(product);
-    const body = element('div', 'card-body');
+    const item = element('div', 'quote-item');
+    const identity = element('div', 'quote-identity');
     const meta = element('p', 'card-meta');
     meta.append(element('span', 'product-code', product.code), element('span', '', product.category));
-    const values = element('div', 'card-bottom');
-    values.append(price(product), element('p', 'pack-line', cartonText(product)));
-    body.append(meta, element('h2', '', product.name), values);
-    link.append(picture(product, false), body);
-    article.append(link);
-    return article;
+    identity.append(meta, element('h2', '', product.name));
+    const photo = picture(product, false);
+    photo.querySelector('img').alt = '';
+    item.append(photo, identity);
+    link.append(item, quoteValues(product));
+    row.append(link);
+    return row;
   }
 
   function searchKey(value) {
@@ -117,18 +135,15 @@
   }
 
   function home() {
-    const hero = element('section', 'hero');
-    const heading = element('div');
+    const hero = element('section', 'catalog-heading shell');
+    hero.append(element('h1', '', '新品批發目錄'));
     if (latestDate) {
-      const date = element('time', 'hero-date', displayDate(latestDate));
+      const updated = element('p', 'catalog-date', '最新商品批次 ');
+      const date = element('time', '', displayDate(latestDate));
       date.dateTime = latestDate;
-      heading.append(date);
+      updated.append(date);
+      hero.append(updated);
     }
-    heading.append(element('h1', '', '今日新品'));
-    if (latestDate) heading.append(element('p', '', '查看最新批發售價與箱入數'));
-    const heroInner = element('div', 'hero-inner shell');
-    heroInner.append(heading);
-    hero.append(heroInner);
 
     const catalog = element('section', 'catalog shell');
     catalog.setAttribute('aria-label', '搜尋和分類');
@@ -146,10 +161,21 @@
     controls.append(search, filters);
     const summary = element('p', 'results-label');
     summary.setAttribute('role', 'status');
-    const grid = element('div', 'product-grid');
+    const listInfo = element('div', 'list-info');
+    listInfo.append(summary, element('p', 'list-hint', '點選商品查看規格、照片與詢價'));
+    const sheet = element('div', 'quote-sheet');
+    const columns = element('div', 'quote-column-header');
+    columns.setAttribute('aria-hidden', 'true');
+    const columnMetrics = element('div', 'quote-values');
+    columnMetrics.append(...quoteLabels.map(label => element('span', '', label)));
+    columns.append(element('span', '', '商品／編號'), columnMetrics);
+    const list = element('ul', 'quote-list');
+    list.setAttribute('role', 'list');
+    sheet.append(columns, list);
     const empty = element('p', 'empty');
     empty.hidden = true;
-    catalog.append(controls, summary, grid, empty);
+    catalog.append(controls, listInfo, sheet, empty);
+    if (latestDate) catalog.append(element('p', 'quote-note', '整箱估算＝批發單價 × 箱入數。實際報價請用 LINE 確認。'));
 
     let selectedCategory = '';
     function renderResults() {
@@ -158,8 +184,9 @@
         (!selectedCategory || product.category === selectedCategory) &&
         (!query || searchKey(product.code + product.name).includes(query))
       );
-      grid.replaceChildren(...matching.map(card));
-      summary.textContent = matching.length + ' 件商品';
+      list.replaceChildren(...matching.map(quoteRow));
+      summary.textContent = '共 ' + matching.length + ' 款商品';
+      sheet.hidden = matching.length === 0;
       empty.hidden = matching.length > 0;
       empty.textContent = ordered.length ? '找不到符合的商品，試試其他關鍵字或分類。' : '目前沒有新品。';
     }
@@ -207,15 +234,26 @@
     }
   }
 
-  function inquiryText(product) {
-    const lines = ['您好，我想詢問「' + product.name + '」（' + product.code + '）的供貨狀況，謝謝。'];
+  function inquiryText(product, cartons) {
+    const lines = [
+      '您好，我想詢問「' + product.name + '」（' + product.code + '）的供貨與批發報價，謝謝。',
+      '箱入數 ' + cartonText(product),
+    ];
+    if (cartons) lines.push('預計採購 ' + cartons + ' 箱');
     if (location.protocol !== 'file:') lines.push('商品連結 ' + productUrl(product));
     return lines.join('\n');
   }
 
-  function handleInquiry(product) {
-    inquiryMessage.value = inquiryText(product);
+  function refreshInquiry() {
+    const cartons = /^[1-9]\d*$/.test(inquiryCartons.value) ? inquiryCartons.value : '';
+    inquiryMessage.value = inquiryText(inquiryProduct, cartons);
     inquiryStatus.hidden = true;
+  }
+
+  function handleInquiry(product) {
+    inquiryProduct = product;
+    inquiryCartons.value = '';
+    refreshInquiry();
     inquiry.showModal();
   }
 
@@ -244,7 +282,9 @@
     button.focus();
   }
 
+  inquiryCartons.addEventListener('input', refreshInquiry);
   document.querySelector('#copy-inquiry').addEventListener('click', async () => {
+    if (!inquiryCartons.reportValidity()) return;
     const copied = await copy(inquiryMessage.value);
     inquiryStatus.textContent = copied ? '已複製。' : '已選取文字，可長按複製。';
     inquiryStatus.hidden = false;
@@ -262,7 +302,7 @@
 
   function detail(product) {
     const section = element('section', 'detail shell');
-    const back = element('a', 'back', '返回今日新品');
+    const back = element('a', 'back', '返回批發目錄');
     back.href = catalogUrl().toString();
     section.append(back);
     if (!product) {
@@ -273,11 +313,12 @@
     document.title = product.name + '｜大陸工廠直發';
     const layout = element('article', 'detail-card');
     const info = element('div', 'detail-info');
-    info.append(element('p', 'card-meta', product.category), element('h1', '', product.name), price(product));
+    const quote = element('div', 'detail-quote');
+    quote.append(quoteValues(product), element('p', 'quote-note', '整箱估算＝批發單價 × 箱入數。'));
+    info.append(element('p', 'card-meta', product.category), element('h1', '', product.name), quote);
     const entries = (product.specs ?? []).map(({ label, value }) => [label, value]);
     entries.push(
       ['計價單位', product.unit],
-      ['箱入數', cartonText(product)],
       ['商品編號', product.code],
     );
     info.append(element('h2', '', '商品資訊'), factList(entries));
