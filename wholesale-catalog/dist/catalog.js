@@ -245,17 +245,8 @@
       ['箱入數', cartonText(product)],
       ['供貨狀態', '供貨請詢問'],
     ]);
-    const actions = element('div', 'actions');
-    const line = element('button', 'button primary', 'LINE 詢價');
-    line.type = 'button';
-    line.addEventListener('click', () => handleInquiry(product));
-    const share = element('button', 'button', '分享商品');
-    share.type = 'button';
-    share.addEventListener('click', () => handleShare(product, share));
-    actions.append(line, share);
     info.append(facts);
     if (product.imageNote) info.append(element('p', 'image-note', product.imageNote));
-    info.append(actions);
     layout.append(picture(product, true), info);
     section.append(layout);
     if (product.specs?.length || product.specNotes?.length) {
@@ -275,6 +266,15 @@
       }
       section.append(specifications);
     }
+    const actions = element('div', 'actions detail-actions');
+    const line = element('button', 'button primary', 'LINE 詢價');
+    line.type = 'button';
+    line.addEventListener('click', () => handleInquiry(product));
+    const share = element('button', 'button', '分享商品');
+    share.type = 'button';
+    share.addEventListener('click', () => handleShare(product, share));
+    actions.append(line, share);
+    section.append(actions);
     app.replaceChildren(section);
   }
 

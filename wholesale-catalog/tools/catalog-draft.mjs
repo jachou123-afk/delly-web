@@ -34,6 +34,7 @@ function customerSpecs(specs) {
       throw new Error('商品規格需要標籤與內容');
     }
     const label = displayText(spec.label, '規格標籤');
+    if (label === '整箱毛重' || label === '外箱毛重') continue;
     const value = displayText(spec.value, '規格內容');
     if (labels.has(label)) throw new Error(`商品規格標籤「${label}」重複`);
     labels.add(label);
