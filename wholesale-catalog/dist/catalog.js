@@ -129,6 +129,19 @@
     return value.normalize('NFKC').toLowerCase().replace(/[\s-]+/g, '');
   }
 
+  function searchAliasKey(key) {
+    return key
+      .replace(/存錢[筒罐]|儲蓄罐|撲滿/g, '存錢筒')
+      .replace(/雲毯/g, '毛毯');
+  }
+
+  function matchesSearch(product, terms) {
+    if (!terms.length) return true;
+    const key = searchKey(product.code + product.name);
+    const aliasKey = searchAliasKey(key);
+    return terms.every(({ term, alias }) => key.includes(term) || aliasKey.includes(alias));
+  }
+
   function displayDate(date) {
     const [year, month, day] = date.split('-').map(Number);
     return year + ' 年 ' + month + ' 月 ' + day + ' 日';
@@ -153,8 +166,8 @@
     searchIcon.setAttribute('aria-hidden', 'true');
     const input = element('input');
     input.type = 'search';
-    input.placeholder = '搜尋品名或商品編號';
-    input.setAttribute('aria-label', '搜尋品名或商品編號');
+    input.placeholder = '搜尋品名或編號，空格分隔';
+    input.setAttribute('aria-label', '搜尋品名或商品編號，空格分隔關鍵字');
     search.append(searchIcon, input);
     const filters = element('div', 'filters');
     filters.setAttribute('aria-label', '商品分類');
@@ -179,10 +192,13 @@
 
     let selectedCategory = '';
     function renderResults() {
-      const query = searchKey(input.value);
+      const terms = input.value.split(/\s+/)
+        .map(searchKey)
+        .filter(Boolean)
+        .map(term => ({ term, alias: searchAliasKey(term) }));
       const matching = ordered.filter((product) =>
         (!selectedCategory || product.category === selectedCategory) &&
-        (!query || searchKey(product.code + product.name).includes(query))
+        matchesSearch(product, terms)
       );
       list.replaceChildren(...matching.map(quoteRow));
       summary.textContent = '共 ' + matching.length + ' 款商品';
