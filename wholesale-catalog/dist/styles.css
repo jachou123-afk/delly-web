@@ -128,6 +128,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 }
 @media (min-width: 52rem) {
   .quote-row a, .quote-column-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(21rem, 42%); gap: 1.2rem; align-items: center; padding-inline: .9rem; }
+  .quote-item { gap: .85rem; }
+  .quote-item .product-picture { width: 6.5rem; flex-basis: 6.5rem; }
   .quote-column-header { padding-block: .58rem; background: var(--blue); color: var(--white); font-size: .875rem; font-weight: 750; }
   .quote-column-header .quote-values > * { padding-inline: .6rem; }
   .quote-column-header .quote-values > :first-child { padding-inline-start: 0; }
