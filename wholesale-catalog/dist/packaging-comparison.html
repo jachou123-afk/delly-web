@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>BGD-W-2253 包裝圖片比對</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+      color: #152947;
+      background: #f2f5f8;
+      line-height: 1.55;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; }
+    a { color: inherit; }
+    a:focus-visible { outline: 3px solid #316db4; outline-offset: 4px; }
+    .shell { width: min(calc(100% - 2rem), 40rem); margin-inline: auto; }
+    .site-header { background: #112340; color: #fff; }
+    .back { display: inline-flex; align-items: center; min-height: 3.5rem; font-weight: 700; text-underline-offset: .2em; }
+    main { padding-block: 1.35rem 2.5rem; }
+    h1 { margin: 0 0 .35rem; font-size: clamp(1.75rem, 5vw, 2.25rem); line-height: 1.2; }
+    .product { margin: 0; font-weight: 650; }
+    .product-code { margin-inline-end: .45rem; color: #264b76; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .hint { margin: .35rem 0 1rem; color: #536581; font-size: .875rem; }
+    .comparison { display: grid; grid-template-columns: minmax(0, 16rem); gap: 1rem; }
+    figure { margin: 0; min-width: 0; }
+    figcaption { margin-block-end: .38rem; font-weight: 750; }
+    .frame {
+      display: block;
+      aspect-ratio: 4 / 3;
+      overflow: hidden;
+      border: 1px solid #c3ceda;
+      border-radius: .32rem;
+      background: #edf1f7;
+    }
+    .frame img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .frame:hover { border-color: #316db4; }
+    .figure-note { margin: .45rem 0 0; color: #536581; font-size: .875rem; }
+    @media (min-width: 36rem) {
+      .comparison { grid-template-columns: repeat(2, 16rem); gap: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell"><a class="back" href="./">返回試看目錄</a></div>
+  </header>
+  <main class="shell">
+    <h1>包裝圖片比對</h1>
+    <p class="product"><span class="product-code">BGD-W-2253</span>1:64 合金迷你遙控車系列</p>
+    <p class="hint">兩張使用同樣大的圖框，點圖可開啟圖檔。</p>
+    <div class="comparison">
+      <figure>
+        <figcaption>整張原圖構圖｜去貨號試樣</figcaption>
+        <a class="frame" href="./images/compare-w-2253-full.png" target="_blank" rel="noopener" aria-label="開啟完整編排圖（新分頁）">
+          <img src="./images/compare-w-2253-full.png" alt="去除供應商貨號的合金迷你遙控車完整編排圖" decoding="async">
+        </a>
+        <p class="figure-note">盒裝在右上角。去貨號時，部分圖面細節有些微重繪。</p>
+      </figure>
+      <figure>
+        <figcaption>現用包裝近照</figcaption>
+        <a class="frame" href="./images/bgd-w-2253-packaging.webp" target="_blank" rel="noopener" aria-label="開啟現用包裝近照（新分頁）">
+          <img src="./images/bgd-w-2253-packaging.webp" alt="合金迷你遙控車現用包裝近照" decoding="async">
+        </a>
+        <p class="figure-note">聚焦盒裝，裁圖的原始尺寸為 153 × 59 像素。</p>
+      </figure>
+    </div>
+  </main>
+</body>
+</html>
