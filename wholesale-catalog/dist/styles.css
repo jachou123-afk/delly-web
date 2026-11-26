@@ -127,16 +127,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .facts div { grid-template-columns: 8rem minmax(0, 1fr); }
 }
 @media (min-width: 52rem) {
-  .quote-row a, .quote-column-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(21rem, 42%); gap: 1.2rem; align-items: center; padding-inline: .9rem; }
-  .quote-item { gap: .85rem; }
-  .quote-item .product-picture { width: 6.5rem; flex-basis: 6.5rem; }
-  .quote-column-header { padding-block: .58rem; background: var(--blue); color: var(--white); font-size: .875rem; font-weight: 750; }
-  .quote-column-header .quote-values > * { padding-inline: .6rem; }
-  .quote-column-header .quote-values > :first-child { padding-inline-start: 0; }
-  .quote-row .quote-values { border-top: 0; padding-top: 0; align-items: center; }
-  .quote-row .quote-metric { padding-inline: .6rem; border: 0; }
+  .quote-row a {
+    grid-template-columns: clamp(11rem, 21vw, 16rem) minmax(0, 1fr);
+    grid-template-rows: 1fr 1fr;
+    grid-template-areas:
+      "photo identity"
+      "photo values";
+    gap: .72rem clamp(1rem, 2vw, 1.6rem);
+    padding: .85rem .95rem;
+  }
+  .quote-item { display: contents; }
+  .quote-item .product-picture { grid-area: photo; width: 100%; aspect-ratio: 4 / 3; align-self: center; }
+  .quote-identity { grid-area: identity; align-self: end; }
+  .quote-identity h2 { margin-top: .35rem; font-size: clamp(1.1rem, 1.75vw, 1.35rem); }
+  .quote-row .quote-values { grid-area: values; align-self: start; padding-top: .65rem; }
+  .quote-row .quote-metric { padding-inline: .8rem; }
   .quote-row .quote-metric:first-child { padding-inline-start: 0; }
-  .quote-row .quote-metric dt { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .quote-row .quote-metric dd { margin-top: .16rem; font-size: 1.05rem; }
 }
 @media (max-width: 21rem) {
   .shell { width: calc(100% - 1.2rem); }
