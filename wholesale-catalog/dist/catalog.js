@@ -10,7 +10,7 @@
   const productId = new URLSearchParams(location.search).get('p');
   const latestDate = products.map((product) => product.date).sort().at(-1);
   const ordered = [...products].sort((a, b) => b.date.localeCompare(a.date));
-  const categories = [...new Set(ordered.map((product) => product.category))];
+  const categories = ['正版帶雷標', '玩具', '生活用品'];
   let noticeTimer;
 
   function element(tag, className, value) {
