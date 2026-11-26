@@ -126,7 +126,7 @@
       grid.replaceChildren(...matching.map(card));
       summary.textContent = matching.length + ' 件商品';
       empty.hidden = matching.length > 0;
-      empty.textContent = ordered.length ? '找不到符合的商品，試試其他關鍵字或分類。' : '目前沒有可試看的新品。';
+      empty.textContent = ordered.length ? '找不到符合的商品，試試其他關鍵字或分類。' : '目前沒有新品。';
     }
 
     for (const category of ['', ...categories]) {
@@ -235,7 +235,7 @@
       app.replaceChildren(section);
       return;
     }
-    document.title = product.name + '｜玩具批發新品';
+    document.title = product.name + '｜大陸工廠直發';
     const layout = element('article', 'detail-card');
     const info = element('div', 'detail-info');
     info.append(element('p', 'card-meta', product.category), element('h1', '', product.name), price(product));
