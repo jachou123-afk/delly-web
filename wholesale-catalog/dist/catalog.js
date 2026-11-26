@@ -74,6 +74,7 @@
       thumbnail.setAttribute('aria-pressed', String(index === 0));
       const preview = element('img');
       preview.alt = '';
+      preview.loading = 'lazy';
       preview.decoding = 'async';
       preview.src = src;
       thumbnail.append(preview);
