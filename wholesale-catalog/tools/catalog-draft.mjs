@@ -5,6 +5,7 @@ const imagePathPattern = /^\.\/images\/[a-z0-9][a-z0-9._-]*\.(?:avif|jpe?g|png|w
 const pricePattern = /^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)(?:\.\d+)?$/;
 const sha256Pattern = /^[0-9a-f]{64}$/i;
 const unpublishedSpecText = /待確認|待核對|未提供/;
+const sourceLabelPrefixPattern = /^(?:【(?:正版・帶雷標|正版|帶雷標)】\s*)+/;
 
 function sourceProductId({ sheetId, no }) {
   const tab = String(sheetId).trim();
@@ -22,6 +23,17 @@ function displayText(value, key) {
     throw new Error(`缺少或無法呈現的商品欄位 ${key}`);
   }
   return value.trim();
+}
+
+function nameWithSourceLabels(name, { licensedLabel, laserLabel }) {
+  if (licensedLabel === undefined && laserLabel === undefined) return name;
+
+  const labels = [];
+  if (licensedLabel === true) labels.push('正版');
+  if (laserLabel === true) labels.push('帶雷標');
+
+  const rawName = displayText(name.replace(sourceLabelPrefixPattern, ''), 'name');
+  return labels.length ? `【${labels.join('・')}】${rawName}` : rawName;
 }
 
 function customerSpecs(specs) {
@@ -100,6 +112,7 @@ function draftEntry(product, mainImageSha256) {
  * 保留來源小數位，只去掉幣別與單位。網站草稿遇到小數就進到下一個整元。
  * date 傳台灣實際入表日期 YYYY-MM-DD。
  * specs 可依展示順序傳已查證的客用 { label, value } 規格清單。
+ * name 傳原品名。licensedLabel 與 laserLabel 分別以來源明載的正版與雷標為準。
  * 單列必須明確通過報價、主圖、規格確認且未暫緩。若商品暫緩或任一條件
  * 變為未確認，仍應將該列與最新狀態傳入，讓本次草稿移除同一分頁和 NO。
  * mainImageSha256 必須取自實際要放進目錄的已驗收圖片位元組。
@@ -120,7 +133,9 @@ export function buildCatalogDraft(sourceRows, previousDraft = []) {
       continue;
     }
 
-    draft.set(id, draftEntry(customerProduct(row, id), row.mainImageSha256));
+    const product = customerProduct(row, id);
+    product.name = nameWithSourceLabels(product.name, row);
+    draft.set(id, draftEntry(product, row.mainImageSha256));
   }
 
   return [...draft.values()];
