@@ -11,7 +11,10 @@
   const productId = new URLSearchParams(location.search).get('p');
   const latestDate = products.map((product) => product.date).sort().at(-1);
   const ordered = [...products].sort((a, b) => b.date.localeCompare(a.date));
-  const categories = ['正版帶雷標', '玩具', '生活用品'];
+  const categoryOrder = ['正版帶雷標', '玩具', '生活用品', '車模與遙控車', '吊飾與掛件', '娃娃與毛絨', '3C與小家電', '工具與戶外'];
+  const availableCategories = new Set(products.map((product) => product.category));
+  const categories = [...new Set([...categoryOrder, ...availableCategories])]
+    .filter((category) => availableCategories.has(category));
   const quoteLabels = ['批發單價', '箱入數', '整箱估算'];
   const formatAmount = new Intl.NumberFormat('zh-TW');
   let inquiryProduct;
