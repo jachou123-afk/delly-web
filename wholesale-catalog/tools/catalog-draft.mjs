@@ -57,6 +57,20 @@ function customerSpecs(specs) {
   return publicSpecs;
 }
 
+function customerGallery(images = [], mainImage, id) {
+  if (!Array.isArray(images)) throw new Error(`商品 ${id} 的附圖需要圖片路徑清單`);
+
+  const usedPaths = new Set([mainImage.toLowerCase()]);
+  return Array.from(images, (value) => {
+    const path = displayText(value, '附圖路徑');
+    if (!imagePathPattern.test(path)) throw new Error(`商品 ${id} 需要目錄內的驗收附圖`);
+    const pathKey = path.toLowerCase();
+    if (usedPaths.has(pathKey)) throw new Error(`商品 ${id} 的主圖與附圖路徑須各自唯一`);
+    usedPaths.add(pathKey);
+    return path;
+  });
+}
+
 function customerProduct(row, id) {
   const sourcePrice = displayText(row.price, 'price');
   const pack = /^\d+$/.test(String(row.pack).trim()) ? Number(row.pack) : NaN;
@@ -77,6 +91,7 @@ function customerProduct(row, id) {
   const [whole, fraction = ''] = sourcePrice.replaceAll(',', '').split('.');
   const roundedPrice = BigInt(whole) + (/[1-9]/.test(fraction) ? 1n : 0n);
   const specs = customerSpecs(row.specs);
+  const galleryImages = customerGallery(row.galleryImages, image, id);
 
   return {
     id,
@@ -89,20 +104,35 @@ function customerProduct(row, id) {
     image,
     date,
     ...(specs.length ? { specs } : {}),
+    ...(galleryImages.length ? { galleryImages } : {}),
   };
 }
 
-function draftEntry(product, mainImageSha256) {
+function draftEntry(product, mainImageSha256, galleryImageSha256s = []) {
   if (typeof mainImageSha256 !== 'string' || !sha256Pattern.test(mainImageSha256)) {
     throw new Error(`商品 ${product.id} 需要驗收主圖的 SHA-256`);
   }
+  if (!Array.isArray(galleryImageSha256s) || galleryImageSha256s.length !== (product.galleryImages?.length ?? 0)) {
+    throw new Error(`商品 ${product.id} 的附圖與 SHA-256 數量須相同`);
+  }
+
   const imageFingerprint = mainImageSha256.toLowerCase();
+  const galleryFingerprints = Array.from(galleryImageSha256s, (hash) => {
+    if (typeof hash !== 'string' || !sha256Pattern.test(hash)) {
+      throw new Error(`商品 ${product.id} 需要每張驗收附圖的 SHA-256`);
+    }
+    return hash.toLowerCase();
+  });
+  const reviewedContent = [product, imageFingerprint];
+  if (galleryFingerprints.length) reviewedContent.push(galleryFingerprints);
+
   const contentFingerprint = createHash('sha256')
-    .update(JSON.stringify([product, imageFingerprint]))
+    .update(JSON.stringify(reviewedContent))
     .digest('hex');
   return {
     product,
     mainImageSha256: imageFingerprint,
+    ...(galleryFingerprints.length ? { galleryImageSha256s: galleryFingerprints } : {}),
     reviewId: `${product.id}:${contentFingerprint}`,
   };
 }
@@ -116,6 +146,7 @@ function draftEntry(product, mainImageSha256) {
  * 單列必須明確通過報價、主圖、規格確認且未暫緩。若商品暫緩或任一條件
  * 變為未確認，仍應將該列與最新狀態傳入，讓本次草稿移除同一分頁和 NO。
  * mainImageSha256 必須取自實際要放進目錄的已驗收圖片位元組。
+ * galleryImages 可依展示順序傳已驗收附圖路徑。galleryImageSha256s 傳同順序的圖片雜湊。
  * 回傳值委由內部審核流程保存。previousDraft 可傳入上次輸出以更新同一商品。
  */
 export function buildCatalogDraft(sourceRows, previousDraft = []) {
@@ -135,14 +166,14 @@ export function buildCatalogDraft(sourceRows, previousDraft = []) {
 
     const product = customerProduct(row, id);
     product.name = nameWithSourceLabels(product.name, row);
-    draft.set(id, draftEntry(product, row.mainImageSha256));
+    draft.set(id, draftEntry(product, row.mainImageSha256, row.galleryImageSha256s));
   }
 
   return [...draft.values()];
 }
 
 /**
- * 只匯出本次人工選取的 reviewId。沿用舊的 reviewId 時，內容或主圖異動
+ * 只匯出本次人工選取的 reviewId。沿用舊的 reviewId 時，內容或圖片異動
  * 會讓核准失效。輸出可直接存成公開目錄的 JSON。
  */
 export function exportReviewedCatalog(draft, reviewedIds = []) {
@@ -151,7 +182,7 @@ export function exportReviewedCatalog(draft, reviewedIds = []) {
 
   for (const entry of draft) {
     const product = customerProduct(entry.product, entry.product.id);
-    const { reviewId } = draftEntry(product, entry.mainImageSha256);
+    const { reviewId } = draftEntry(product, entry.mainImageSha256, entry.galleryImageSha256s);
     if (approvals.delete(reviewId)) products.push(product);
   }
 

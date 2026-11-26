@@ -6,10 +6,12 @@
 
 1. 使用既有流程讀取 no2，依實際分頁 ID 與 NO 核對報價、計價單位、箱入數、商品規格和驗收主圖。這個目錄的工具接收雲表 15% 欄的原報價，網站售價無條件進位到整元。例如 NT$120.4 顯示 NT$121，NT$120.0 顯示 NT$120。
 2. 呼叫 `buildCatalogDraft(rows, previousDraft)` 更新內部草稿。同一分頁 ID 與 NO 保留同一商品網址。暫緩、規格待確認或驗收未通過的列送入最新狀態，既有草稿才會移除該項。
-3. 讓店主確認一批商品的 `reviewId`，再呼叫 `exportReviewedCatalog(draft, reviewedIds)`。售價、欄位或主圖 bytes 改變時，必須重新確認。圖片雜湊以實際供目錄展示的檔案計算。
+3. 讓店主確認一批商品的 `reviewId`，再呼叫 `exportReviewedCatalog(draft, reviewedIds)`。售價、欄位、圖片內容或附圖順序改變時，必須重新確認。圖片雜湊以實際供目錄展示的檔案計算。
 4. 將匯出的陣列寫成 `dist/catalog-data.js` 的 `window.catalogProducts = [...];`，把通過對外展示檢查的圖片放在 `dist/images/`。套用任一對外版本前由店主核准。
 
 可在草稿來源的商品列加上 `specs`，依展示順序傳入已查證的客用規格，例如 `[{ label: '商品尺寸', value: '10 × 8 公分' }]`。原本沒有規格的草稿可傳入空清單並沿用既有核准。新增、移除或修改已展示的規格須重新確認。待核對事項請留在內部的 `specNotes` 或 `specsPending` 欄位。
+
+`image` 為主圖。可透過 `galleryImages` 依展示順序加上已驗收的附圖，使用互不重複的 `./images/...` 路徑。內部欄位 `galleryImageSha256s` 依相同順序和數量傳入各張檔案的 SHA-256。公開目錄使用圖片路徑，雜湊留在內部草稿。
 
 整箱毛重留在內部資料，外箱尺寸可列於客用規格。
 

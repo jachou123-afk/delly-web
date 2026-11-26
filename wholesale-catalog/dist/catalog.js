@@ -57,6 +57,40 @@
     return media;
   }
 
+  function productGallery(product) {
+    const main = picture(product, true);
+    if (!product.galleryImages?.length) return main;
+
+    const gallery = element('div', 'product-gallery');
+    const thumbnails = element('div', 'gallery-thumbnails');
+    thumbnails.setAttribute('role', 'group');
+    thumbnails.setAttribute('aria-label', '切換商品照片');
+    const displayedImage = main.querySelector('img');
+
+    for (const [index, src] of [product.image, ...product.galleryImages].entries()) {
+      const thumbnail = element('button', 'gallery-thumbnail');
+      thumbnail.type = 'button';
+      thumbnail.setAttribute('aria-label', `查看第 ${index + 1} 張照片`);
+      thumbnail.setAttribute('aria-pressed', String(index === 0));
+      const preview = element('img');
+      preview.alt = '';
+      preview.decoding = 'async';
+      preview.src = src;
+      thumbnail.append(preview);
+      thumbnail.addEventListener('click', () => {
+        displayedImage.src = src;
+        displayedImage.alt = `${product.name}（第 ${index + 1} 張照片）`;
+        for (const button of thumbnails.children) {
+          button.setAttribute('aria-pressed', String(button === thumbnail));
+        }
+      });
+      thumbnails.append(thumbnail);
+    }
+
+    gallery.append(main, thumbnails);
+    return gallery;
+  }
+
   function card(product) {
     const article = element('article', 'product-card');
     const link = element('a');
@@ -246,7 +280,7 @@
       ['商品編號', product.code],
     );
     info.append(element('h2', '', '商品資訊'), factList(entries));
-    layout.append(picture(product, true), info);
+    layout.append(productGallery(product), info);
     section.append(layout);
     const actions = element('div', 'actions detail-actions');
     const line = element('button', 'button primary', 'LINE 詢價');
