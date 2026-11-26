@@ -145,6 +145,30 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .quote-row .quote-metric:first-child { padding-inline-start: 0; }
   .quote-row .quote-metric dd { margin-top: .16rem; font-size: 1.05rem; }
 }
+@media (width < 52rem) {
+  .quote-row a {
+    grid-template-columns: clamp(6.5rem, 35%, 8rem) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+      "photo identity"
+      "photo prices";
+    gap: .38rem .72rem;
+  }
+  .quote-item { display: contents; }
+  .quote-item .product-picture { grid-area: photo; width: 100%; align-self: start; }
+  .quote-identity { grid-area: identity; }
+  .quote-row .quote-values { grid-area: prices; grid-template-columns: minmax(0, 1fr); align-self: start; gap: .18rem; }
+  .quote-row .quote-metric {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: baseline;
+    gap: .38rem;
+    padding: 0;
+    border-inline-start: 0;
+  }
+  .quote-row .quote-metric dd { text-align: end; }
+  .quote-row .quote-metric:first-child dd { color: var(--navy); font-weight: 900; }
+}
 @media (max-width: 21rem) {
   .shell { width: calc(100% - 1.2rem); }
   .quote-row a { padding-inline: .55rem; }
