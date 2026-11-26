@@ -4,6 +4,7 @@ const productIdPattern = /^p-[0-9a-f]{24}$/;
 const imagePathPattern = /^\.\/images\/[a-z0-9][a-z0-9._-]*\.(?:avif|jpe?g|png|webp)$/i;
 const pricePattern = /^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)(?:\.\d+)?$/;
 const sha256Pattern = /^[0-9a-f]{64}$/i;
+const unpublishedSpecText = /待確認|待核對|未提供/;
 
 function sourceProductId({ sheetId, no }) {
   const tab = String(sheetId).trim();
@@ -34,8 +35,9 @@ function customerSpecs(specs) {
       throw new Error('商品規格需要標籤與內容');
     }
     const label = displayText(spec.label, '規格標籤');
-    if (label === '整箱毛重' || label === '外箱毛重') continue;
+    if (label === '整箱毛重' || label === '外箱毛重' || unpublishedSpecText.test(label)) continue;
     const value = displayText(spec.value, '規格內容');
+    if (unpublishedSpecText.test(value)) continue;
     if (labels.has(label)) throw new Error(`商品規格標籤「${label}」重複`);
     labels.add(label);
     publicSpecs.push({ label, value });

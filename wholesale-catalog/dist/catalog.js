@@ -240,14 +240,12 @@
     const info = element('div', 'detail-info');
     info.append(element('p', 'card-meta', product.category), element('h1', '', product.name), price(product));
     const entries = (product.specs ?? []).map(({ label, value }) => [label, value]);
-    if (product.specNotes?.length) entries.push(['尺寸待確認', product.specNotes.join(' ')]);
     entries.push(
       ['計價單位', product.unit],
       ['箱入數', cartonText(product)],
       ['商品編號', product.code],
     );
     info.append(element('h2', '', '商品資訊'), factList(entries));
-    if (product.imageNote) info.append(element('p', 'image-note', product.imageNote));
     layout.append(picture(product, true), info);
     section.append(layout);
     const actions = element('div', 'actions detail-actions');
