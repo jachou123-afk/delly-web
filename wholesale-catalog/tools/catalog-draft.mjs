@@ -23,6 +23,25 @@ function displayText(value, key) {
   return value.trim();
 }
 
+function customerSpecs(specs) {
+  if (specs === undefined) return [];
+  if (!Array.isArray(specs)) throw new Error('商品規格需要標籤與內容清單');
+
+  const publicSpecs = [];
+  const labels = new Set();
+  for (const spec of specs) {
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+      throw new Error('商品規格需要標籤與內容');
+    }
+    const label = displayText(spec.label, '規格標籤');
+    const value = displayText(spec.value, '規格內容');
+    if (labels.has(label)) throw new Error(`商品規格標籤「${label}」重複`);
+    labels.add(label);
+    publicSpecs.push({ label, value });
+  }
+  return publicSpecs;
+}
+
 function customerProduct(row, id) {
   const sourcePrice = displayText(row.price, 'price');
   const pack = /^\d+$/.test(String(row.pack).trim()) ? Number(row.pack) : NaN;
@@ -42,6 +61,7 @@ function customerProduct(row, id) {
 
   const [whole, fraction = ''] = sourcePrice.replaceAll(',', '').split('.');
   const roundedPrice = BigInt(whole) + (/[1-9]/.test(fraction) ? 1n : 0n);
+  const specs = customerSpecs(row.specs);
 
   return {
     id,
@@ -53,6 +73,7 @@ function customerProduct(row, id) {
     pack,
     image,
     date,
+    ...(specs.length ? { specs } : {}),
   };
 }
 
@@ -75,6 +96,7 @@ function draftEntry(product, mainImageSha256) {
  * 每次只傳入已讀取並整理的 no2 列。price 傳 no2 的 15% 報價欄顯示值，
  * 保留來源小數位，只去掉幣別與單位。網站草稿遇到小數就進到下一個整元。
  * date 傳台灣實際入表日期 YYYY-MM-DD。
+ * specs 可依展示順序傳已查證的客用 { label, value } 規格清單。
  * 單列必須明確通過報價、主圖、規格確認且未暫緩。若商品暫緩或任一條件
  * 變為未確認，仍應將該列與最新狀態傳入，讓本次草稿移除同一分頁和 NO。
  * mainImageSha256 必須取自實際要放進目錄的已驗收圖片位元組。

@@ -215,6 +215,16 @@
     inquiryStatus.hidden = false;
   });
 
+  function factList(entries) {
+    const list = element('dl', 'facts');
+    for (const [label, value] of entries) {
+      const item = element('div');
+      item.append(element('dt', '', label), element('dd', '', value));
+      list.append(item);
+    }
+    return list;
+  }
+
   function detail(product) {
     const section = element('section', 'detail shell');
     const back = element('a', 'back', '返回今日新品');
@@ -229,17 +239,12 @@
     const layout = element('article', 'detail-card');
     const info = element('div', 'detail-info');
     info.append(element('p', 'card-meta', product.category), element('h1', '', product.name), price(product));
-    const facts = element('dl', 'facts');
-    for (const [label, value] of [
+    const facts = factList([
       ['商品編號', product.code],
       ['計價單位', product.unit],
       ['箱入數', cartonText(product)],
       ['供貨狀態', '供貨請詢問'],
-    ]) {
-      const item = element('div');
-      item.append(element('dt', '', label), element('dd', '', value));
-      facts.append(item);
-    }
+    ]);
     const actions = element('div', 'actions');
     const line = element('button', 'button primary', 'LINE 詢價');
     line.type = 'button';
@@ -253,6 +258,23 @@
     info.append(actions);
     layout.append(picture(product, true), info);
     section.append(layout);
+    if (product.specs?.length || product.specNotes?.length) {
+      const specifications = element('section', 'specifications');
+      const heading = element('h2', '', '商品規格');
+      heading.id = 'specifications-title';
+      specifications.setAttribute('aria-labelledby', heading.id);
+      specifications.append(heading);
+      if (product.specs?.length) {
+        specifications.append(factList(product.specs.map(({ label, value }) => [label, value])));
+      }
+      if (product.specNotes?.length) {
+        const review = element('aside', 'spec-review');
+        review.append(element('h3', '', '尺寸待確認'));
+        for (const note of product.specNotes) review.append(element('p', '', note));
+        specifications.append(review);
+      }
+      section.append(specifications);
+    }
     app.replaceChildren(section);
   }
 

@@ -85,6 +85,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-weight: 700; }
 .image-note { margin: -.15rem 0 .85rem; color: var(--muted); font-size: .875rem; }
+.specifications { margin-top: .9rem; padding: 1rem; border: 1px solid var(--line); border-radius: 1rem; background: var(--white); }
+.specifications h2 { margin: 0; font-size: 1.25rem; }
+.specifications .facts { margin: .65rem 0 0; border-bottom: 0; }
+.specifications .facts div { grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr); gap: .65rem; }
+.specifications dd { overflow-wrap: anywhere; }
+.spec-review { margin-top: .7rem; padding: .65rem .8rem; border: 1px solid #f0d696; border-radius: .65rem; background: #fffaed; color: #4e3913; }
+.spec-review h3 { margin: 0; font-size: .95rem; }
+.spec-review p { margin: .2rem 0 0; font-size: .875rem; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
 .button { display: flex; min-height: 2.85rem; justify-content: center; align-items: center; padding: .4rem .75rem; border: 1px solid #bccadc; border-radius: .7rem; color: var(--navy); background: var(--white); text-align: center; font-size: .95rem; font-weight: 800; }
 .button:hover { border-color: var(--navy); }
@@ -110,6 +118,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .detail-card { grid-template-columns: 1fr 1fr; align-items: center; }
   .detail-card .product-picture { border-bottom: 0; border-right: 1px solid var(--line); }
   .detail-info { padding: clamp(1.2rem, 3vw, 2.4rem); }
+  .specifications { padding: 1.25rem clamp(1.2rem, 3vw, 2.4rem); }
+  .specifications .facts div { grid-template-columns: 9rem minmax(0, 1fr); }
 }
 @media (min-width: 59rem) {
   .product-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }

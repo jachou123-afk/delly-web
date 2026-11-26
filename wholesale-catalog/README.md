@@ -9,4 +9,6 @@
 3. 讓店主確認一批商品的 `reviewId`，再呼叫 `exportReviewedCatalog(draft, reviewedIds)`。售價、欄位或主圖 bytes 改變時，必須重新確認。圖片雜湊以實際供目錄展示的檔案計算。
 4. 將匯出的陣列寫成 `dist/catalog-data.js` 的 `window.catalogProducts = [...];`，把通過對外展示檢查的圖片放在 `dist/images/`。套用任一對外版本前由店主核准。
 
+可在草稿來源的商品列加上 `specs`，依展示順序傳入已查證的客用規格，例如 `[{ label: '商品尺寸', value: '10 × 8 公分' }]`。原本沒有規格的草稿可傳入空清單並沿用既有核准。新增、移除或修改已展示的規格須重新確認。待核對事項請留在內部的 `specNotes` 或 `specsPending` 欄位。
+
 正式 no2 維持唯讀。實際試看商品資料與圖片保存在店主私有試看環境。GitHub 的程式分支提供空白資料檔。LINE 廣告可沿用商品頁連結，等公開站點開放後才提供給客人。
