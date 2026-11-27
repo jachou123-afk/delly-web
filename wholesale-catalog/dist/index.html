@@ -7,9 +7,10 @@
   <meta name="description" content="查詢正版帶雷標商品、玩具與生活用品的批發單價、箱入數及整箱估算。">
   <meta name="robots" content="noindex, nofollow">
   <title>大陸工廠直發｜新品批發目錄</title>
-  <link rel="stylesheet" href="./styles.css?v=20">
+  <link rel="stylesheet" href="./styles.css?v=21">
   <script defer src="./catalog-data.js?v=32"></script>
-  <script defer src="./catalog.js?v=17"></script>
+  <script defer src="./owner-quote-tools.js?v=1"></script>
+  <script defer src="./catalog.js?v=18"></script>
 </head>
 <body>
   <header class="site-header">
@@ -37,6 +38,17 @@
     <textarea id="inquiry-message" rows="5" readonly></textarea>
     <button id="copy-inquiry" class="button primary" type="button">複製詢價內容</button>
     <p class="dialog-status" id="inquiry-status" role="status" hidden></p>
+  </dialog>
+  <dialog id="quote-draft" class="inquiry" aria-labelledby="quote-draft-title">
+    <form method="dialog" class="dialog-top">
+      <h2 id="quote-draft-title">LINE 廣告文案</h2>
+      <button type="submit" class="close-button" aria-label="關閉廣告文案">×</button>
+    </form>
+    <p id="quote-draft-product" class="quote-draft-product"></p>
+    <label for="quote-draft-message">文案可直接修改</label>
+    <textarea id="quote-draft-message" rows="9"></textarea>
+    <button id="copy-quote-draft" class="button primary" type="button">複製文案</button>
+    <p id="quote-draft-status" class="dialog-status" role="status" hidden></p>
   </dialog>
 </body>
 </html>

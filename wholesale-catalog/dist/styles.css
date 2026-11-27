@@ -15,9 +15,9 @@
 *, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; color: var(--ink); background: var(--paper); }
 a { color: inherit; text-decoration: none; }
-button, input, textarea { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
-button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid #316db4;
   outline-offset: 4px;
 }
@@ -54,9 +54,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .quote-column-header { display: none; }
 .quote-list { margin: 0; padding: 0; list-style: none; }
 .quote-row + .quote-row { border-top: 1px solid var(--line); }
-.quote-row a { display: grid; gap: .55rem; padding: .62rem .7rem; }
-.quote-row a:hover { background: #f5f8fb; }
+.quote-row-layout { display: grid; gap: .55rem; padding: .62rem .7rem; }
+.quote-row-layout:hover { background: #f5f8fb; }
 .quote-row a:focus-visible { outline-offset: -3px; }
+.quote-row a.quote-item:focus-visible .quote-identity { outline: 3px solid #316db4; outline-offset: 3px; }
 .quote-item { display: flex; min-width: 0; align-items: center; gap: .65rem; }
 .quote-item .product-picture { width: 3.5rem; flex: 0 0 3.5rem; border: 1px solid var(--line); border-radius: .23rem; }
 .quote-identity { min-width: 0; }
@@ -74,6 +75,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .quote-metric dd { margin: 0; font-size: .95rem; font-variant-numeric: tabular-nums; font-weight: 760; overflow-wrap: anywhere; }
 .quote-metric small { display: inline-block; white-space: nowrap; color: var(--muted); font-size: .79rem; font-weight: 600; }
 .quote-metric:last-child dd { color: var(--blue); font-weight: 900; }
+.quote-draft-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin-top: .3rem; }
+.quote-draft-controls > select,
+.quote-draft-controls > button {
+  min-height: 2.3rem;
+  padding: .24rem .38rem;
+  border: 1px solid #bccadc;
+  border-radius: .28rem;
+  color: var(--navy);
+  background: var(--white);
+  font-size: .875rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.quote-draft-controls > button:not(:disabled):hover { border-color: var(--blue); background: #edf4fc; }
+.quote-draft-controls > :disabled { color: var(--muted); background: var(--paper); cursor: default; }
+.quote-draft-note { display: block; margin-top: .25rem; color: var(--muted); font-size: .8rem; font-weight: 500; }
+.quote-draft-product { color: var(--muted); font-size: .875rem; }
 .quote-note { margin: .55rem 0 0; color: var(--muted); font-size: .875rem; }
 .empty { margin: 0; padding: 1.4rem 1rem; border: 1px solid var(--line); border-radius: .4rem; background: var(--white); }
 
@@ -127,7 +145,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .facts div { grid-template-columns: 8rem minmax(0, 1fr); }
 }
 @media (min-width: 52rem) {
-  .quote-row a {
+  .quote-row-layout {
     grid-template-columns: clamp(11rem, 21vw, 16rem) minmax(0, 1fr);
     grid-template-rows: 1fr 1fr;
     grid-template-areas:
@@ -146,7 +164,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .quote-row .quote-metric dd { margin-top: .16rem; font-size: 1.05rem; }
 }
 @media (width < 52rem) {
-  .quote-row a {
+  .quote-row-layout {
     grid-template-columns: clamp(6.5rem, 35%, 8rem) minmax(0, 1fr);
     grid-template-rows: auto 1fr;
     grid-template-areas:
@@ -168,9 +186,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   }
   .quote-row .quote-metric dd { text-align: end; }
   .quote-row .quote-metric:first-child dd { color: var(--navy); font-weight: 900; }
+  .quote-row .quote-draft-controls { justify-content: flex-end; }
+  .quote-row .quote-draft-controls > select,
+  .quote-row .quote-draft-controls > button { min-height: 2.65rem; }
 }
 @media (max-width: 21rem) {
   .shell { width: calc(100% - 1.2rem); }
-  .quote-row a { padding-inline: .55rem; }
+  .quote-row-layout { padding-inline: .55rem; }
   .quote-metric { padding-inline: .33rem; }
 }

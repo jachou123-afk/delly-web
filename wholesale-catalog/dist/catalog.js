@@ -8,6 +8,10 @@
   const inquiryCartons = document.querySelector('#inquiry-cartons');
   const inquiryMessage = document.querySelector('#inquiry-message');
   const inquiryStatus = document.querySelector('#inquiry-status');
+  const quoteTools = window.catalogQuoteTools;
+  const quoteDraft = document.querySelector('#quote-draft');
+  const quoteDraftMessage = document.querySelector('#quote-draft-message');
+  const quoteDraftStatus = document.querySelector('#quote-draft-status');
   const productId = new URLSearchParams(location.search).get('p');
   const latestDate = products.map((product) => product.date).sort().at(-1);
   const ordered = [...products].sort((a, b) => b.date.localeCompare(a.date));
@@ -17,6 +21,9 @@
     .filter((category) => availableCategories.has(category));
   const quoteLabels = ['批發單價', '箱入數', '整箱估算'];
   const formatAmount = new Intl.NumberFormat('zh-TW');
+  const defaultMargin = 15;
+  const lowestMargin = 10;
+  const highestMargin = 20;
   let inquiryProduct;
   let noticeTimer;
 
@@ -46,20 +53,87 @@
     return product.pack + ' ' + product.unit + '／箱';
   }
 
+  function savedMargin(product) {
+    try {
+      return Number(sessionStorage.getItem('catalog-margin-v1:' + product.id)) || defaultMargin;
+    } catch {
+      return defaultMargin;
+    }
+  }
+
+  function rememberMargin(product, margin) {
+    try {
+      sessionStorage.setItem('catalog-margin-v1:' + product.id, String(margin));
+    } catch {
+      // The selected value remains available on the current page.
+    }
+  }
+
+  function handleQuoteDraft(product, template, price, margin) {
+    document.querySelector('#quote-draft-product').textContent =
+      product.code + ' · ' + margin + '% 毛利率 · NT$' + formatAmount.format(price) + '／' + product.unit;
+    quoteDraftMessage.value = [...template.before, '售價' + price + '元/' + product.unit, ...template.after].join('\n');
+    quoteDraftStatus.hidden = true;
+    quoteDraft.showModal();
+  }
+
   function quoteValues(product) {
-    const cartonAmount = BigInt(product.price.replaceAll(',', '')) * BigInt(product.pack);
-    const values = [
-      ['NT$' + product.price, '／' + product.unit],
-      [cartonText(product)],
-      ['NT$' + formatAmount.format(cartonAmount), '／箱'],
-    ];
+    const basePrice = BigInt(product.price.replaceAll(',', ''));
+    const tools = quoteTools?.[product.id];
+    const prices = tools?.prices;
+    const template = tools?.template;
+    let margin = prices ? savedMargin(product) : defaultMargin;
+    if (!Number.isInteger(margin) || margin < lowestMargin || margin > highestMargin) margin = defaultMargin;
     const list = element('dl', 'quote-values');
-    for (const [index, [amount, unit]] of values.entries()) {
+    const values = quoteLabels.map((label) => {
       const item = element('div', 'quote-metric');
-      const value = element('dd', '', amount);
-      if (unit) value.append(element('small', '', unit));
-      item.append(element('dt', '', quoteLabels[index]), value);
+      const value = element('dd');
+      item.append(element('dt', '', label), value);
       list.append(item);
+      return value;
+    });
+    const [unitCell, packCell, cartonCell] = values;
+    const unitPrice = element('span', 'quote-unit-price');
+    const cartonPrice = element('span', 'quote-carton-price');
+    unitCell.append(unitPrice, element('small', '', '／' + product.unit));
+    packCell.textContent = cartonText(product);
+    cartonCell.append(cartonPrice, element('small', '', '／箱'));
+
+    const currentPrice = () => prices ? BigInt(prices[margin - lowestMargin]) : basePrice;
+    function refreshPrices() {
+      const price = currentPrice();
+      unitPrice.textContent = 'NT$' + formatAmount.format(price);
+      cartonPrice.textContent = 'NT$' + formatAmount.format(price * BigInt(product.pack));
+    }
+    refreshPrices();
+
+    if (quoteTools) {
+      const controls = element('span', 'quote-draft-controls');
+      const select = element('select', 'quote-margin');
+      select.setAttribute('aria-label', '毛利率 ' + product.code);
+      select.disabled = !prices;
+      for (let percent = lowestMargin; percent <= highestMargin; percent++) {
+        const option = element('option', '', percent + '%');
+        option.value = String(percent);
+        select.append(option);
+      }
+      select.value = String(margin);
+      select.addEventListener('change', () => {
+        margin = Number(select.value);
+        rememberMargin(product, margin);
+        refreshPrices();
+      });
+      const generate = element('button', 'quote-draft-button', '產生文案');
+      generate.type = 'button';
+      generate.setAttribute('aria-label', '產生文案 ' + product.code);
+      generate.disabled = !template;
+      if (template) generate.addEventListener('click', () => handleQuoteDraft(product, template, currentPrice(), margin));
+      controls.append(select, generate);
+      unitCell.append(controls);
+      if (!prices || !template) {
+        const reason = !prices ? '此款可使用已核對的 15% 報價。' : '此款文案格式待核對。';
+        unitCell.append(element('span', 'quote-draft-note', reason));
+      }
     }
     return list;
   }
@@ -113,9 +187,9 @@
 
   function quoteRow(product) {
     const row = element('li', 'quote-row');
-    const link = element('a');
-    link.href = productUrl(product);
-    const item = element('div', 'quote-item');
+    const outer = element(quoteTools ? 'div' : 'a', 'quote-row-layout');
+    const item = element(quoteTools ? 'a' : 'div', 'quote-item');
+    (quoteTools ? item : outer).href = productUrl(product);
     const identity = element('div', 'quote-identity');
     const meta = element('p', 'card-meta');
     meta.append(element('span', 'product-code', product.code), element('span', '', product.category));
@@ -123,8 +197,8 @@
     const photo = picture(product, false);
     photo.querySelector('img').alt = '';
     item.append(photo, identity);
-    link.append(item, quoteValues(product));
-    row.append(link);
+    outer.append(item, quoteValues(product));
+    row.append(outer);
     return row;
   }
 
@@ -233,13 +307,13 @@
     noticeTimer = setTimeout(() => { notice.hidden = true; }, 3200);
   }
 
-  async function copy(value) {
+  async function copy(value, activeField) {
     try {
       await navigator.clipboard.writeText(value);
       return true;
     } catch {
-      const field = inquiry.open ? inquiryMessage : element('textarea');
-      if (!inquiry.open) {
+      const field = activeField ?? element('textarea');
+      if (!activeField) {
         field.value = value;
         field.className = 'notice';
         document.body.append(field);
@@ -248,7 +322,7 @@
       field.select();
       field.setSelectionRange(0, value.length);
       const copied = document.execCommand('copy');
-      if (field !== inquiryMessage) field.remove();
+      if (!activeField) field.remove();
       return copied;
     }
   }
@@ -304,10 +378,18 @@
   inquiryCartons.addEventListener('input', refreshInquiry);
   document.querySelector('#copy-inquiry').addEventListener('click', async () => {
     if (!inquiryCartons.reportValidity()) return;
-    const copied = await copy(inquiryMessage.value);
+    const copied = await copy(inquiryMessage.value, inquiryMessage);
     inquiryStatus.textContent = copied ? '已複製。' : '已選取文字，可長按複製。';
     inquiryStatus.hidden = false;
   });
+
+  if (quoteTools) {
+    document.querySelector('#copy-quote-draft').addEventListener('click', async () => {
+      const copied = await copy(quoteDraftMessage.value, quoteDraftMessage);
+      quoteDraftStatus.textContent = copied ? '已複製 LINE 文案。' : '已選取文字，可長按複製。';
+      quoteDraftStatus.hidden = false;
+    });
+  }
 
   function factList(entries) {
     const list = element('dl', 'facts');
