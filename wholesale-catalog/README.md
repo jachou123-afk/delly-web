@@ -1,13 +1,13 @@
 # 大陸工廠直發｜新品目錄
 
-手機優先的靜態目錄。以 HTTP 開啟 `dist/index.html`，可驗收新品、分類、品名與商品編號搜尋、單品網址、分享及 LINE 詢價文字。正式 LINE 入口確認前，使用複製詢價內容。
+手機優先的批發目錄。客戶端位於 `dist/client`，提供分類、商品搜尋、日期排序、單品網址、分享及 LINE 詢價文字。正式 LINE 入口確認前，使用複製詢價內容。
 
 ## 產生與驗收
 
 1. 依 no2 的實際分頁 ID 與 NO 核對報價、計價單位、箱入數、商品規格和驗收主圖。店主指定歷史原表的批次同樣查核，並以原表的同款 15% 報價為準。網站售價無條件進位到整元。例如 NT$120.4 顯示 NT$121，NT$120.0 顯示 NT$120。
 2. 呼叫 `buildCatalogDraft(rows, previousDraft)` 更新內部草稿。同一來源與 NO 保留同一商品網址，歷史原表另外傳入 `spreadsheetId`。暫緩、規格待確認或驗收未通過的列送入最新狀態，既有草稿才會移除該項。
 3. 讓店主確認一批商品的 `reviewId`，再呼叫 `exportReviewedCatalog(draft, reviewedIds)`。售價、欄位、圖片內容或附圖順序改變時，必須重新確認。圖片雜湊以實際供目錄展示的檔案計算。
-4. 將匯出的陣列寫成 `dist/catalog-data.js` 的 `window.catalogProducts = [...];`，把通過對外展示檢查的圖片放在 `dist/images/`。套用任一對外版本前由店主核准。
+4. 將匯出的陣列寫成 `dist/client/catalog-data.js` 的 `window.catalogProducts = [...];`，把通過對外展示檢查的圖片放在 `dist/client/images/`。套用任一對外版本前由店主核准。
 
 可在草稿來源的商品列加上 `specs`，依展示順序傳入已查證的客用規格，例如 `[{ label: '商品尺寸', value: '10 × 8 公分' }]`。原本沒有規格的草稿可傳入空清單並沿用既有核准。新增、移除或修改已展示的規格須重新確認。待核對事項請留在內部的 `specNotes` 或 `specsPending` 欄位。
 
@@ -27,6 +27,12 @@
 
 測試版以 Sites 擁有者限定權限使用。每款可在 10% 至 20% 之間試算，預設 15%。下拉的數字為售價毛利率，依雲表報價規則取至小數一位，再無條件進位到台幣整元。
 
-用 `tools/build-line-ad-templates.py` 讀取已驗收的目錄欄位，沿用採購專案的 LINE 文案函式。用 `tools/build-owner-quote-tools.mjs` 合併模板和經雲表唯讀驗證的各檔售價。生成的 `dist/owner-quote-tools.js` 僅放入擁有者測試部署，GitHub 程式分支只保存空的資料檔。雲表成本留在內部資料來源。
+用 `tools/build-line-ad-templates.py` 讀取已驗收的目錄欄位，沿用採購專案的 LINE 文案函式。用 `tools/build-owner-quote-tools.mjs` 合併模板和經雲表唯讀驗證的各檔售價。生成的 `dist/client/owner-quote-tools.js` 僅放入擁有者測試部署，GitHub 程式分支只保存空的資料檔。雲表成本留在內部資料來源。
 
 要恢復公開瀏覽時，先在私人狀態部署已驗收的一般目錄版（此輪對應到 Sites 的第 32 版），確認測試資料的網址已移除後，再依店主指示變更公開權限。
+
+## 廣告選品
+
+勾選可跨分類、搜尋與日期排序保留。送出待審時，Worker 依當下的商品與毛利率建立每款的售價、單位、箱入數、圖片、連結及 LINE 草稿，寫入 Sites D1。重送同一批可取回已保存的結果。
+
+準備 Worker 發布稿時，用 `node tools/build-site-worker.mjs`。Sites 擁有者專用部署須使用 `CATALOG_OWNER_EMAIL` 環境秘密及 `DB` 綁定，資料表由 `drizzle/` 遷移建立。筆電的讀取及判斷流程見 [筆電 Agent 廣告選品交接](./LAPTOP_AGENT.md)。

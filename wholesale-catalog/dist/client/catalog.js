@@ -15,6 +15,7 @@
   const productId = new URLSearchParams(location.search).get('p');
   const latestDate = products.map((product) => product.date).sort().at(-1);
   const ordered = [...products].sort((a, b) => b.date.localeCompare(a.date));
+  const oldestFirst = [...ordered].sort((a, b) => a.date.localeCompare(b.date));
   const categoryOrder = ['正版帶雷標', '玩具', '生活用品', '車模與遙控車', '吊飾與掛件', '娃娃與毛絨', '3C與小家電', '工具與戶外'];
   const availableCategories = new Set(products.map((product) => product.category));
   const categories = [...new Set([...categoryOrder, ...availableCategories])]
@@ -24,6 +25,7 @@
   const defaultMargin = 15;
   const lowestMargin = 10;
   const highestMargin = 20;
+  const marginChoices = new Map();
   let inquiryProduct;
   let noticeTimer;
 
@@ -54,14 +56,17 @@
   }
 
   function savedMargin(product) {
+    if (marginChoices.has(product.id)) return marginChoices.get(product.id);
     try {
-      return Number(sessionStorage.getItem('catalog-margin-v1:' + product.id)) || defaultMargin;
+      const margin = Number(sessionStorage.getItem('catalog-margin-v1:' + product.id));
+      return Number.isInteger(margin) && margin >= lowestMargin && margin <= highestMargin ? margin : defaultMargin;
     } catch {
       return defaultMargin;
     }
   }
 
   function rememberMargin(product, margin) {
+    marginChoices.set(product.id, margin);
     try {
       sessionStorage.setItem('catalog-margin-v1:' + product.id, String(margin));
     } catch {
@@ -185,7 +190,7 @@
     return gallery;
   }
 
-  function quoteRow(product) {
+  function quoteRow(product, selection) {
     const row = element('li', 'quote-row');
     const outer = element(quoteTools ? 'div' : 'a', 'quote-row-layout');
     const item = element(quoteTools ? 'a' : 'div', 'quote-item');
@@ -198,6 +203,10 @@
     photo.querySelector('img').alt = '';
     item.append(photo, identity);
     outer.append(item, quoteValues(product));
+    if (selection) {
+      outer.classList.add('with-ad-pick');
+      outer.append(selection.checkbox(product));
+    }
     row.append(outer);
     return row;
   }
@@ -252,7 +261,19 @@
     const summary = element('p', 'results-label');
     summary.setAttribute('role', 'status');
     const listInfo = element('div', 'list-info');
-    listInfo.append(summary, element('p', 'list-hint', '點選商品查看規格、照片與詢價'));
+    const sortLabel = element('label', 'catalog-sort', '排序');
+    const sort = element('select');
+    sort.setAttribute('aria-label', '排序');
+    for (const [mode, label] of [['newest', '由新到舊'], ['oldest', '由舊到新']]) {
+      const option = element('option', '', label);
+      option.value = mode;
+      sort.append(option);
+    }
+    sortLabel.append(sort);
+    listInfo.append(summary, sortLabel);
+    const selection = quoteTools && window.createCatalogSelections?.(
+      products, (product) => quoteTools[product.id]?.prices ? savedMargin(product) : defaultMargin,
+    );
     const sheet = element('div', 'quote-sheet');
     const columns = element('div', 'quote-column-header');
     columns.setAttribute('aria-hidden', 'true');
@@ -264,7 +285,9 @@
     sheet.append(columns, list);
     const empty = element('p', 'empty');
     empty.hidden = true;
-    catalog.append(controls, listInfo, sheet, empty);
+    catalog.append(controls);
+    if (selection) catalog.append(selection.controls);
+    catalog.append(listInfo, sheet, empty);
     if (latestDate) catalog.append(element('p', 'quote-note', '整箱估算＝批發單價 × 箱入數。實際報價請用 LINE 確認。'));
 
     let selectedCategory = '';
@@ -273,11 +296,11 @@
         .map(searchKey)
         .filter(Boolean)
         .map(term => ({ term, alias: searchAliasKey(term) }));
-      const matching = ordered.filter((product) =>
+      const matching = (sort.value === 'oldest' ? oldestFirst : ordered).filter((product) =>
         (!selectedCategory || product.category === selectedCategory) &&
         matchesSearch(product, terms)
       );
-      list.replaceChildren(...matching.map(quoteRow));
+      list.replaceChildren(...matching.map((product) => quoteRow(product, selection)));
       summary.textContent = '共 ' + matching.length + ' 款商品';
       sheet.hidden = matching.length === 0;
       empty.hidden = matching.length > 0;
@@ -296,6 +319,7 @@
       filters.append(button);
     }
     input.addEventListener('input', renderResults);
+    sort.addEventListener('change', renderResults);
     app.replaceChildren(hero, catalog);
     renderResults();
   }

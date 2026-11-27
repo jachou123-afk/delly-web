@@ -49,6 +49,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .list-info { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .2rem .75rem; margin-bottom: .5rem; }
 .results-label, .list-hint { margin: 0; color: var(--muted); font-size: .875rem; }
 .results-label { color: var(--ink); font-weight: 750; font-variant-numeric: tabular-nums; }
+.catalog-sort { display: flex; align-items: center; gap: .45rem; font-size: .875rem; color: var(--muted); }
+.catalog-sort select { min-height: 2.65rem; padding: .3rem .55rem; border: 1px solid #bdcbd8; border-radius: .28rem; background: var(--white); color: var(--ink); font-weight: 700; }
+.ad-selection-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .7rem; margin-bottom: .65rem; padding: .55rem .65rem; border: 1px solid #bdcbd8; border-radius: .32rem; background: var(--white); }
+.ad-selection-count { margin: 0; font-weight: 800; }
+.ad-selection-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.ad-selection-actions .button { min-height: 2.65rem; padding-inline: .6rem; font-size: .875rem; }
+.ad-selection-actions .button:disabled { border-color: var(--line); background: var(--paper); color: var(--muted); cursor: default; }
+.ad-selection-status { flex-basis: 100%; margin: 0; font-size: .875rem; color: var(--blue); }
+.ad-selection-queue-items { margin-top: .65rem; }
+.ad-selection-batch + .ad-selection-batch { border-top: 1px solid var(--line); }
+.ad-selection-batch h3 { margin: .55rem 0 .3rem; font-size: 1rem; }
+.ad-selection-batch ul { margin: .3rem 0 .6rem; padding-inline-start: 1.3rem; }
 
 .quote-sheet { border: 1px solid #bdcbd8; border-radius: .4rem; background: var(--white); overflow: hidden; }
 .quote-column-header { display: none; }
@@ -56,6 +68,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .quote-row + .quote-row { border-top: 1px solid var(--line); }
 .quote-row-layout { display: grid; gap: .55rem; padding: .62rem .7rem; }
 .quote-row-layout:hover { background: #f5f8fb; }
+.with-ad-pick { position: relative; }
+.with-ad-pick .quote-identity { padding-inline-end: 2.4rem; }
+.ad-pick { position: absolute; inset-block-start: .3rem; inset-inline-end: .35rem; width: 2.75rem; height: 2.75rem; display: grid; place-items: center; cursor: pointer; }
+.ad-pick input { margin: 0; width: 1.2rem; height: 1.2rem; accent-color: var(--blue); cursor: inherit; }
 .quote-row a:focus-visible { outline-offset: -3px; }
 .quote-row a.quote-item:focus-visible .quote-identity { outline: 3px solid #316db4; outline-offset: 3px; }
 .quote-item { display: flex; min-width: 0; align-items: center; gap: .65rem; }
