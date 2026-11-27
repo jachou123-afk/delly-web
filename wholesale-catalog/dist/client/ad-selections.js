@@ -27,6 +27,44 @@
     timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
   });
 
+  function downloadControl(batch) {
+    const group = node('div');
+    const button = node('button', 'button', '下載圖文包（ZIP）');
+    button.type = 'button';
+    const status = node('p', 'dialog-status');
+    status.setAttribute('role', 'status');
+    status.hidden = true;
+    group.append(button, status);
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      button.textContent = '正在打包圖文…';
+      status.hidden = true;
+      try {
+        const response = await fetch(endpoint + '/' + encodeURIComponent(batch.id) + '/download', { cache: 'no-store' });
+        if (!response.ok || response.headers.get('Content-Type')?.split(';')[0] !== 'application/zip') {
+          const problem = await response.json().catch(() => null);
+          throw new Error(problem?.error || '圖文包暫時無法下載，請稍後再試。');
+        }
+        const downloadUrl = URL.createObjectURL(await response.blob());
+        const link = node('a');
+        link.href = downloadUrl;
+        link.download = 'LINE-ads-' + batch.id + '.zip';
+        group.append(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(downloadUrl), 30000);
+        status.textContent = '已開始下載圖文包。';
+      } catch (error) {
+        status.textContent = error.message || '圖文包暫時無法下載，請稍後再試。';
+      } finally {
+        status.hidden = false;
+        button.disabled = false;
+        button.textContent = '下載圖文包（ZIP）';
+      }
+    });
+    return group;
+  }
+
   window.createCatalogSelections = (products, marginFor) => {
     const byId = new Map(products.map((product) => [product.id, product]));
     const stored = read(pickedKey);
@@ -140,7 +178,7 @@
           article.append(node('h3', '', date + ' · ' + batch.products.length + ' 款'));
           const list = node('ul');
           for (const product of batch.products) list.append(node('li', '', product.code + ' ' + product.name));
-          article.append(list);
+          article.append(list, downloadControl(batch));
           return article;
         });
         content.replaceChildren(...entries);

@@ -1,3 +1,5 @@
+import { AdSelectionZipError, makeAdSelectionZip } from './ad-selection-zip.js';
+
 const queuePath = '/api/ad-selections';
 const productIdPattern = /^p-[a-f0-9]{24}$/;
 const batchIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -112,6 +114,11 @@ function snapshotProducts(selection, catalog, tools, origin) {
         !Number.isSafeInteger(price) || price <= 0) {
       throw new RequestError(409, '有商品或售價已更新。請重新整理頁面再確認。');
     }
+    const imagePaths = [...new Set([product.image, ...(product.galleryImages ?? [])])];
+    if (imagePaths.some((image) => !imagePathPattern.test(image))) {
+      throw new RequestError(409, '有商品圖片待確認。請重新整理頁面再試。');
+    }
+    const images = imagePaths.map((image) => new URL(image, origin).href);
     const productUrl = new URL('/', origin);
     productUrl.searchParams.set('p', id);
     return {
@@ -122,7 +129,8 @@ function snapshotProducts(selection, catalog, tools, origin) {
       price,
       unit: product.unit,
       pack: product.pack,
-      image: new URL(product.image, origin).href,
+      image: images[0],
+      images,
       productUrl: productUrl.href,
       draft: [...template.before, `售價${price}元/${product.unit}`, ...template.after].join('\n'),
     };
@@ -144,6 +152,31 @@ function publicBatch(row) {
 
 function readBatch(db, id) {
   return db.prepare('SELECT * FROM ad_selection_batches WHERE id = ?').bind(id).first();
+}
+
+async function downloadBatch(env, id, origin) {
+  const row = await readBatch(env.DB, id);
+  if (!row) throw new RequestError(404, '找不到這批選品。');
+  if (!env.ASSETS) throw new RequestError(503, '圖文包暫時無法產生。');
+  const bytes = await makeAdSelectionZip(publicBatch(row), (image) => {
+    let url;
+    try { url = new URL(image); }
+    catch { throw new RequestError(409, '有圖片網址待確認。'); }
+    if (url.origin !== origin || url.username || url.password || url.search || url.hash ||
+        !imagePathPattern.test('.' + url.pathname)) {
+      throw new RequestError(409, '圖文包包含無法核對的圖片，請確認批次素材。');
+    }
+    return env.ASSETS.fetch(new Request(url));
+  });
+  return new Response(bytes, {
+    headers: {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="LINE-ads-${id}.zip"`,
+      'Content-Length': String(bytes.byteLength),
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
 }
 
 function sameSubmission(row, requestJson) {
@@ -246,13 +279,22 @@ export function createWorker(loadCatalog = loadAssetCatalog) {
           }
           return json({ error: '不支援的操作。' }, 405, { Allow: 'GET, POST' });
         }
-        const id = url.pathname.slice(queuePath.length + 1).toLowerCase();
-        if (!batchIdPattern.test(id)) throw new RequestError(404, '找不到這批選品。');
+        const [rawId, action, ...rest] = url.pathname.slice(queuePath.length + 1).split('/');
+        const id = rawId.toLowerCase();
+        if (!batchIdPattern.test(id) || rest.length || (action !== undefined && action !== 'download')) {
+          throw new RequestError(404, '找不到這批選品。');
+        }
+        if (action === 'download') {
+          if (request.method !== 'GET') return json({ error: '不支援的操作。' }, 405, { Allow: 'GET' });
+          return await downloadBatch(env, id, url.origin);
+        }
         if (request.method !== 'PATCH') return json({ error: '不支援的操作。' }, 405, { Allow: 'PATCH' });
         requireSameOrigin(request, url);
         return await reviewBatch(request, env.DB, id);
       } catch (error) {
-        if (error instanceof RequestError) return json({ error: error.message }, error.status);
+        if (error instanceof RequestError || error instanceof AdSelectionZipError) {
+          return json({ error: error.message }, error.status);
+        }
         console.error('catalog_selection_request_failed', error?.name);
         return json({ error: '選品清單暫時無法使用。請稍後再試。' }, 503);
       }
