@@ -7,14 +7,19 @@ const sha256Pattern = /^[0-9a-f]{64}$/i;
 const unpublishedSpecText = /待確認|待核對|未提供/;
 const sourceLabelPrefixPattern = /^(?:【(?:正版・帶雷標|正版|帶雷標)】\s*)+/;
 
-function sourceProductId({ sheetId, no }) {
+function sourceProductId({ spreadsheetId, sheetId, no }) {
   const tab = String(sheetId).trim();
   const noMatch = /^(?:no)?(\d+)$/i.exec(String(no).trim());
   if (!/^(?:0|[1-9]\d*)$/.test(tab) || !noMatch) {
     throw new Error('商品需要實際分頁 ID 與 NO');
   }
+  if (spreadsheetId !== undefined &&
+      (typeof spreadsheetId !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(spreadsheetId))) {
+    throw new Error('歷史商品需要有效的來源試算表 ID');
+  }
   const productNumber = BigInt(noMatch[1]).toString();
-  const fingerprint = createHash('sha256').update(`${tab}:${productNumber}`).digest('hex');
+  const source = spreadsheetId === undefined ? `${tab}:${productNumber}` : `${spreadsheetId}:${tab}:${productNumber}`;
+  const fingerprint = createHash('sha256').update(source).digest('hex');
   return `p-${fingerprint.slice(0, 24)}`;
 }
 
@@ -138,7 +143,8 @@ function draftEntry(product, mainImageSha256, galleryImageSha256s = []) {
 }
 
 /**
- * 每次只傳入已讀取並整理的 no2 列。price 傳 no2 的 15% 報價欄顯示值，
+ * 每次只傳入已讀取並核對的採購表列。歷史來源需另傳 spreadsheetId，
+ * 既有 no2 不傳以延續商品連結。price 傳同款 15% 報價欄顯示值，
  * 保留來源小數位，只去掉幣別與單位。網站草稿遇到小數就進到下一個整元。
  * date 傳台灣實際入表日期 YYYY-MM-DD。
  * specs 可依展示順序傳已查證的客用 { label, value } 規格清單。
