@@ -207,12 +207,13 @@ function prepareEntries(batch) {
   }
   const seen = new Set();
   return batch.products.map((product, index) => {
-    const { id, code, name, margin, price, unit, pack, draft, image, images } = product ?? {};
+    const { id, code, name, margin, price, unit, pack, draft, image, images, omittedCoverCrops = 0 } = product ?? {};
     if (typeof code !== 'string' || !codePattern.test(code) || seen.has(code) ||
         typeof id !== 'string' || !productIdPattern.test(id) ||
         !Number.isInteger(margin) || margin < 10 || margin > 20 ||
         typeof name !== 'string' || !name.trim() || /[\r\n\0]/.test(name) ||
         !Number.isSafeInteger(price) || price <= 0 || !Number.isSafeInteger(pack) || pack <= 0 ||
+        !Number.isSafeInteger(omittedCoverCrops) || omittedCoverCrops < 0 ||
         typeof unit !== 'string' || !/^[\p{L}\p{N}]{1,12}$/u.test(unit) ||
         typeof draft !== 'string' || !draft.trim() || draft.includes('\0') ||
         (images !== undefined && !Array.isArray(images))) {
@@ -230,7 +231,7 @@ function prepareEntries(batch) {
       throw unavailableImage(code);
     }
     return {
-      id, code, name, margin, price, unit, pack, draft, directory,
+      id, code, name, margin, price, unit, pack, draft, directory, omittedCoverCrops,
       images: references.map((source, position) => {
         const { url, format } = imageReference(source, code);
         return { url, format, file: `圖片${String(position + 1).padStart(2, '0')}.${format}` };
@@ -246,11 +247,13 @@ function prepareEntries(batch) {
 export async function makeAdSelectionZip(batch, readImage) {
   const products = prepareEntries(batch);
   const zip = new StoreZip(zipTimestamp(batch.createdAt));
+  const omittedCoverCrops = products.reduce((total, product) => total + product.omittedCoverCrops, 0);
   const sequence = [
     `批次 ${batch.id}`,
     `商品 ${products.length} 款`,
     '供筆電 Agent 查重與挑款。實際發送依核准名單與指定聊天室。',
     '每款使用同一資料夾的圖片和文案。確認圖文都已出現在聊天室再接下一款。',
+    ...(omittedCoverCrops ? [`自動省略首圖已呈現的裁切附圖 ${omittedCoverCrops} 張。`] : []),
     '',
     ...products.map(({ directory, name, price, unit, images }) =>
       `${directory} ${name}｜NT$${price}/${unit}｜圖片 ${images.length} 張`),
@@ -261,6 +264,7 @@ export async function makeAdSelectionZip(batch, readImage) {
     batchId: batch.id,
     createdAt: batch.createdAt,
     status: batch.status,
+    omittedCoverCrops,
     recommendedProductIds: batch.status === 'reviewed' ? (batch.recommendedProductIds ?? null) : null,
     products: products.map(({ id, code, name, margin, price, unit, pack, directory, images }) => ({
       id, code, name, margin, price, unit, pack, directory, images: images.map(({ file }) => file), draft: '文案.txt',

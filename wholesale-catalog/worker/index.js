@@ -1,4 +1,5 @@
 import { AdSelectionZipError, makeAdSelectionZip } from './ad-selection-zip.js';
+import { adCoverOverlaps } from './ad-cover-overlap.js';
 
 const queuePath = '/api/ad-selections';
 const productIdPattern = /^p-[a-f0-9]{24}$/;
@@ -154,16 +155,37 @@ function readBatch(db, id) {
   return db.prepare('SELECT * FROM ad_selection_batches WHERE id = ?').bind(id).first();
 }
 
+function siteImageUrl(image, origin) {
+  if (typeof image !== 'string') return null;
+  try {
+    const url = new URL(image);
+    if (url.origin === origin && !url.username && !url.password && !url.search && !url.hash &&
+        imagePathPattern.test('.' + url.pathname)) return url;
+  } catch {
+    // An unrecognized address will be rejected when the archive reads it.
+  }
+  return null;
+}
+
+function withoutRepeatedCoverCrops(product, origin) {
+  const rule = adCoverOverlaps.get(product?.id);
+  if (!rule || !Array.isArray(product.images) ||
+      siteImageUrl(product.image, origin)?.pathname !== rule.cover) return product;
+
+  const images = product.images.filter((image) => !rule.crops.includes(siteImageUrl(image, origin)?.pathname));
+  const omittedCoverCrops = product.images.length - images.length;
+  return omittedCoverCrops ? { ...product, images, omittedCoverCrops } : product;
+}
+
 async function downloadBatch(env, id, origin) {
   const row = await readBatch(env.DB, id);
   if (!row) throw new RequestError(404, '找不到這批選品。');
   if (!env.ASSETS) throw new RequestError(503, '圖文包暫時無法產生。');
-  const bytes = await makeAdSelectionZip(publicBatch(row), (image) => {
-    let url;
-    try { url = new URL(image); }
-    catch { throw new RequestError(409, '有圖片網址待確認。'); }
-    if (url.origin !== origin || url.username || url.password || url.search || url.hash ||
-        !imagePathPattern.test('.' + url.pathname)) {
+  const batch = publicBatch(row);
+  batch.products = batch.products.map((product) => withoutRepeatedCoverCrops(product, origin));
+  const bytes = await makeAdSelectionZip(batch, (image) => {
+    const url = siteImageUrl(image, origin);
+    if (!url) {
       throw new RequestError(409, '圖文包包含無法核對的圖片，請確認批次素材。');
     }
     return env.ASSETS.fetch(new Request(url));
