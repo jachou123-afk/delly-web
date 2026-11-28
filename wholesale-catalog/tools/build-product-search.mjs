@@ -15,7 +15,10 @@ assert(typeof checkedAt === 'string' && Number.isFinite(Date.parse(checkedAt)), 
 
 const catalog = /^window\.catalogProducts\s*=\s*(\[[\s\S]*\]);\s*$/.exec(await readFile(catalogFile, 'utf8'));
 assert(catalog, '目錄格式有誤');
-const publicProducts = new Map(JSON.parse(catalog[1]).map(({ id, code }) => [id, code]));
+const toyPage = JSON.parse(catalog[1]).filter(({ category }) => category === '玩具')
+  .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
+assert.equal(toyPage.length, 10, '玩具試用需要 10 款現有商品');
+const trialProducts = new Map(toyPage.map(({ id, code }, position) => [id, { code, position }]));
 const sources = {};
 const products = [];
 const linked = new Set();
@@ -43,7 +46,7 @@ for (const source of ['legacy', 'no2']) {
   };
   const rows = await read(path.resolve(path.dirname(configurationFile), file));
   assert(Array.isArray(rows) && rows.length > 0, '商品來源沒有有效資料');
-  counts[source] = rows.length;
+  counts[source] = 0;
   for (const item of rows) {
     const { no, sheetId, row } = item;
     assert(typeof no === 'string' && /^\d{1,8}$/.test(no) && Number(no) >= 1 &&
@@ -54,13 +57,12 @@ for (const source of ['legacy', 'no2']) {
     entries.add(key);
     const catalogKey = source === 'legacy' ? key : entity;
     const catalogId = 'p-' + createHash('sha256').update(catalogKey).digest('hex').slice(0, 24);
-    const catalogCode = publicProducts.get(catalogId);
-    const code = item.code ?? catalogCode;
-    if (code !== undefined) assert(typeof code === 'string' && /^BGD-[A-Z]{1,8}-\d+$/.test(code), '商品編號格式有誤');
-    if (catalogCode) {
-      assert(code === catalogCode, '商品編號與目錄識別不一致');
-      linked.add(catalogId);
-    }
+    const trialProduct = trialProducts.get(catalogId);
+    if (!trialProduct) continue;
+    const { code } = trialProduct;
+    assert((!item.code || item.code === code) && /^BGD-[A-Z]{1,8}-\d+$/.test(code), '商品編號與目錄識別不一致');
+    linked.add(catalogId);
+    counts[source]++;
     products.push({
       source,
       no,
@@ -68,17 +70,21 @@ for (const source of ['legacy', 'no2']) {
       sheetId,
       tab: singleLine(item.tab, 100, '試算表分頁名稱有誤'),
       row,
-      ...(code ? { code } : {}),
+      code,
       ...(item.supplierSku ? { supplierSku: singleLine(item.supplierSku, 100, '供應商貨號有誤') } : {}),
       ...(item.date ? { date: dateOnly(item.date) } : {}),
-      ...(catalogCode ? { catalogId } : {}),
+      catalogId,
     });
   }
 }
 assert.notEqual(sources.legacy.url, sources.no2.url, '兩個來源指向同一份試算表');
+assert.equal(linked.size, toyPage.length, '玩具試用品項缺少已核對的原表列');
+assert.equal(products.length, toyPage.length, '玩具試用品項的來源筆數不一致');
+products.sort((a, b) => trialProducts.get(a.catalogId).position - trialProducts.get(b.catalogId).position);
+for (const source of Object.keys(sources)) if (!counts[source]) delete sources[source];
 const data = { version: 1, checkedAt, sources, products };
 const contents = 'export const internalProductSearch = ' + JSON.stringify(data) + ';\n';
 assert(!path.resolve(outputFile).replaceAll('\\', '/').includes('/dist/client/'), '商品索引必須留在 Worker');
 await writeFile(outputFile, contents, 'utf8');
-console.log(JSON.stringify({ ...counts, total: products.length, linked: linked.size, catalog: publicProducts.size,
+console.log(JSON.stringify({ ...counts, total: products.length, linked: linked.size, codes: products.map(({ code }) => code),
   supplierSkus: products.filter(({ supplierSku }) => supplierSku).length, bytes: Buffer.byteLength(contents) }));

@@ -11,9 +11,6 @@
   ]);
   const numberFormat = new Intl.NumberFormat('zh-TW');
   const tabOrder = new Intl.Collator('zh-TW', { numeric: true });
-  const dateFormat = new Intl.DateTimeFormat('zh-TW', {
-    dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Taipei',
-  });
   const activeMounts = new WeakMap();
 
   function element(tag, className, text) {
@@ -31,8 +28,8 @@
     return value.replace(/[\s\p{P}\p{S}]/gu, '');
   }
 
-  function indexProduct(product, sources) {
-    const name = normalize(product.name);
+  function indexProduct(product, sources, catalog) {
+    const names = [product.name, catalog.get(product.catalogId)?.name].map((text) => compact(normalize(text))).filter(Boolean);
     const no = compact(normalize(product.no));
     const code = compact(normalize(product.code));
     const sku = compact(normalize(product.supplierSku));
@@ -50,7 +47,7 @@
       .map((value) => compact(normalize(value))).filter(Boolean);
     const parsedDate = Date.parse(product.date);
     return {
-      product, name: compact(name), code, sku, aliases, context,
+      product, names, code, sku, aliases, context,
       date: Number.isFinite(parsedDate) ? parsedDate : 0,
     };
   }
@@ -67,20 +64,20 @@
       if (item.code === phrase) return 550;
       if (item.sku === phrase) return 510;
       if (item.aliases.includes(phrase)) return 470;
-      if (item.name === phrase) return 430;
+      if (item.names.includes(phrase)) return 430;
     }
     let score = 0;
     for (const term of terms) {
       if (item.aliases.includes(term)) score += 50;
-      else if (item.name.startsWith(term)) score += 32;
-      else if (item.name.includes(term)) score += 20;
+      else if (item.names.some((name) => name.startsWith(term))) score += 32;
+      else if (item.names.some((name) => name.includes(term))) score += 20;
       else if (item.aliases.some((alias) => alias.includes(term))) score += 12;
       else if (item.context.some((value) => value.includes(term))) score += 5;
       else return -1;
     }
     if (!phrase) return score;
-    if (item.name.startsWith(phrase)) return score + 30;
-    if (item.name.includes(phrase)) return score + 15;
+    if (item.names.some((name) => name.startsWith(phrase))) return score + 30;
+    if (item.names.some((name) => name.includes(phrase))) return score + 15;
     return score;
   }
 
@@ -161,7 +158,7 @@
       element('span', 'is-source', source?.label || sourceNames[product.source]),
       element('span', 'is-tab', product.tab),
     );
-    const title = element('h2', 'is-result-title', product.name);
+    const title = element('h2', 'is-result-title', knownProduct?.name ?? product.name);
     title.tabIndex = -1;
     const facts = element('dl', 'is-result-facts');
     const values = [['NO', product.no], ['目錄編號', product.code], ['供應商貨號', product.supplierSku]];
@@ -191,7 +188,7 @@
     return entry;
   }
 
-  window.mountInternalProductSearch = function mountInternalProductSearch(app, catalogProducts) {
+  window.mountInternalProductSearch = function mountInternalProductSearch(app, catalogProducts, { backHref } = {}) {
     if (!app) throw new TypeError('Internal search requires a mounting element');
     activeMounts.get(app)?.();
 
@@ -199,10 +196,10 @@
     const catalog = new Map(knownProducts.map((product) => [product.id, product]));
     const root = element('section', 'internal-search shell');
     root.setAttribute('aria-labelledby', 'internal-search-heading');
-    const heading = element('h1', '', '內部商品搜尋');
+    const heading = element('h1', '', '玩具商品搜尋試用');
     heading.id = 'internal-search-heading';
     const updated = element('p', 'is-updated');
-    updated.hidden = true;
+    updated.textContent = '玩具分類由新到舊前 10 款';
     const header = element('header', 'is-heading');
     header.append(heading, updated);
 
@@ -211,7 +208,7 @@
     form.setAttribute('aria-label', '搜尋採購表');
     const query = element('input', 'is-input');
     query.type = 'search';
-    query.placeholder = '例如 W1424、no1424 或品名';
+    query.placeholder = '例如 W2267、遙控車或品名';
     query.autocomplete = 'off';
     query.spellcheck = false;
     query.maxLength = 160;
@@ -220,7 +217,9 @@
     const controls = element('div', 'is-filters');
     const reset = element('button', 'is-action is-reset', '清除');
     reset.type = 'button';
-    controls.append(field('資料來源', source), field('分頁', tab), reset);
+    const sourceField = field('資料來源', source);
+    sourceField.hidden = true;
+    controls.append(sourceField, field('分頁', tab), reset);
     form.append(field('品名、編號或供應商貨號', query, 'is-query'), controls);
     const status = element('p', 'is-status');
     status.setAttribute('role', 'status');
@@ -232,6 +231,7 @@
     const retry = element('button', 'is-action is-retry', '重新載入');
     retry.type = 'button';
     footer.append(more, retry);
+    if (backHref) root.append(actionLink('返回玩具分類', backHref, 'back'));
     root.append(header, form, status, results, footer);
     app.replaceChildren(root);
 
@@ -322,18 +322,16 @@
         }
         sources = payload.sources;
         index = payload.products.filter(validProduct)
-          .map((product) => indexProduct(product, sources)).sort(compareRecent);
+          .map((product) => indexProduct(product, sources, catalog));
         if (payload.products.length && !index.length) throw new Error('Invalid search records');
 
+        const usedSources = sourceKeys.filter((key) => index.some(({ product }) => product.source === key));
         source.replaceChildren();
-        addOption(source, all, '兩份表');
-        for (const key of sourceKeys) addOption(source, key, sources[key]?.label || sourceNames[key]);
+        addOption(source, all, '全部來源');
+        for (const key of usedSources) addOption(source, key, sources[key]?.label || sourceNames[key]);
+        sourceField.hidden = usedSources.length < 2;
+        controls.classList.toggle('is-single-source', sourceField.hidden);
         refreshTabs();
-        const date = Date.parse(payload.checkedAt);
-        if (Number.isFinite(date)) {
-          updated.textContent = '索引更新於 ' + dateFormat.format(date);
-          updated.hidden = false;
-        }
         source.disabled = false;
         tab.disabled = false;
         phase = 'ready';
@@ -348,7 +346,7 @@
       }
     }
 
-    addOption(source, all, '兩份表');
+    addOption(source, all, '全部來源');
     addOption(tab, all, '全部分頁');
     query.addEventListener('compositionstart', () => { composing = true; });
     query.addEventListener('compositionend', () => { composing = false; search(); });

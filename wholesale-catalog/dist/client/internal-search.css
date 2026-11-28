@@ -45,6 +45,7 @@
   align-items: end;
   gap: 0.5rem;
 }
+.internal-search .is-filters.is-single-source { grid-template-columns: minmax(0, 1fr) auto; }
 
 .internal-search .is-controls label {
   display: grid;

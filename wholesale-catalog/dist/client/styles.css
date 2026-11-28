@@ -27,25 +27,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .site-header { background: var(--navy); color: var(--white); }
 .site-header-inner { min-height: 3.8rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .brand { display: inline-flex; gap: .62rem; align-items: center; font-size: 1.08rem; font-weight: 850; letter-spacing: .045em; line-height: 1.2; }
-.workspace-nav { display: flex; align-items: center; gap: .2rem; flex-shrink: 0; }
-.workspace-nav a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2.75rem;
-  padding: .3rem .55rem;
-  color: #d6e3f3;
-  font-size: .875rem;
-  font-weight: 700;
-  border-radius: .3rem;
-  white-space: nowrap;
-}
-.workspace-nav a:is(:hover, [aria-current="page"]) { background: #ffffff1e; color: var(--white); }
-@media (max-width: 380px) {
-  .site-header-inner { gap: .4rem; }
-  .brand { gap: .35rem; font-size: .98rem; }
-  .workspace-nav { gap: .1rem; }
-  .workspace-nav a { padding-inline: .35rem; }
-}
+.header-currency { color: #d6e3f3; font-size: .875rem; white-space: nowrap; }
 .brand-mark { display: grid; grid-template-columns: repeat(2, .48rem); gap: .17rem; padding: .45rem; border: 1px solid #ffffff32; border-radius: .28rem; }
 .brand-mark span { width: .48rem; height: .48rem; border-radius: .12rem; background: var(--amber); }
 .brand-mark span:nth-child(2) { opacity: .55; }
@@ -64,6 +46,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .filters { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem; }
 .filter { display: inline-flex; align-items: center; min-height: 2.75rem; padding: .34rem .68rem; border: 1px solid #c3ceda; border-radius: .3rem; background: var(--white); color: var(--ink); font-size: .875rem; font-weight: 700; white-space: nowrap; }
 .filter[aria-pressed="true"] { background: var(--navy); color: var(--white); border-color: var(--navy); }
+.toy-trial-entry { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .7rem; color: var(--muted); font-size: .875rem; }
 .list-info { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .2rem .75rem; margin-bottom: .5rem; }
 .results-label, .list-hint { margin: 0; color: var(--muted); font-size: .875rem; }
 .results-label { color: var(--ink); font-weight: 750; font-variant-numeric: tabular-nums; }

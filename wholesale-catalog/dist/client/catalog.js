@@ -14,7 +14,6 @@
   const quoteDraftStatus = document.querySelector('#quote-draft-status');
   const viewParams = new URLSearchParams(location.search);
   const productId = viewParams.get('p');
-  const catalogOpen = Boolean(productId || viewParams.get('view') === 'catalog');
   const latestDate = products.map((product) => product.date).sort().at(-1);
   const ordered = [...products].sort((a, b) => b.date.localeCompare(a.date));
   const oldestFirst = [...ordered].sort((a, b) => a.date.localeCompare(b.date));
@@ -38,31 +37,20 @@
     return node;
   }
 
-  function workspaceUrl() {
+  function catalogUrl() {
     const url = new URL(location.href);
     url.search = '';
     url.hash = '';
     return url;
   }
 
-  function catalogUrl() {
-    const url = workspaceUrl();
-    url.searchParams.set('view', 'catalog');
-    return url;
-  }
-
   function productUrl(product) {
-    const url = workspaceUrl();
+    const url = catalogUrl();
     url.searchParams.set('p', product.id);
     return url.toString();
   }
 
-  document.querySelector('#home-link').href = workspaceUrl().toString();
-  const searchLink = document.querySelector('#search-link');
-  const catalogLink = document.querySelector('#catalog-link');
-  searchLink.href = workspaceUrl().toString();
-  catalogLink.href = catalogUrl().toString();
-  (catalogOpen ? catalogLink : searchLink).setAttribute('aria-current', 'page');
+  document.querySelector('#home-link').href = catalogUrl().toString();
 
   function cartonText(product) {
     return product.pack + ' ' + product.unit + '／箱';
@@ -270,7 +258,13 @@
     search.append(searchIcon, input);
     const filters = element('div', 'filters');
     filters.setAttribute('aria-label', '商品分類');
-    controls.append(search, filters);
+    const toyTrial = element('div', 'toy-trial-entry');
+    const trialHref = catalogUrl();
+    trialHref.searchParams.set('trial', 'toys');
+    const trialLink = element('a', 'button', '試用商品搜尋');
+    trialLink.href = trialHref.toString();
+    toyTrial.append(trialLink, element('span', '', '玩具分類由新到舊前 10 款'));
+    controls.append(search, filters, toyTrial);
     const summary = element('p', 'results-label');
     summary.setAttribute('role', 'status');
     const listInfo = element('div', 'list-info');
@@ -303,7 +297,7 @@
     catalog.append(listInfo, sheet, empty);
     if (latestDate) catalog.append(element('p', 'quote-note', '整箱估算＝批發單價 × 箱入數。實際報價請用 LINE 確認。'));
 
-    let selectedCategory = '';
+    let selectedCategory = viewParams.get('category') === 'toys' ? '玩具' : '';
     function renderResults() {
       const terms = input.value.split(/\s+/)
         .map(searchKey)
@@ -315,6 +309,7 @@
       );
       list.replaceChildren(...matching.map((product) => quoteRow(product, selection)));
       summary.textContent = '共 ' + matching.length + ' 款商品';
+      toyTrial.hidden = selectedCategory !== '玩具';
       sheet.hidden = matching.length === 0;
       empty.hidden = matching.length > 0;
       empty.textContent = ordered.length ? '找不到符合的商品，試試其他關鍵字或分類。' : '目前沒有新品。';
@@ -323,7 +318,7 @@
     for (const category of ['', ...categories]) {
       const button = element('button', 'filter', category || '全部');
       button.type = 'button';
-      button.setAttribute('aria-pressed', String(!category));
+      button.setAttribute('aria-pressed', String(category === selectedCategory));
       button.addEventListener('click', () => {
         selectedCategory = category;
         for (const item of filters.children) item.setAttribute('aria-pressed', String(item === button));
@@ -476,10 +471,12 @@
 
   if (productId) {
     detail(products.find((product) => product.id === productId));
-  } else if (catalogOpen) {
-    document.title = '批發目錄｜大陸工廠直發';
-    home();
+  } else if (viewParams.get('trial') === 'toys' && typeof window.mountInternalProductSearch === 'function') {
+    const back = catalogUrl();
+    back.searchParams.set('category', 'toys');
+    document.title = '玩具商品搜尋試用｜大陸工廠直發';
+    window.mountInternalProductSearch(app, products, { backHref: back.toString() });
   } else {
-    window.mountInternalProductSearch(app, products);
+    home();
   }
 })();

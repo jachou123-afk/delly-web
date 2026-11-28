@@ -2,13 +2,13 @@
 
 手機優先的批發目錄。客戶端位於 `dist/client`，提供分類、商品搜尋、日期排序、單品網址、分享及 LINE 詢價文字。正式 LINE 入口確認前，使用複製詢價內容。
 
-## 內部商品搜尋
+## 玩具分類搜尋試用
 
-首頁搜尋第一份原表及 no2 的正式商品分頁，包含尚未進批發目錄的商品。以試算表、分頁 ID 和 NO 識別商品。搜尋結果可開啟來源列，已有批發商品頁時也提供商品連結。批發目錄與廣告選品從頁首的「批發目錄」進入。
+在「玩具」分類點「試用商品搜尋」，會進入 `/?trial=toys`。試用限定目錄「玩具」分類由新到舊前 10 款，可用品名、NO、商品編號、已核對的供應商貨號查找，或按來源分頁篩選，並回到同款雲表列或既有商品頁。
 
-`tools/build-product-search.mjs` 從兩份唯讀查核結果建立搜尋索引。來源設定需提供 `checkedAt` 及 `sources.legacy`、`sources.no2`，每個來源包含 `label`、`spreadsheetId` 和相對來源設定的 `file`。兩個商品清單每筆需提供 `no`、`name`、`sheetId`、`tab`、`row`，可填已核實的 `code`、`supplierSku` 和 `date`。用 `node tools/build-product-search.mjs <兩表來源設定 JSON> dist/client/catalog-data.js worker/internal-product-index.js` 更新擁有者部署索引。索引是頁面所示查核時間的快照，GitHub 程式分支使用空白模組。
+`tools/build-product-search.mjs` 以目錄及兩份唯讀的來源清單核對這 10 款，使用試算表、分頁 ID 和 NO 綁定商品。建置命令為 `node tools/build-product-search.mjs <兩表來源設定 JSON> dist/client/catalog-data.js worker/internal-product-index.js`。來源設定包含 `checkedAt` 及 `sources.legacy`、`sources.no2`，各來源提供 `label`、`spreadsheetId` 和相對路徑 `file`。每筆來源資料包含 `no`、`name`、`sheetId`、`tab`、`row`，可填已核實的 `code`、`supplierSku`、`date`。
 
-索引隨 Worker 發布，網站擁有者登入後可透過 `/api/product-search` 讀取。商品搜尋的資料來源與廣告選品 D1 批次原有用途各自獨立。
+這 10 款索引僅由網站擁有者登入後經 `/api/product-search` 讀取。GitHub 程式分支提供空白索引模組。
 
 ## 產生與驗收
 
