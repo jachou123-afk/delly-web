@@ -10,7 +10,7 @@ assert(config.project_id && config.d1 === 'DB' && config.static === undefined, '
 await Promise.all(['index.html', 'catalog.js', 'styles.css', 'catalog-data.js', 'owner-quote-tools.js', 'ad-selections.js']
   .map((name) => access(file('dist/client/' + name))));
 await mkdir(file('dist/server/'), { recursive: true });
-await Promise.all(['index.js', 'ad-selection-zip.js', 'internal-product-index.js']
+await Promise.all(['index.js', 'ad-selection-zip.js', 'internal-product-index.js', 'stock-product-index.js']
   .map((name) => copyFile(file('worker/' + name), file('dist/server/' + name))));
 async function verifiedImage(path) {
   const expected = verifiedAdAssetHashes.get(path);

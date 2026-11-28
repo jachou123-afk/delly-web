@@ -14,6 +14,8 @@
   const quoteDraftStatus = document.querySelector('#quote-draft-status');
   const viewParams = new URLSearchParams(location.search);
   const productId = viewParams.get('p');
+  const stockMode = !productId && viewParams.get('mode') === 'stock';
+  const siteTitle = document.title;
   const latestDate = products.map((product) => product.date).sort().at(-1);
   const ordered = [...products].sort((a, b) => b.date.localeCompare(a.date));
   const oldestFirst = [...ordered].sort((a, b) => a.date.localeCompare(b.date));
@@ -50,7 +52,19 @@
     return url.toString();
   }
 
+  function stockUrl(sku) {
+    const url = catalogUrl();
+    url.searchParams.set('mode', 'stock');
+    if (sku) url.searchParams.set('sku', sku);
+    return url.toString();
+  }
+
   document.querySelector('#home-link').href = catalogUrl().toString();
+  const directLink = document.querySelector('#direct-link');
+  const stockLink = document.querySelector('#stock-link');
+  directLink.href = catalogUrl().toString();
+  stockLink.href = stockUrl();
+  (stockMode ? stockLink : directLink).setAttribute('aria-current', 'page');
 
   function cartonText(product) {
     return product.pack + ' ' + product.unit + '／箱';
@@ -199,25 +213,32 @@
     return gallery;
   }
 
-  function quoteRow(product, selection, sourceHref) {
+  function catalogRow(product, { href, code, badge, values, checkbox, hasControls }) {
     const row = element('li', 'quote-row');
-    const outer = element(quoteTools ? 'div' : 'a', 'quote-row-layout');
-    const item = element(quoteTools ? 'a' : 'div', 'quote-item');
-    (quoteTools ? item : outer).href = productUrl(product);
+    const outer = element(hasControls ? 'div' : 'a', 'quote-row-layout');
+    const item = element(hasControls ? 'a' : 'div', 'quote-item');
+    (hasControls ? item : outer).href = href;
     const identity = element('div', 'quote-identity');
     const meta = element('p', 'card-meta');
-    meta.append(element('span', 'product-code', product.code), element('span', '', product.category));
+    meta.append(element('span', 'product-code', code), element('span', '', badge));
     identity.append(meta, element('h2', '', product.name));
     const photo = picture(product, false);
     photo.querySelector('img').alt = '';
     item.append(photo, identity);
-    outer.append(item, quoteValues(product, sourceHref));
-    if (selection) {
+    outer.append(item, values);
+    if (checkbox) {
       outer.classList.add('with-ad-pick');
-      outer.append(selection.checkbox(product));
+      outer.append(checkbox);
     }
     row.append(outer);
     return row;
+  }
+
+  function quoteRow(product, selection, sourceHref) {
+    return catalogRow(product, {
+      href: productUrl(product), code: product.code, badge: product.category, values: quoteValues(product, sourceHref),
+      checkbox: selection?.checkbox(product), hasControls: Boolean(quoteTools),
+    });
   }
 
   function searchKey(value) {
@@ -228,6 +249,22 @@
     return key
       .replace(/存錢[筒罐]|儲蓄罐|撲滿/g, '存錢筒')
       .replace(/雲毯/g, '毛毯');
+  }
+
+  function searchTerms(value) {
+    return value.split(/\s+/).map(searchKey).filter(Boolean).map((term) => ({ term, alias: searchAliasKey(term) }));
+  }
+
+  function searchField(placeholder, label) {
+    const search = element('label', 'search-wrap');
+    const icon = element('span', 'search-icon');
+    icon.setAttribute('aria-hidden', 'true');
+    const input = element('input');
+    input.type = 'search';
+    input.placeholder = placeholder;
+    input.setAttribute('aria-label', label);
+    search.append(icon, input);
+    return { search, input };
   }
 
   function matchesSearch(product, terms, source, exactKey) {
@@ -275,29 +312,23 @@
     const trialIds = new Set(ordered.filter((product) => product.category === '玩具').slice(0, 10).map((product) => product.id));
     const hero = element('section', 'catalog-heading shell');
     hero.append(element('h1', '', '新品批發目錄'));
+    const availability = element('p', 'catalog-date', '大陸直發 · 無本地現貨');
     if (latestDate) {
-      const updated = element('p', 'catalog-date', '最新商品批次 ');
+      availability.append(document.createTextNode(' · 最新商品批次 '));
       const date = element('time', '', displayDate(latestDate));
       date.dateTime = latestDate;
-      updated.append(date);
-      hero.append(updated);
+      availability.append(date);
     }
+    hero.append(availability);
 
     const catalog = element('section', 'catalog shell');
     catalog.setAttribute('aria-label', '搜尋和分類');
     const controls = element('div', 'controls');
-    const search = element('label', 'search-wrap');
-    const searchIcon = element('span', 'search-icon');
-    searchIcon.setAttribute('aria-hidden', 'true');
-    const input = element('input');
-    input.type = 'search';
-    input.placeholder = '搜尋品名或編號，空格分隔';
-    input.setAttribute('aria-label', '搜尋品名或商品編號，空格分隔關鍵字');
+    const { search, input } = searchField('搜尋品名或編號，空格分隔', '搜尋品名或商品編號，空格分隔關鍵字');
     if (trialActive) {
       input.placeholder = '搜尋品名、編號或供應商貨號';
       input.setAttribute('aria-label', '搜尋品名、商品編號或供應商貨號，空格分隔關鍵字');
     }
-    search.append(searchIcon, input);
     const filters = element('div', 'filters');
     filters.setAttribute('aria-label', '商品分類');
     const toyTrial = element('div', 'toy-trial-entry');
@@ -346,10 +377,7 @@
     let selectedCategory = trialActive || viewParams.get('category') === 'toys' ? '玩具' : '';
     function renderResults() {
       const records = trialActive ? sourceRecords : null;
-      const terms = input.value.split(/\s+/)
-        .map(searchKey)
-        .filter(Boolean)
-        .map(term => ({ term, alias: searchAliasKey(term) }));
+      const terms = searchTerms(input.value);
       const exactKey = trialActive ? searchKey(input.value) : '';
       const matching = (sort.value === 'oldest' ? oldestFirst : ordered).filter((product) =>
         (!selectedCategory || product.category === selectedCategory) &&
@@ -509,7 +537,7 @@
       app.replaceChildren(section);
       return;
     }
-    document.title = product.name + '｜大陸工廠直發';
+    document.title = product.name + '｜' + siteTitle;
     const layout = element('article', 'detail-card');
     const info = element('div', 'detail-info');
     const quote = element('div', 'detail-quote');
@@ -535,8 +563,135 @@
     app.replaceChildren(section);
   }
 
+  function stockValues(product) {
+    const list = element('dl', 'quote-values stock-values');
+    for (const tier of product.tiers) {
+      const metric = element('div', 'quote-metric');
+      const value = element('dd');
+      if (tier.consult) {
+        value.textContent = '請洽詢';
+      } else {
+        value.append(
+          element('span', 'stock-tier-quantity', formatAmount.format(tier.quantity) + ' ' + product.unit),
+          element('span', 'stock-tier-unit', 'NT$' + formatAmount.format(tier.unitPrice) + '／' + product.unit),
+          element('span', 'stock-tier-total', '總額 NT$' + formatAmount.format(tier.total)),
+        );
+      }
+      metric.append(element('dt', '', tier.label), value);
+      list.append(metric);
+    }
+    return list;
+  }
+
+  function stockSnapshotLabel(stock) {
+    return 'ERP 快照 ' + stock.checkedAtLabel + ' · 核對時可售達 ' +
+      formatAmount.format(stock.stockThreshold) + ' ' + stock.stockThresholdUnit;
+  }
+
+  function stockHome(stock, hero) {
+    hero.append(element('p', 'catalog-date', stockSnapshotLabel(stock)));
+    const catalog = element('section', 'catalog shell');
+    catalog.setAttribute('aria-label', '現貨搜尋和分類');
+    const controls = element('div', 'controls');
+    const { search, input } = searchField('搜尋品名或貨號，空格分隔', '搜尋現貨品名或貨號，空格分隔關鍵字');
+    const filters = element('div', 'filters');
+    filters.setAttribute('aria-label', '現貨分類');
+    controls.append(search, filters);
+    const summary = element('p', 'results-label list-info');
+    summary.setAttribute('role', 'status');
+    const sheet = element('div', 'quote-sheet');
+    const list = element('ul', 'quote-list');
+    list.setAttribute('role', 'list');
+    sheet.append(list);
+    const empty = element('p', 'empty', '找不到符合的現貨商品，試試其他關鍵字或分類。');
+    catalog.append(controls, summary, sheet, empty);
+    let selected = '';
+    function renderResults() {
+      const terms = searchTerms(input.value);
+      const results = stock.products.filter((product) => (!selected || product.sku.startsWith(selected)) &&
+        matchesSearch({ code: product.sku, name: product.name + (product.variant ?? '') }, terms));
+      list.replaceChildren(...results.map((product) => catalogRow(product, {
+        href: stockUrl(product.sku), code: product.sku, badge: product.sku[0] + ' 類',
+        values: stockValues(product),
+      })));
+      summary.textContent = '共 ' + results.length + ' 款現貨樣板商品';
+      sheet.hidden = results.length === 0;
+      empty.hidden = results.length > 0;
+    }
+    for (const category of ['', 'G', 'K']) {
+      const button = element('button', 'filter', category ? category + ' 類' : '全部');
+      button.type = 'button';
+      button.setAttribute('aria-pressed', String(!category));
+      button.addEventListener('click', () => {
+        selected = category;
+        for (const item of filters.children) item.setAttribute('aria-pressed', String(item === button));
+        renderResults();
+      });
+      filters.append(button);
+    }
+    input.addEventListener('input', renderResults);
+    app.replaceChildren(hero, catalog);
+    renderResults();
+  }
+
+  function stockDetail(stock, sku) {
+    const section = element('section', 'detail shell');
+    const back = element('a', 'back', '返回現貨庫存');
+    back.href = stockUrl();
+    section.append(back);
+    const product = stock.products.find((row) => row.sku === sku);
+    if (!product) {
+      section.append(element('h1', '', '找不到這項現貨商品'));
+      app.replaceChildren(section);
+      return;
+    }
+    document.title = product.name + '｜' + siteTitle;
+    const layout = element('article', 'detail-card');
+    const info = element('div', 'detail-info');
+    const quote = element('div', 'detail-quote');
+    quote.append(stockValues(product));
+    info.append(element('p', 'card-meta', '現貨庫存'), element('h1', '', product.name), quote);
+    const entries = [
+      ['商品貨號', product.sku], ['計價單位', product.unit], ['庫存核對', stockSnapshotLabel(stock)],
+    ];
+    if (product.variant) entries.splice(1, 0, ['規格', product.variant]);
+    info.append(element('h2', '', '商品資訊'), factList(entries));
+    layout.append(productGallery(product), info);
+    const actions = element('div', 'actions detail-actions stock-detail-actions');
+    const copySku = element('button', 'button primary', '複製貨號');
+    copySku.type = 'button';
+    copySku.addEventListener('click', async () => {
+      showNotice((await copy(product.sku)) ? '已複製貨號 ' + product.sku : '貨號 ' + product.sku);
+    });
+    actions.append(copySku);
+    section.append(layout, actions);
+    app.replaceChildren(section);
+  }
+
+  async function loadStock() {
+    document.title = '現貨庫存｜' + siteTitle;
+    const hero = element('section', 'catalog-heading shell');
+    hero.append(element('h1', '', '現貨庫存'));
+    const state = element('p', 'empty shell', '正在載入現貨報價…');
+    state.setAttribute('role', 'status');
+    app.replaceChildren(hero, state);
+    try {
+      const response = await fetch('/api/stock-products', { cache: 'no-store', credentials: 'same-origin' });
+      if (!response.ok) throw new Error('Stock unavailable');
+      const stock = await response.json();
+      if (stock.version !== 1 || !Array.isArray(stock.products)) throw new Error('Invalid stock catalog');
+      const sku = viewParams.get('sku');
+      if (sku) stockDetail(stock, sku);
+      else stockHome(stock, hero);
+    } catch {
+      state.textContent = '現貨報價暫時無法載入，請重整頁面再試。';
+    }
+  }
+
   if (productId) {
     detail(products.find((product) => product.id === productId));
+  } else if (stockMode) {
+    loadStock();
   } else {
     home();
   }

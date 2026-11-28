@@ -27,7 +27,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .site-header { background: var(--navy); color: var(--white); }
 .site-header-inner { min-height: 3.8rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .brand { display: inline-flex; gap: .62rem; align-items: center; font-size: 1.08rem; font-weight: 850; letter-spacing: .045em; line-height: 1.2; }
-.header-currency { color: #d6e3f3; font-size: .875rem; white-space: nowrap; }
+.fulfillment-nav { display: flex; gap: .3rem; }
+.fulfillment-nav a { display: inline-flex; align-items: center; min-height: 2.6rem; padding: .35rem .65rem; border: 1px solid transparent; border-radius: .3rem; color: #d6e3f3; font-size: .9rem; font-weight: 750; white-space: nowrap; }
+.fulfillment-nav a[aria-current="page"], .fulfillment-nav a:hover { border-color: #ffffff35; background: #ffffff16; color: var(--white); }
+.fulfillment-nav a:focus-visible { outline-color: var(--amber); }
+@media (max-width: 29rem) {
+  .site-header-inner { flex-wrap: wrap; align-content: center; gap: .32rem .7rem; padding-block: .45rem; }
+}
 .brand-mark { display: grid; grid-template-columns: repeat(2, .48rem); gap: .17rem; padding: .45rem; border: 1px solid #ffffff32; border-radius: .28rem; }
 .brand-mark span { width: .48rem; height: .48rem; border-radius: .12rem; background: var(--amber); }
 .brand-mark span:nth-child(2) { opacity: .55; }
@@ -92,6 +98,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .quote-metric dd { margin: 0; font-size: .95rem; font-variant-numeric: tabular-nums; font-weight: 760; overflow-wrap: anywhere; }
 .quote-metric small { display: inline-block; white-space: nowrap; color: var(--muted); font-size: .79rem; font-weight: 600; }
 .quote-metric:last-child dd { color: var(--blue); font-weight: 900; }
+.stock-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.stock-tier-quantity { margin-inline-end: .45rem; }
+.stock-tier-unit { white-space: nowrap; }
+.stock-tier-total { display: block; color: var(--blue); }
+.stock-detail-actions { grid-template-columns: 1fr; max-width: 13rem; }
 .quote-draft-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin-top: .3rem; }
 .quote-draft-controls > select,
 .quote-draft-controls > button {
