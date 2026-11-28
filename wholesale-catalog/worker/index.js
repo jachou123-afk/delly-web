@@ -1,7 +1,9 @@
 import { AdSelectionZipError, makeAdSelectionZip } from './ad-selection-zip.js';
 import { adCoverOverlaps } from './ad-cover-overlap.js';
+import { internalProductSearch } from './internal-product-index.js';
 
 const queuePath = '/api/ad-selections';
+const productSearchPath = '/api/product-search';
 const productIdPattern = /^p-[a-f0-9]{24}$/;
 const batchIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const imagePathPattern = /^\.\/images\/[a-z0-9][a-z0-9._-]*\.(?:avif|jpe?g|png|webp)$/i;
@@ -286,6 +288,12 @@ export function createWorker(loadCatalog = loadAssetCatalog) {
   return {
     async fetch(request, env) {
       const url = new URL(request.url);
+      if (url.pathname === productSearchPath) {
+        if (!ownerSignedIn(request, env)) return json({ error: '請以網站擁有者帳號登入。' }, 401);
+        if (request.method !== 'GET') return json({ error: '不支援的操作。' }, 405, { Allow: 'GET' });
+        if (!internalProductSearch) return json({ error: '商品搜尋資料暫時無法使用。' }, 503);
+        return json(internalProductSearch);
+      }
       if (url.pathname !== queuePath && !url.pathname.startsWith(queuePath + '/')) {
         if (!env.ASSETS) return new Response('Catalog assets unavailable', { status: 503 });
         return env.ASSETS.fetch(request);

@@ -4,27 +4,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#112340">
-  <meta name="description" content="查詢正版帶雷標商品、玩具與生活用品的批發單價、箱入數及整箱估算。">
+  <meta name="description" content="搜尋兩份採購報價表的商品，快速查看來源與批發目錄。">
   <meta name="robots" content="noindex, nofollow">
-  <title>大陸工廠直發｜新品批發目錄</title>
-  <link rel="stylesheet" href="./styles.css?v=22">
+  <title>商品搜尋｜大陸工廠直發</title>
+  <link rel="stylesheet" href="./styles.css?v=23">
+  <link rel="stylesheet" href="./internal-search.css?v=1">
   <script defer src="./catalog-data.js?v=38"></script>
   <script defer src="./owner-quote-tools.js?v=3"></script>
   <script defer src="./ad-selections.js?v=2"></script>
-  <script defer src="./catalog.js?v=19"></script>
+  <script defer src="./internal-search.js?v=1"></script>
+  <script defer src="./catalog.js?v=20"></script>
 </head>
 <body>
   <header class="site-header">
     <div class="site-header-inner shell">
-      <a id="home-link" class="brand" href="./index.html" aria-label="大陸工廠直發新品批發目錄首頁">
+      <a id="home-link" class="brand" href="./" aria-label="大陸工廠直發商品搜尋首頁">
         <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
         <span>大陸工廠直發</span>
       </a>
-      <span class="header-currency">新台幣計價</span>
+      <nav class="workspace-nav" aria-label="工作台">
+        <a id="search-link" href="./">商品搜尋</a>
+        <a id="catalog-link" href="./?view=catalog">批發目錄</a>
+      </nav>
     </div>
   </header>
   <main id="app">
-    <noscript><p class="shell">請開啟 JavaScript 以查看商品目錄。</p></noscript>
+    <noscript><p class="shell">請開啟 JavaScript 以使用商品搜尋。</p></noscript>
   </main>
   <div id="notice" class="notice" role="status" hidden></div>
   <dialog id="inquiry" class="inquiry" aria-labelledby="inquiry-title">

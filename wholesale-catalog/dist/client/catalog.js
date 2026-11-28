@@ -12,7 +12,9 @@
   const quoteDraft = document.querySelector('#quote-draft');
   const quoteDraftMessage = document.querySelector('#quote-draft-message');
   const quoteDraftStatus = document.querySelector('#quote-draft-status');
-  const productId = new URLSearchParams(location.search).get('p');
+  const viewParams = new URLSearchParams(location.search);
+  const productId = viewParams.get('p');
+  const catalogOpen = Boolean(productId || viewParams.get('view') === 'catalog');
   const latestDate = products.map((product) => product.date).sort().at(-1);
   const ordered = [...products].sort((a, b) => b.date.localeCompare(a.date));
   const oldestFirst = [...ordered].sort((a, b) => a.date.localeCompare(b.date));
@@ -36,20 +38,31 @@
     return node;
   }
 
-  function catalogUrl() {
+  function workspaceUrl() {
     const url = new URL(location.href);
     url.search = '';
     url.hash = '';
     return url;
   }
 
+  function catalogUrl() {
+    const url = workspaceUrl();
+    url.searchParams.set('view', 'catalog');
+    return url;
+  }
+
   function productUrl(product) {
-    const url = catalogUrl();
+    const url = workspaceUrl();
     url.searchParams.set('p', product.id);
     return url.toString();
   }
 
-  document.querySelector('#home-link').href = catalogUrl().toString();
+  document.querySelector('#home-link').href = workspaceUrl().toString();
+  const searchLink = document.querySelector('#search-link');
+  const catalogLink = document.querySelector('#catalog-link');
+  searchLink.href = workspaceUrl().toString();
+  catalogLink.href = catalogUrl().toString();
+  (catalogOpen ? catalogLink : searchLink).setAttribute('aria-current', 'page');
 
   function cartonText(product) {
     return product.pack + ' ' + product.unit + '／箱';
@@ -463,7 +476,10 @@
 
   if (productId) {
     detail(products.find((product) => product.id === productId));
-  } else {
+  } else if (catalogOpen) {
+    document.title = '批發目錄｜大陸工廠直發';
     home();
+  } else {
+    window.mountInternalProductSearch(app, products);
   }
 })();
