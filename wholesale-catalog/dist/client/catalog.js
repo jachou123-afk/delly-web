@@ -83,7 +83,7 @@
     quoteDraft.showModal();
   }
 
-  function quoteValues(product) {
+  function quoteValues(product, sourceHref) {
     const basePrice = BigInt(product.price.replaceAll(',', ''));
     const tools = quoteTools?.[product.id];
     const prices = tools?.prices;
@@ -135,6 +135,14 @@
       generate.disabled = !template;
       if (template) generate.addEventListener('click', () => handleQuoteDraft(product, template, currentPrice(), margin));
       controls.append(select, generate);
+      if (sourceHref) {
+        const sourceLink = element('a', 'quote-source-link', '原表');
+        sourceLink.href = sourceHref;
+        sourceLink.target = '_blank';
+        sourceLink.rel = 'noopener noreferrer';
+        sourceLink.setAttribute('aria-label', '開啟原表 ' + product.code);
+        controls.append(sourceLink);
+      }
       unitCell.append(controls);
       if (!prices || !template) {
         const reason = !prices ? '此款可使用已核對的 15% 報價。' : '此款文案格式待核對。';
@@ -191,7 +199,7 @@
     return gallery;
   }
 
-  function quoteRow(product, selection) {
+  function quoteRow(product, selection, sourceHref) {
     const row = element('li', 'quote-row');
     const outer = element(quoteTools ? 'div' : 'a', 'quote-row-layout');
     const item = element(quoteTools ? 'a' : 'div', 'quote-item');
@@ -203,7 +211,7 @@
     const photo = picture(product, false);
     photo.querySelector('img').alt = '';
     item.append(photo, identity);
-    outer.append(item, quoteValues(product));
+    outer.append(item, quoteValues(product, sourceHref));
     if (selection) {
       outer.classList.add('with-ad-pick');
       outer.append(selection.checkbox(product));
@@ -222,11 +230,38 @@
       .replace(/雲毯/g, '毛毯');
   }
 
-  function matchesSearch(product, terms) {
+  function matchesSearch(product, terms, source, exactKey) {
     if (!terms.length) return true;
-    const key = searchKey(product.code + product.name);
+    if (source && [product.code, product.code.replace(/^BGD-/, ''), source.sku]
+      .some((value) => value && searchKey(value) === exactKey)) return true;
+    const key = searchKey(product.code + product.name + (source?.searchText ?? ''));
     const aliasKey = searchAliasKey(key);
     return terms.every(({ term, alias }) => key.includes(term) || aliasKey.includes(alias));
+  }
+
+  async function loadTrialSources(trialIds) {
+    const response = await fetch('/api/product-search', { cache: 'no-store', credentials: 'same-origin' });
+    if (!response.ok) throw new Error('Trial search unavailable');
+    const payload = await response.json();
+    if (payload.version !== 1 || !Array.isArray(payload.products) || payload.products.length !== trialIds.size) {
+      throw new Error('Invalid trial records');
+    }
+    const records = new Map();
+    for (const product of payload.products) {
+      const { catalogId, sheetId, row, source, name, no, supplierSku, tab } = product;
+      if (!trialIds.has(catalogId) || records.has(catalogId) || !Number.isSafeInteger(sheetId) ||
+          sheetId < 0 || !Number.isSafeInteger(row) || row < 1) throw new Error('Unexpected trial record');
+      const href = new URL(payload.sources?.[source]?.url);
+      if (href.origin !== 'https://docs.google.com' ||
+          !/^\/spreadsheets\/d\/[A-Za-z0-9_-]+\/edit$/.test(href.pathname)) throw new Error('Unexpected source URL');
+      href.hash = 'gid=' + sheetId + '&range=B' + row;
+      records.set(catalogId, {
+        href: href.toString(),
+        sku: typeof supplierSku === 'string' ? supplierSku : '',
+        searchText: [name, 'no' + no, supplierSku, tab].join(' '),
+      });
+    }
+    return records;
   }
 
   function displayDate(date) {
@@ -235,6 +270,9 @@
   }
 
   function home() {
+    let trialActive = viewParams.get('trial') === 'toys';
+    let sourceRecords = new Map();
+    const trialIds = new Set(ordered.filter((product) => product.category === '玩具').slice(0, 10).map((product) => product.id));
     const hero = element('section', 'catalog-heading shell');
     hero.append(element('h1', '', '新品批發目錄'));
     if (latestDate) {
@@ -255,15 +293,23 @@
     input.type = 'search';
     input.placeholder = '搜尋品名或編號，空格分隔';
     input.setAttribute('aria-label', '搜尋品名或商品編號，空格分隔關鍵字');
+    if (trialActive) {
+      input.placeholder = '搜尋品名、編號或供應商貨號';
+      input.setAttribute('aria-label', '搜尋品名、商品編號或供應商貨號，空格分隔關鍵字');
+    }
     search.append(searchIcon, input);
     const filters = element('div', 'filters');
     filters.setAttribute('aria-label', '商品分類');
     const toyTrial = element('div', 'toy-trial-entry');
     const trialHref = catalogUrl();
     trialHref.searchParams.set('trial', 'toys');
-    const trialLink = element('a', 'button', '試用商品搜尋');
-    trialLink.href = trialHref.toString();
-    toyTrial.append(trialLink, element('span', '', '玩具分類由新到舊前 10 款'));
+    const toyHref = catalogUrl();
+    toyHref.searchParams.set('category', 'toys');
+    const trialLink = element('a', 'button', trialActive ? '返回玩具分類' : '試用商品搜尋');
+    trialLink.href = (trialActive ? toyHref : trialHref).toString();
+    const trialStatus = element('span', '', '玩具分類由新到舊前 10 款');
+    trialStatus.setAttribute('role', 'status');
+    toyTrial.append(trialLink, trialStatus);
     controls.append(search, filters, toyTrial);
     const summary = element('p', 'results-label');
     summary.setAttribute('role', 'status');
@@ -297,17 +343,20 @@
     catalog.append(listInfo, sheet, empty);
     if (latestDate) catalog.append(element('p', 'quote-note', '整箱估算＝批發單價 × 箱入數。實際報價請用 LINE 確認。'));
 
-    let selectedCategory = viewParams.get('category') === 'toys' ? '玩具' : '';
+    let selectedCategory = trialActive || viewParams.get('category') === 'toys' ? '玩具' : '';
     function renderResults() {
+      const records = trialActive ? sourceRecords : null;
       const terms = input.value.split(/\s+/)
         .map(searchKey)
         .filter(Boolean)
         .map(term => ({ term, alias: searchAliasKey(term) }));
+      const exactKey = trialActive ? searchKey(input.value) : '';
       const matching = (sort.value === 'oldest' ? oldestFirst : ordered).filter((product) =>
         (!selectedCategory || product.category === selectedCategory) &&
-        matchesSearch(product, terms)
+        (!trialActive || trialIds.has(product.id)) &&
+        matchesSearch(product, terms, records?.get(product.id), exactKey)
       );
-      list.replaceChildren(...matching.map((product) => quoteRow(product, selection)));
+      list.replaceChildren(...matching.map((product) => quoteRow(product, selection, records?.get(product.id)?.href)));
       summary.textContent = '共 ' + matching.length + ' 款商品';
       toyTrial.hidden = selectedCategory !== '玩具';
       sheet.hidden = matching.length === 0;
@@ -320,6 +369,15 @@
       button.type = 'button';
       button.setAttribute('aria-pressed', String(category === selectedCategory));
       button.addEventListener('click', () => {
+        if (trialActive && category !== '玩具') {
+          trialActive = false;
+          history.replaceState(null, '', catalogUrl());
+          input.placeholder = '搜尋品名或編號，空格分隔';
+          input.setAttribute('aria-label', '搜尋品名或商品編號，空格分隔關鍵字');
+          trialLink.href = trialHref.toString();
+          trialLink.textContent = '試用商品搜尋';
+          trialStatus.textContent = '玩具分類由新到舊前 10 款';
+        }
         selectedCategory = category;
         for (const item of filters.children) item.setAttribute('aria-pressed', String(item === button));
         renderResults();
@@ -330,6 +388,14 @@
     sort.addEventListener('change', renderResults);
     app.replaceChildren(hero, catalog);
     renderResults();
+    if (trialActive) {
+      loadTrialSources(trialIds).then((records) => {
+        sourceRecords = records;
+        if (trialActive) renderResults();
+      }).catch(() => {
+        if (trialActive) trialStatus.textContent = '玩具前 10 款 · 供應商貨號與原表連結暫時無法載入';
+      });
+    }
   }
 
   function showNotice(message) {
@@ -471,11 +537,6 @@
 
   if (productId) {
     detail(products.find((product) => product.id === productId));
-  } else if (viewParams.get('trial') === 'toys' && typeof window.mountInternalProductSearch === 'function') {
-    const back = catalogUrl();
-    back.searchParams.set('category', 'toys');
-    document.title = '玩具商品搜尋試用｜大陸工廠直發';
-    window.mountInternalProductSearch(app, products, { backHref: back.toString() });
   } else {
     home();
   }

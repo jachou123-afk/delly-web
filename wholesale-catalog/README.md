@@ -4,7 +4,7 @@
 
 ## 玩具分類搜尋試用
 
-在「玩具」分類點「試用商品搜尋」，會進入 `/?trial=toys`。試用限定目錄「玩具」分類由新到舊前 10 款，可用品名、NO、商品編號、已核對的供應商貨號查找，或按來源分頁篩選，並回到同款雲表列或既有商品頁。
+在「玩具」分類點「試用商品搜尋」，會在原批發目錄版型開啟 `/?trial=toys`，沿用大圖、報價及 LINE 操作。試用限定「玩具」分類由新到舊前 10 款，在原搜尋欄輸入品名、NO、商品編號或已核對的供應商貨號。每列的「原表」連到同款雲表列，點圖或品名可開啟既有商品頁。
 
 `tools/build-product-search.mjs` 以目錄及兩份唯讀的來源清單核對這 10 款，使用試算表、分頁 ID 和 NO 綁定商品。建置命令為 `node tools/build-product-search.mjs <兩表來源設定 JSON> dist/client/catalog-data.js worker/internal-product-index.js`。來源設定包含 `checkedAt` 及 `sources.legacy`、`sources.no2`，各來源提供 `label`、`spreadsheetId` 和相對路徑 `file`。每筆來源資料包含 `no`、`name`、`sheetId`、`tab`、`row`，可填已核實的 `code`、`supplierSku`、`date`。
 

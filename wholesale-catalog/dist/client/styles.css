@@ -106,6 +106,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   white-space: nowrap;
 }
 .quote-draft-controls > button:not(:disabled):hover { border-color: var(--blue); background: #edf4fc; }
+.quote-source-link { display: inline-flex; align-items: center; min-height: 2.3rem; padding-inline: .12rem; color: var(--blue); font-size: .82rem; white-space: nowrap; }
+.quote-source-link:hover { text-decoration: underline; }
 .quote-draft-controls > :disabled { color: var(--muted); background: var(--paper); cursor: default; }
 .quote-draft-note { display: block; margin-top: .25rem; color: var(--muted); font-size: .8rem; font-weight: 500; }
 .quote-draft-product { color: var(--muted); font-size: .875rem; }
@@ -206,6 +208,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .quote-row .quote-draft-controls { justify-content: flex-end; }
   .quote-row .quote-draft-controls > select,
   .quote-row .quote-draft-controls > button { min-height: 2.65rem; }
+  .quote-row .quote-source-link { min-height: 2.65rem; }
 }
 @media (max-width: 21rem) {
   .shell { width: calc(100% - 1.2rem); }
